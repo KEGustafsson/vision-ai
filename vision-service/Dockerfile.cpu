@@ -1,0 +1,38 @@
+# CPU / development image. Runs the service in mock or cpu mode on any x86_64
+# host — no GPU, no cameras required.
+#
+#   docker build -f Dockerfile.cpu -t vision-ai:cpu .
+FROM python:3.11-slim
+
+# OpenCV (headless) needs a couple of shared libs at runtime.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgl1 libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /opt/vision-service
+
+# Default build installs only the light deps (mock mode runs anywhere). Set
+# --build-arg WITH_DETECTION=1 to also install ultralytics/torch for `cpu` mode.
+ARG WITH_DETECTION=0
+COPY requirements.txt requirements-cpu.txt ./
+RUN if [ "$WITH_DETECTION" = "1" ]; then \
+        pip install --no-cache-dir -r requirements-cpu.txt; \
+    else \
+        pip install --no-cache-dir -r requirements.txt; \
+    fi
+
+COPY app ./app
+COPY config ./config
+COPY scripts ./scripts
+COPY models ./models
+
+ENV VISION_MODE=mock \
+    VISION_PORT=8000 \
+    PYTHONUNBUFFERED=1
+
+# Run as a non-root user to reduce blast radius (Trivy DS-0002).
+RUN useradd --create-home --uid 10001 appuser && chown -R appuser /opt/vision-service
+USER appuser
+
+EXPOSE 8000
+CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

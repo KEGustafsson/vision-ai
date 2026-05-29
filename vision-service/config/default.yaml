@@ -1,0 +1,37 @@
+# Base configuration shared by all modes. Mode files override these.
+mode: mock
+mock_source: synthetic
+
+cameras:
+  - name: forward
+    hfov_deg: 90.0
+    height_m: 2.5
+    horizon_y: null        # null => uncalibrated / auto
+    bearing_offset_deg: 0.0
+  - name: aft
+    hfov_deg: 90.0
+    height_m: 2.5
+    horizon_y: null
+    bearing_offset_deg: 180.0
+
+detector:
+  backend: mock
+  model_pt: yolov8n.pt
+  model_engine: yolov8n.engine
+  confidence: 0.35
+  imgsz: 640
+  tracker: bytetrack.yaml
+
+geometry:
+  auto_horizon: false
+  known_widths_m:
+    person: 0.5
+    buoy: 0.8
+    vessel: 4.0
+
+server:
+  host: 0.0.0.0
+  port: 8000
+  target_fps: 10.0
+  jpeg_quality: 80
+  event_buffer: 200

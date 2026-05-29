@@ -1,0 +1,26 @@
+# Production mode: Jetson Orin Nano. TensorRT engine + HW-accelerated RTSP
+# decode via GStreamer. Camera URLs come from VISION_CAMERA_*_URL env vars.
+mode: jetson
+
+detector:
+  backend: tensorrt
+  model_engine: yolov8n.engine
+  confidence: 0.35
+  imgsz: 640
+
+cameras:
+  - name: forward
+    url: null              # set via VISION_CAMERA_FORWARD_URL
+    hfov_deg: 90.0
+    height_m: 2.5
+    horizon_y: null        # calibrate on installation; see docs/geometry.md
+    bearing_offset_deg: 0.0
+  - name: aft
+    url: null              # set via VISION_CAMERA_AFT_URL
+    hfov_deg: 90.0
+    height_m: 2.5
+    horizon_y: null
+    bearing_offset_deg: 180.0
+
+server:
+  target_fps: 12.0

@@ -1,0 +1,116 @@
+// registerWithRouter: same-origin REST surface for the captain webapp plus a
+// reverse-proxy to the container's MJPEG/snapshot endpoints (so the browser
+// uses SignalK's authenticated origin and never touches the container directly).
+
+import http from 'http';
+import https from 'https';
+import { ContainerClient } from './containerClient';
+import { PluginConfig } from './config';
+import { EnrichedTarget, OwnShip } from './types';
+
+export interface SharedState {
+  readonly targets: EnrichedTarget[];
+  readonly ownShip: OwnShip;
+  readonly system: { activeCamera: string; cameras: string[] };
+  client: () => ContainerClient | null;
+}
+
+function proxy(targetUrl: string, res: any): void {
+  const mod = targetUrl.startsWith('https') ? https : http;
+  const upstream = mod.get(targetUrl, (up) => {
+    res.writeHead(up.statusCode || 502, {
+      'content-type': up.headers['content-type'] || 'application/octet-stream',
+      'cache-control': 'no-cache',
+    });
+    up.pipe(res);
+  });
+  // Don't let a slow/hung container hold the connection open forever. MJPEG is
+  // a long-lived stream, so only guard the time-to-first-byte (the response
+  // headers), not the streaming body.
+  upstream.setTimeout(10000, () => upstream.destroy(new Error('upstream timeout')));
+  upstream.on('error', () => {
+    if (!res.headersSent) res.status(502).json({ error: 'vision container unreachable' });
+    else res.end();
+  });
+  res.on('close', () => upstream.destroy());
+}
+
+// Minimal JSON body parser: SignalK mounts plugin routers without guaranteeing
+// a JSON body parser, so populate req.body ourselves when it's absent.
+function ensureJsonBody(req: any, _res: any, next: () => void): void {
+  if (req.body !== undefined || req.method === 'GET' || req.method === 'HEAD') return next();
+  let data = '';
+  req.on('data', (c: Buffer) => {
+    data += c;
+    if (data.length > 1e6) req.destroy(); // guard against oversized bodies
+  });
+  req.on('end', () => {
+    try {
+      req.body = data ? JSON.parse(data) : {};
+    } catch {
+      req.body = {};
+    }
+    next();
+  });
+  req.on('error', () => next());
+}
+
+export function registerRoutes(
+  router: any,
+  shared: SharedState,
+  getCfg: () => PluginConfig
+): void {
+  router.use(ensureJsonBody);
+
+  const knownCamera = (name: string): boolean =>
+    shared.system.cameras.includes(name) || name === 'forward' || name === 'aft';
+
+  router.get('/targets', (_req: any, res: any) => {
+    res.json({
+      ownShip: shared.ownShip,
+      system: shared.system,
+      targets: shared.targets,
+    });
+  });
+
+  router.get('/config', (_req: any, res: any) => {
+    const c = getCfg();
+    res.json({
+      containerUrl: c.containerUrl,
+      features: {
+        visualRadar: c.enableVisualRadar,
+        aisFusion: c.enableAisFusion,
+        mob: c.enableMob,
+        collision: c.enableCollision,
+        aisBlips: c.enableAisBlips,
+      },
+      cameras: shared.system.cameras,
+      activeCamera: shared.system.activeCamera,
+    });
+  });
+
+  router.post('/control', async (req: any, res: any) => {
+    const client = shared.client();
+    if (!client) return res.status(503).json({ error: 'not started' });
+    try {
+      const result = await client.control(req.body || {});
+      res.json(result);
+    } catch (e) {
+      res.status(502).json({ error: String(e) });
+    }
+  });
+
+  router.get('/stream/:camera', (req: any, res: any) => {
+    const client = shared.client();
+    if (!client) return res.status(503).json({ error: 'not started' });
+    if (!knownCamera(req.params.camera)) return res.status(404).json({ error: 'unknown camera' });
+    proxy(client.streamUrl(req.params.camera), res);
+  });
+
+  router.get('/snapshot/:camera', (req: any, res: any) => {
+    const client = shared.client();
+    if (!client) return res.status(503).json({ error: 'not started' });
+    if (!knownCamera(req.params.camera)) return res.status(404).json({ error: 'unknown camera' });
+    proxy(client.snapshotUrl(req.params.camera), res);
+  });
+}

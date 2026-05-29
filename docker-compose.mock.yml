@@ -1,0 +1,31 @@
+# Dev override: vision service in mock mode + a SignalK server with sample data
+# so the whole stack (container + plugin + webapp) runs on a laptop.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.mock.yml up
+services:
+  vision-service:
+    environment:
+      VISION_MODE: mock
+      VISION_MOCK_SOURCE: synthetic
+    volumes:
+      # Drop a clip here and set VISION_MOCK_SOURCE=/samples/clip.mp4 to use video.
+      - ./vision-service/samples:/samples:ro
+
+  signalk-server:
+    image: signalk/signalk-server:latest
+    ports:
+      - "3000:3000"
+    environment:
+      # Enables the bundled demo data (own-ship position + AIS targets).
+      IS_IN_DOCKER: "true"
+    volumes:
+      - signalk-data:/home/node/.signalk
+      # Mount the plugin so SignalK discovers it. PREREQUISITE: run
+      # `npm ci && npm run build` in ./signalk-plugin first — the mount is
+      # read-only, so both dist/ and node_modules/ (ajv, ws) must already exist
+      # on the host. In the SignalK UI set containerUrl to http://vision-service:8000.
+      - ./signalk-plugin:/home/node/.signalk/node_modules/signalk-vision-ai:ro
+    restart: unless-stopped
+
+volumes:
+  signalk-data:

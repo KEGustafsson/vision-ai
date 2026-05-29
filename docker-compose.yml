@@ -1,0 +1,23 @@
+# Base compose. By itself this builds the CPU image in mock mode, which is the
+# safe default that runs anywhere. Layer an override for real deployments:
+#
+#   Dev / laptop (no GPU):   docker compose -f docker-compose.yml -f docker-compose.mock.yml up
+#   Jetson (production):     docker compose -f docker-compose.yml -f docker-compose.jetson.yml up
+#
+# The SignalK plugin is installed into a SignalK server separately
+# (see docs/dev-quickstart.md); a dev signalk-server is provided in the mock override.
+services:
+  vision-service:
+    build:
+      context: ./vision-service
+      dockerfile: Dockerfile.cpu
+    image: vision-ai:cpu
+    environment:
+      VISION_MODE: mock
+      VISION_PORT: "8000"
+      VISION_MOCK_SOURCE: synthetic
+    # Bound to localhost by default — the service is unauthenticated, so don't
+    # expose it on all interfaces. The SignalK plugin proxies it behind auth.
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped

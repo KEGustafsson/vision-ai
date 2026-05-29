@@ -1,0 +1,11 @@
+# Core runtime deps. These are all that mock mode needs, so the default image
+# stays light. Real YOLO inference (cpu mode) adds ultralytics/torch via
+# requirements-cpu.txt.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+h11>=0.16.0           # avoid GHSA-vqfr-h8mv-ghfj (uvicorn pulls h11>=0.8)
+pydantic>=2.6,<3      # cap for deterministic JSON-Schema export (CI drift guard)
+numpy>=1.24
+PyYAML>=6.0
+opencv-python-headless>=4.8
+websockets>=12.0

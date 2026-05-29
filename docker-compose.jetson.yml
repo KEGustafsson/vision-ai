@@ -1,0 +1,28 @@
+# Jetson override: GPU runtime, TensorRT backend, real RTSP cameras.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.jetson.yml up
+#
+# Requires the NVIDIA Container Runtime (nvidia-docker) on the Jetson and a
+# TensorRT engine built with scripts/export_engine.py (mounted via ./models).
+services:
+  vision-service:
+    build:
+      context: ./vision-service
+      dockerfile: Dockerfile          # Jetson base image
+    image: vision-ai:jetson
+    runtime: nvidia
+    environment:
+      VISION_MODE: jetson
+      VISION_CAMERA_FORWARD_URL: ${VISION_CAMERA_FORWARD_URL}
+      VISION_CAMERA_AFT_URL: ${VISION_CAMERA_AFT_URL}
+      VISION_MODEL_ENGINE: yolov8n.engine
+    volumes:
+      - ./vision-service/models:/opt/vision-service/models
+    # Bind to localhost on the boat network; the SignalK plugin proxies it.
+    ports:
+      - "127.0.0.1:8000:8000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]

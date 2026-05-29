@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  vision-service:
+    name: vision-service (Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vision-service
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest httpx
+      - name: Run tests
+        run: pytest
+      - name: Verify detection-event schema is up to date
+        run: |
+          python scripts/export_schema.py
+          if ! git diff --exit-code ../signalk-plugin/schema/detection-event.schema.json; then
+            echo "::error::detection-event.schema.json is stale — run scripts/export_schema.py and commit."
+            exit 1
+          fi
+
+  signalk-plugin:
+    name: signalk-plugin (TypeScript)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: signalk-plugin
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: signalk-plugin/package-lock.json
+      - name: Install dependencies
+        run: npm ci
+      - name: Build (tsc)
+        run: npm run build
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test
