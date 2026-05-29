@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Models & media (large / generated)
+vision-service/models/*.pt
+vision-service/models/*.engine
+vision-service/models/*.onnx
+vision-service/samples/*.mp4
+vision-service/samples/*.mkv
+
+# Env / local
+.env
+*.log
+.DS_Store

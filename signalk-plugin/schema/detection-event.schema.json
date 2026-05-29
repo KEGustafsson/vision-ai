@@ -1,0 +1,292 @@
+{
+  "$defs": {
+    "BBox": {
+      "description": "Bounding box in pixels, top-left origin.",
+      "properties": {
+        "x": {
+          "title": "X",
+          "type": "number"
+        },
+        "y": {
+          "title": "Y",
+          "type": "number"
+        },
+        "w": {
+          "title": "W",
+          "type": "number"
+        },
+        "h": {
+          "title": "H",
+          "type": "number"
+        }
+      },
+      "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+      ],
+      "title": "BBox",
+      "type": "object"
+    },
+    "Backend": {
+      "enum": [
+        "tensorrt",
+        "torch-cuda",
+        "torch-cpu",
+        "mock"
+      ],
+      "title": "Backend",
+      "type": "string"
+    },
+    "CalibrationStatus": {
+      "enum": [
+        "ok",
+        "uncalibrated",
+        "auto"
+      ],
+      "title": "CalibrationStatus",
+      "type": "string"
+    },
+    "Camera": {
+      "enum": [
+        "forward",
+        "aft"
+      ],
+      "title": "Camera",
+      "type": "string"
+    },
+    "FrameSize": {
+      "properties": {
+        "w": {
+          "title": "W",
+          "type": "integer"
+        },
+        "h": {
+          "title": "H",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "w",
+        "h"
+      ],
+      "title": "FrameSize",
+      "type": "object"
+    },
+    "Geometry": {
+      "description": "Monocular geometry estimated by the container.\n\n``relative_bearing_deg`` is measured from the camera's optical axis,\npositive to starboard (right of frame), negative to port.",
+      "properties": {
+        "relative_bearing_deg": {
+          "title": "Relative Bearing Deg",
+          "type": "number"
+        },
+        "range_m": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Range M"
+        },
+        "range_method": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/RangeMethod"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "range_confidence": {
+          "default": 0.0,
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Range Confidence",
+          "type": "number"
+        }
+      },
+      "required": [
+        "relative_bearing_deg"
+      ],
+      "title": "Geometry",
+      "type": "object"
+    },
+    "Inference": {
+      "properties": {
+        "backend": {
+          "$ref": "#/$defs/Backend"
+        },
+        "latency_ms": {
+          "default": 0.0,
+          "title": "Latency Ms",
+          "type": "number"
+        }
+      },
+      "required": [
+        "backend"
+      ],
+      "title": "Inference",
+      "type": "object"
+    },
+    "PixelVelocity": {
+      "description": "Centroid velocity in pixels per processed frame, from track history.",
+      "properties": {
+        "vx": {
+          "default": 0.0,
+          "title": "Vx",
+          "type": "number"
+        },
+        "vy": {
+          "default": 0.0,
+          "title": "Vy",
+          "type": "number"
+        }
+      },
+      "title": "PixelVelocity",
+      "type": "object"
+    },
+    "RangeMethod": {
+      "enum": [
+        "horizon",
+        "known_size"
+      ],
+      "title": "RangeMethod",
+      "type": "string"
+    },
+    "Target": {
+      "properties": {
+        "track_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Track Id"
+        },
+        "label": {
+          "title": "Label",
+          "type": "string"
+        },
+        "coco_class": {
+          "title": "Coco Class",
+          "type": "integer"
+        },
+        "confidence": {
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "title": "Confidence",
+          "type": "number"
+        },
+        "bbox": {
+          "$ref": "#/$defs/BBox"
+        },
+        "is_person_in_water": {
+          "default": false,
+          "title": "Is Person In Water",
+          "type": "boolean"
+        },
+        "geometry": {
+          "$ref": "#/$defs/Geometry"
+        },
+        "pixel_velocity": {
+          "$ref": "#/$defs/PixelVelocity"
+        },
+        "first_seen": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "First Seen"
+        },
+        "age_frames": {
+          "default": 0,
+          "title": "Age Frames",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "label",
+        "coco_class",
+        "confidence",
+        "bbox",
+        "geometry"
+      ],
+      "title": "Target",
+      "type": "object"
+    }
+  },
+  "description": "One event per processed frame, per camera.",
+  "properties": {
+    "schema_version": {
+      "default": "1.0",
+      "title": "Schema Version",
+      "type": "string"
+    },
+    "camera": {
+      "$ref": "#/$defs/Camera"
+    },
+    "timestamp": {
+      "title": "Timestamp",
+      "type": "string"
+    },
+    "frame_seq": {
+      "title": "Frame Seq",
+      "type": "integer"
+    },
+    "frame_size": {
+      "$ref": "#/$defs/FrameSize"
+    },
+    "horizon_y": {
+      "anyOf": [
+        {
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Horizon Y"
+    },
+    "inference": {
+      "$ref": "#/$defs/Inference"
+    },
+    "calibration_status": {
+      "$ref": "#/$defs/CalibrationStatus",
+      "default": "uncalibrated"
+    },
+    "targets": {
+      "items": {
+        "$ref": "#/$defs/Target"
+      },
+      "title": "Targets",
+      "type": "array"
+    }
+  },
+  "required": [
+    "camera",
+    "timestamp",
+    "frame_seq",
+    "frame_size",
+    "inference"
+  ],
+  "title": "DetectionEvent",
+  "type": "object",
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

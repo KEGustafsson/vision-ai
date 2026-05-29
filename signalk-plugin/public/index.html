@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vision-AI — Captain View</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <header>
+      <h1>🛥️ Marine Vision-AI</h1>
+      <div id="ownship" class="ownship">—</div>
+    </header>
+
+    <main>
+      <section class="video">
+        <div class="cameras" id="cameraButtons"></div>
+        <img id="stream" alt="annotated camera stream" />
+        <div id="status" class="status">connecting…</div>
+      </section>
+
+      <section class="targets">
+        <h2>Targets <span id="targetCount" class="badge">0</span></h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Label</th><th>Brg</th><th>Rng</th><th>CPA</th><th>TCPA</th><th>AIS</th><th>Threat</th>
+            </tr>
+          </thead>
+          <tbody id="targetRows"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script src="app.js"></script>
+  </body>
+</html>

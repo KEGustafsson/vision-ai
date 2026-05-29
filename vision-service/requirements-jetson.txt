@@ -1,0 +1,10 @@
+# Jetson-only extras. torch, torchvision, tensorrt and a CUDA-enabled OpenCV
+# ship inside the ultralytics jetson base image, so they are NOT pinned here.
+# Install on top of: ultralytics/ultralytics:latest-jetson-jetpack6
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.6
+PyYAML>=6.0
+websockets>=12.0
+# NOTE: do not install opencv-python here — it would shadow the CUDA/GStreamer
+# build provided by the base image. ultralytics is already present in the image.
