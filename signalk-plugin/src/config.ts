@@ -29,6 +29,7 @@ export interface PluginConfig {
   mobPersistFrames: number;
   underwaySogMs: number; // SOG above which we consider "underway"
   trackTimeoutS: number; // age out a visual track after this idle time
+  processIntervalMs: number; // cadence of the fusion/CPA/notify/publish cycle
 }
 
 export const DEFAULT_CONFIG: PluginConfig = {
@@ -51,6 +52,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
   mobPersistFrames: 3,
   underwaySogMs: 1.0,
   trackTimeoutS: 5,
+  processIntervalMs: 1000,
 };
 
 export function schema(): object {
@@ -89,6 +91,7 @@ export function schema(): object {
       mobPersistFrames: { type: 'number', title: 'MOB persistence (frames)', default: 3 },
       underwaySogMs: { type: 'number', title: 'Underway SOG threshold (m/s)', default: 1.0 },
       trackTimeoutS: { type: 'number', title: 'Track age-out timeout (s)', default: 5 },
+      processIntervalMs: { type: 'number', title: 'Processing cadence (ms)', default: 1000, minimum: 200 },
     },
   };
 }

@@ -27,13 +27,15 @@ export = function (app: ServerApp): Plugin {
   let publisher: Publisher | null = null;
   let notifier: NotificationManager | null = null;
   let cpa: CpaEstimator | null = null;
-  let systemTimer: NodeJS.Timeout | null = null;
+  let processTimer: NodeJS.Timeout | null = null;
   let contextTimer: NodeJS.Timeout | null = null;
 
   const targets = new Map<string, EnrichedTarget>();
   const lastEventByCamera = new Map<string, DetectionEvent>();
   const frameCount = new Map<string, number>();
   let activeCamera = 'forward';
+  let modeHint: string | null = null;
+  let lastStatsAt = 0;
 
   const shared: SharedState = {
     get targets() {
@@ -51,6 +53,12 @@ export = function (app: ServerApp): Plugin {
     client: () => client,
   };
 
+  // --- Ingest: cheap, runs per WebSocket frame ---
+  // Only update the target map here; the heavy fusion/CPA/notify/publish work
+  // is debounced to a fixed cadence in processCycle() so it doesn't scale with
+  // (and flap at) the camera frame rate. Only tracked detections are kept —
+  // untracked boxes (track_id null) have no stable key, so they cannot be
+  // associated across frames for CPA/MOB persistence and would churn the map.
   function handleEvent(ev: DetectionEvent): void {
     const now = Date.now();
     lastEventByCamera.set(ev.camera, ev);
@@ -59,19 +67,24 @@ export = function (app: ServerApp): Plugin {
 
     for (const raw of ev.targets) {
       if (raw.confidence < cfg.minConfidence) continue;
+      if (raw.track_id === null) continue;
       const t = enrichTarget(raw, ev.camera, own, cfg, now);
       targets.set(t.key, t);
     }
+  }
 
-    // Age out stale tracks.
+  // --- Process: fixed cadence, does the expensive correlated work ---
+  function processCycle(): void {
+    const now = Date.now();
+    const own = readOwnShip(app);
+
+    // Age out stale tracks first so downstream sees only live targets.
     const timeoutMs = cfg.trackTimeoutS * 1000;
     for (const [key, t] of [...targets]) {
       if (now - t.lastSeen > timeoutMs) targets.delete(key);
     }
-
     const all = [...targets.values()];
 
-    // AIS fusion.
     let darkKeys = new Set<string>();
     let aisCount = 0;
     if (cfg.enableAisFusion) {
@@ -81,35 +94,34 @@ export = function (app: ServerApp): Plugin {
       aisCount = res.aisCorrelatedCount;
     }
 
-    // Collision risk.
     if (cfg.enableCollision && cpa) cpa.update(all, own, cfg, now);
-
-    // Notifications.
     if (notifier) notifier.evaluate(all, darkKeys, now);
-
-    // Publish.
     if (publisher) {
       publisher.publishTargets(all);
       if (cfg.enableAisFusion) publisher.publishFusionSummary(darkKeys.size, aisCount);
     }
+
+    publishSystemStats(now);
   }
 
-  function publishSystemStats(): void {
+  function publishSystemStats(now: number): void {
     if (!publisher) return;
     const perCameraCounts: Record<string, number> = {};
     for (const cam of lastEventByCamera.keys()) {
       perCameraCounts[cam] = [...targets.values()].filter((t) => t.camera === cam).length;
     }
-    // Inference FPS over the ~2s window since last publish.
+    // Inference FPS over the actual elapsed window (not a hardcoded interval).
     let totalFrames = 0;
     for (const [, c] of frameCount) totalFrames += c;
-    const fps = totalFrames / 2;
+    const elapsedS = lastStatsAt ? Math.max((now - lastStatsAt) / 1000, 1e-3) : 1;
+    const fps = totalFrames / elapsedS;
     frameCount.clear();
+    lastStatsAt = now;
 
     const sample = lastEventByCamera.get(activeCamera) ?? [...lastEventByCamera.values()][0];
     publisher.publishSystem({
       activeCamera,
-      mode: undefined,
+      mode: modeHint ?? undefined,
       backend: sample?.inference.backend,
       inferenceFps: fps,
       horizonY: sample?.horizon_y ?? null,
@@ -130,12 +142,13 @@ export = function (app: ServerApp): Plugin {
     const night = hour < 6 || hour >= 21;
     // Underway: watch ahead. Low speed (docking/manoeuvring): watch astern.
     activeCamera = underway ? 'forward' : 'aft';
+    modeHint = underway ? 'underway' : 'docking';
     const confidence = night ? Math.max(0.25, cfg.minConfidence - 0.1) : cfg.minConfidence;
     try {
       await client.control({
         active_camera: activeCamera,
         confidence,
-        mode_hint: underway ? 'underway' : 'docking',
+        mode_hint: modeHint,
       });
     } catch (e) {
       app.debug(`vision-ai: context control failed: ${e}`);
@@ -164,7 +177,8 @@ export = function (app: ServerApp): Plugin {
       });
       stream.start();
 
-      systemTimer = setInterval(publishSystemStats, 2000);
+      lastStatsAt = Date.now();
+      processTimer = setInterval(processCycle, cfg.processIntervalMs);
       if (cfg.enableContextControl) {
         contextTimer = setInterval(() => void contextControl(), 5000);
       }
@@ -172,9 +186,9 @@ export = function (app: ServerApp): Plugin {
     },
 
     stop() {
-      if (systemTimer) clearInterval(systemTimer);
+      if (processTimer) clearInterval(processTimer);
       if (contextTimer) clearInterval(contextTimer);
-      systemTimer = contextTimer = null;
+      processTimer = contextTimer = null;
       if (stream) stream.stop();
       if (notifier) notifier.clearAll();
       if (publisher) publisher.reset();
@@ -182,6 +196,9 @@ export = function (app: ServerApp): Plugin {
       targets.clear();
       lastEventByCamera.clear();
       frameCount.clear();
+      activeCamera = 'forward';
+      modeHint = null;
+      lastStatsAt = 0;
       stream = null;
     },
 

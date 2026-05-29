@@ -20,7 +20,10 @@ services:
       IS_IN_DOCKER: "true"
     volumes:
       - signalk-data:/home/node/.signalk
-      # Mount the built plugin so SignalK discovers it (run `npm run build` first).
+      # Mount the plugin so SignalK discovers it. PREREQUISITE: run
+      # `npm ci && npm run build` in ./signalk-plugin first — the mount is
+      # read-only, so both dist/ and node_modules/ (ajv, ws) must already exist
+      # on the host. In the SignalK UI set containerUrl to http://vision-service:8000.
       - ./signalk-plugin:/home/node/.signalk/node_modules/signalk-vision-ai:ro
     restart: unless-stopped
 

@@ -20,12 +20,15 @@ def _pipeline(request: Request):
 def health(request: Request) -> HealthResponse:
     p = _pipeline(request)
     backend = Backend(p.settings.detector.backend)
+    errors = p.camera_errors()
     return HealthResponse(
-        status="ok",
+        status="degraded" if errors else "ok",
         mode=p.settings.mode,
         backend=backend,
         cameras=[c.name for c in p.settings.cameras],
         uptime_s=time.time() - p.started_at,
+        active_camera=p.active_camera,
+        camera_errors=errors,
     )
 
 
@@ -52,8 +55,10 @@ def control(request: Request, body: ControlRequest):
         p.set_confidence(body.confidence)
         applied["confidence"] = body.confidence
     if body.active_camera is not None:
-        applied["active_camera"] = body.active_camera.value
+        p.set_active_camera(body.active_camera)
+        applied["active_camera"] = p.active_camera
     if body.mode_hint is not None:
+        p.mode_hint = body.mode_hint
         applied["mode_hint"] = body.mode_hint
     return {"applied": applied}
 

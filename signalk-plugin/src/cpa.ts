@@ -50,23 +50,31 @@ export class CpaEstimator {
       };
       const prev = this.history.get(tgt.key);
       this.history.set(tgt.key, sample);
-      if (!prev) continue;
 
-      const dt = t - prev.t;
-      if (dt < 0.2) continue; // need a meaningful baseline
-
-      // Re-express the previous target position in the current local frame so
-      // the difference is a ground displacement, then add own displacement.
-      const prevAbs: LatLon = {
-        latitude: prev.refLat + (prev.n / EARTH_RADIUS_M) * (180 / Math.PI),
-        longitude:
-          prev.refLon +
-          (prev.e / (EARTH_RADIUS_M * Math.cos(deg2rad(prev.refLat)))) *
-            (180 / Math.PI),
-      };
-      const prevInCur = toLocal(own.position, prevAbs);
-      const vtE = (cur.e - prevInCur.e) / dt;
-      const vtN = (cur.n - prevInCur.n) / dt;
+      let vtE: number;
+      let vtN: number;
+      if (tgt.aisCorrelated && tgt.aisSog !== null && tgt.aisCog !== null) {
+        // Prefer accurate AIS kinematics over noisy monocular finite-difference;
+        // this also yields a solution on the very first sample (no baseline needed).
+        vtE = tgt.aisSog * Math.sin(tgt.aisCog);
+        vtN = tgt.aisSog * Math.cos(tgt.aisCog);
+      } else {
+        if (!prev) continue; // need a previous fix for finite-difference velocity
+        const dt = t - prev.t;
+        if (dt < 0.2) continue; // need a meaningful baseline
+        // Re-express the previous target position in the current local frame so
+        // the difference is a ground displacement.
+        const prevAbs: LatLon = {
+          latitude: prev.refLat + (prev.n / EARTH_RADIUS_M) * (180 / Math.PI),
+          longitude:
+            prev.refLon +
+            (prev.e / (EARTH_RADIUS_M * Math.cos(deg2rad(prev.refLat)))) *
+              (180 / Math.PI),
+        };
+        const prevInCur = toLocal(own.position, prevAbs);
+        vtE = (cur.e - prevInCur.e) / dt;
+        vtN = (cur.n - prevInCur.n) / dt;
+      }
 
       // Relative motion: target relative to own.
       const rE = cur.e;

@@ -10,7 +10,7 @@ a detection centred at pixel column `px` has bearing relative to the optical
 axis:
 
 ```
-relative_bearing_deg = (HFOV / 2) * (1 - 2 * px / W)
+relative_bearing_deg = (HFOV / 2) * (2 * px / W - 1)
 ```
 
 Positive = starboard (right of centre), negative = port. The camera's mounting

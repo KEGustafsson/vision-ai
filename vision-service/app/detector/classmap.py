@@ -31,8 +31,9 @@ def label_for(cls: int) -> str:
     return _COCO.get(cls, f"class_{cls}")
 
 
-def is_person_in_water(label: str, cy: float, horizon_y: Optional[float]) -> bool:
-    """A person whose centroid sits *below* the horizon is in the water.
+def is_person_in_water(label: str, waterline_y: float, horizon_y: Optional[float]) -> bool:
+    """A person whose waterline (bbox bottom) sits *below* the horizon is in the
+    water.
 
     Without a calibrated horizon we cannot make the call, so we return False
     (the plugin still receives the person detection and can decide).
@@ -41,4 +42,4 @@ def is_person_in_water(label: str, cy: float, horizon_y: Optional[float]) -> boo
         return False
     if horizon_y is None:
         return False
-    return cy > horizon_y
+    return waterline_y > horizon_y

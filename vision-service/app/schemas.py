@@ -55,8 +55,10 @@ class BBox(BaseModel):
 class Geometry(BaseModel):
     """Monocular geometry estimated by the container.
 
-    ``relative_bearing_deg`` is measured from the camera's optical axis,
-    positive to starboard (right of frame), negative to port.
+    ``relative_bearing_deg`` is the **bow-relative** bearing: the angle off the
+    camera optical axis plus the camera's mounting offset (forward = 0 deg,
+    aft = 180 deg). Positive is to starboard, negative to port. The plugin
+    obtains the true bearing by adding own ``headingTrue``.
     """
 
     relative_bearing_deg: float
@@ -96,10 +98,15 @@ class Inference(BaseModel):
 
 
 class DetectionEvent(BaseModel):
-    """One event per processed frame, per camera."""
+    """One event per processed frame, per camera.
+
+    ``camera`` is a free-form name (``forward``/``aft`` by default, but any
+    configured camera name is valid) so additional cameras don't break the wire
+    contract.
+    """
 
     schema_version: str = SCHEMA_VERSION
-    camera: Camera
+    camera: str
     timestamp: str  # ISO-8601 UTC
     frame_seq: int
     frame_size: FrameSize
@@ -115,7 +122,7 @@ class DetectionEvent(BaseModel):
 class ControlRequest(BaseModel):
     """POST /control — change runtime behaviour without a restart."""
 
-    active_camera: Optional[Camera] = None
+    active_camera: Optional[str] = None
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
     mode_hint: Optional[str] = None  # e.g. "underway" | "docking" | "anchored"
 
@@ -124,5 +131,7 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     mode: str
     backend: Backend
-    cameras: List[Camera]
+    cameras: List[str]
     uptime_s: float
+    active_camera: Optional[str] = None
+    camera_errors: dict = Field(default_factory=dict)

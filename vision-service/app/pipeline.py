@@ -43,45 +43,63 @@ class CameraWorker(threading.Thread):
         self._detector = None
         # Runtime-adjustable via /control.
         self.confidence = settings.detector.confidence
-        self.last_event: dict | None = None
+        self.error: str | None = None
 
     def stop(self) -> None:
         self._stop.set()
+
+    def close_source(self) -> None:
+        """Release the capture device; safe to call from another thread once the
+        worker loop has exited (used as a fallback if join() times out)."""
+        if self._source is not None:
+            try:
+                self._source.close()
+            except Exception:  # pragma: no cover
+                pass
+            self._source = None
 
     def run(self) -> None:
         try:
             self._source = create_source(self._cam, self._settings)
             self._detector = create_detector(self._settings)
         except Exception as exc:  # pragma: no cover - hardware/runtime dependent
+            self.error = f"init failed: {exc}"
             self._log.error("camera %s init failed: %s", self._cam.name, exc)
             return
 
         period = 1.0 / max(self._settings.server.target_fps, 0.1)
         backend = Backend(self._detector.backend)
-        while not self._stop.is_set():
-            t0 = time.perf_counter()
-            frame = self._source.read()
-            if frame is None:
-                time.sleep(0.1)
-                continue
+        try:
+            while not self._stop.is_set():
+                t0 = time.perf_counter()
+                try:
+                    frame = self._source.read()
+                    if frame is None:
+                        time.sleep(0.1)
+                        continue
 
-            tracks = self._detector.detect_and_track(frame)
-            latency_ms = (time.perf_counter() - t0) * 1000.0
-            event = self._build_event(frame, tracks, backend, latency_ms)
+                    tracks = self._detector.detect_and_track(frame)
+                    latency_ms = (time.perf_counter() - t0) * 1000.0
+                    event = self._build_event(frame, tracks, backend, latency_ms)
 
-            self._events.publish(event.model_dump(mode="json"))
-            self.last_event = event.model_dump(mode="json")
-            jpeg = encode_jpeg(annotate(frame.image, event),
-                               self._settings.server.jpeg_quality)
-            if jpeg:
-                self._frames.set(self._cam.name, jpeg)
+                    payload = event.model_dump(mode="json")
+                    self._events.publish(payload)
+                    jpeg = encode_jpeg(annotate(frame.image, event),
+                                       self._settings.server.jpeg_quality)
+                    if jpeg:
+                        self._frames.set(self._cam.name, jpeg)
+                    self.error = None
+                except Exception as exc:
+                    # One bad frame must not kill the camera; log and carry on.
+                    self.error = f"frame error: {exc}"
+                    self._log.error("camera %s frame error: %s", self._cam.name, exc)
+                    time.sleep(0.2)
 
-            dt = time.perf_counter() - t0
-            if dt < period:
-                time.sleep(period - dt)
-
-        if self._source:
-            self._source.close()
+                dt = time.perf_counter() - t0
+                if dt < period:
+                    time.sleep(period - dt)
+        finally:
+            self.close_source()
 
     def _resolve_horizon(self, frame) -> float | None:
         if self._cam.horizon_y is not None:
@@ -104,7 +122,8 @@ class CameraWorker(threading.Thread):
             brg = estimate_bearing(tr, self._cam, w)
             rng, method, rconf = estimate_range(
                 tr, self._cam, self._settings.geometry, w, h, horizon_y)
-            piw = is_person_in_water(tr.label, tr.cy, horizon_y)
+            # Use the waterline (bbox bottom) consistently with range estimation.
+            piw = is_person_in_water(tr.label, tr.y + tr.h, horizon_y)
             targets.append(Target(
                 track_id=tr.track_id,
                 label=tr.label,
@@ -142,6 +161,8 @@ class Pipeline:
         self.frames = LatestFrame()
         self.workers: dict[str, CameraWorker] = {}
         self.started_at = time.time()
+        self.active_camera: str = settings.cameras[0].name if settings.cameras else "forward"
+        self.mode_hint: str | None = None
 
     def start(self) -> None:
         for cam in self.settings.cameras:
@@ -155,7 +176,18 @@ class Pipeline:
             w.stop()
         for w in self.workers.values():
             w.join(timeout=2.0)
+            # If the read() call was blocked and the join timed out, release the
+            # capture device anyway so we don't leak it across restarts.
+            if w.is_alive():
+                w.close_source()
 
     def set_confidence(self, value: float) -> None:
         for w in self.workers.values():
             w.confidence = value
+
+    def set_active_camera(self, name: str) -> None:
+        if name in self.workers:
+            self.active_camera = name
+
+    def camera_errors(self) -> dict:
+        return {name: w.error for name, w in self.workers.items() if w.error}

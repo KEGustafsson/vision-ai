@@ -10,8 +10,8 @@ def test_bearing_center_is_zero():
 
 def test_bearing_edges():
     # Right edge -> +half FOV (starboard); left edge -> -half FOV (port).
-    assert relative_bearing_deg(1920, 1920, 90.0) == -45.0
-    assert relative_bearing_deg(0, 1920, 90.0) == 45.0
+    assert relative_bearing_deg(1920, 1920, 90.0) == 45.0
+    assert relative_bearing_deg(0, 1920, 90.0) == -45.0
 
 
 def test_vfov_smaller_than_hfov_for_landscape():
@@ -29,6 +29,16 @@ def test_range_by_horizon_decreases_with_depression():
 
 def test_range_by_horizon_none_above_horizon():
     assert range_by_horizon(500, 540, 2.5, 90.0, 1920, 1080) is None
+
+
+def test_range_by_horizon_none_at_horizon_noise_band():
+    # An object 1px below the horizon is within the noise band -> declined.
+    assert range_by_horizon(541, 540, 2.5, 90.0, 1920, 1080) is None
+
+
+def test_range_by_horizon_capped_for_unrealistic_height():
+    # A near-horizon object with a very high mount yields a range beyond the cap.
+    assert range_by_horizon(546, 540, 40.0, 90.0, 1920, 1080) is None
 
 
 def test_range_by_size_scales_inversely_with_pixels():

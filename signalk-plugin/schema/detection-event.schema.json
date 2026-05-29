@@ -48,14 +48,6 @@
       "title": "CalibrationStatus",
       "type": "string"
     },
-    "Camera": {
-      "enum": [
-        "forward",
-        "aft"
-      ],
-      "title": "Camera",
-      "type": "string"
-    },
     "FrameSize": {
       "properties": {
         "w": {
@@ -75,7 +67,7 @@
       "type": "object"
     },
     "Geometry": {
-      "description": "Monocular geometry estimated by the container.\n\n``relative_bearing_deg`` is measured from the camera's optical axis,\npositive to starboard (right of frame), negative to port.",
+      "description": "Monocular geometry estimated by the container.\n\n``relative_bearing_deg`` is the **bow-relative** bearing: the angle off the\ncamera optical axis plus the camera's mounting offset (forward = 0 deg,\naft = 180 deg). Positive is to starboard, negative to port. The plugin\nobtains the true bearing by adding own ``headingTrue``.",
       "properties": {
         "relative_bearing_deg": {
           "title": "Relative Bearing Deg",
@@ -231,7 +223,7 @@
       "type": "object"
     }
   },
-  "description": "One event per processed frame, per camera.",
+  "description": "One event per processed frame, per camera.\n\n``camera`` is a free-form name (``forward``/``aft`` by default, but any\nconfigured camera name is valid) so additional cameras don't break the wire\ncontract.",
   "properties": {
     "schema_version": {
       "default": "1.0",
@@ -239,7 +231,8 @@
       "type": "string"
     },
     "camera": {
-      "$ref": "#/$defs/Camera"
+      "title": "Camera",
+      "type": "string"
     },
     "timestamp": {
       "title": "Timestamp",

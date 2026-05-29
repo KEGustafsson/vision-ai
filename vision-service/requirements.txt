@@ -1,4 +1,6 @@
-# Core runtime deps (CPU/dev + Jetson share these).
+# Core runtime deps. These are all that mock mode needs, so the default image
+# stays light. Real YOLO inference (cpu mode) adds ultralytics/torch via
+# requirements-cpu.txt.
 fastapi>=0.110
 uvicorn[standard]>=0.29
 pydantic>=2.6
@@ -6,7 +8,3 @@ numpy>=1.24
 PyYAML>=6.0
 opencv-python-headless>=4.8
 websockets>=12.0
-
-# Real detection backend (CPU/dev). On Jetson, torch/torchvision come from the
-# base image; ultralytics is installed there too. Pinned loosely for dev.
-ultralytics>=8.1; platform_machine != "aarch64"

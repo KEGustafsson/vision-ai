@@ -7,12 +7,17 @@ import { angularDiff, bearingTo, deg2rad, haversine } from './geo';
 import { EnrichedTarget, LatLon, OwnShip } from './types';
 
 export interface AisContact {
-  mmsi: string;
+  mmsi: string | null;
   name?: string;
   position: LatLon;
   bearing: number; // rad, from own ship
   range: number; // m
+  cog: number | null; // rad
+  sog: number | null; // m/s
 }
+
+const num = (v: any): number | null =>
+  typeof v === 'number' && isFinite(v) ? v : null;
 
 const VESSEL_LABELS = new Set(['vessel', 'boat', 'ship', 'ferry', 'sail boat', 'speed boat']);
 
@@ -25,13 +30,15 @@ export function collectAisContacts(vessels: any, own: OwnShip): AisContact[] {
     const p = v?.navigation?.position?.value ?? v?.navigation?.position;
     if (!p || typeof p.latitude !== 'number') continue;
     const pos: LatLon = { latitude: p.latitude, longitude: p.longitude };
-    const mmsi = id.includes('mmsi:') ? id.split('mmsi:').pop()! : id;
+    const mmsi = id.includes('mmsi:') ? id.split('mmsi:').pop()! : null;
     out.push({
       mmsi,
       name: v?.name?.value ?? v?.name,
       position: pos,
       bearing: bearingTo(own.position, pos),
       range: haversine(own.position, pos),
+      cog: num(v?.navigation?.courseOverGroundTrue?.value ?? v?.navigation?.courseOverGroundTrue),
+      sog: num(v?.navigation?.speedOverGround?.value ?? v?.navigation?.speedOverGround),
     });
   }
   return out;
@@ -76,6 +83,8 @@ export function fuse(
     if (best) {
       t.aisCorrelated = true;
       t.aisMmsi = best.mmsi;
+      t.aisCog = best.cog;
+      t.aisSog = best.sog;
       aisCorrelatedCount += 1;
     } else if (
       VESSEL_LABELS.has(t.label) &&

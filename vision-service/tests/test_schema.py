@@ -24,7 +24,15 @@ def test_event_roundtrips_json():
     data = ev.model_dump(mode="json")
     again = DetectionEvent.model_validate(data)
     assert again.targets[0].label == "vessel"
-    assert again.camera.value == "forward"
+    assert again.camera == "forward"
+
+
+def test_event_accepts_arbitrary_camera_name():
+    ev = _event()
+    data = ev.model_dump(mode="json")
+    data["camera"] = "port-quarter"
+    again = DetectionEvent.model_validate(data)
+    assert again.camera == "port-quarter"
 
 
 def test_schema_generates():

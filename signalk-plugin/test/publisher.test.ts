@@ -28,7 +28,7 @@ function tgt(id: number, partial: Partial<EnrichedTarget> = {}): EnrichedTarget 
     pixel_velocity: { vx: 0, vy: 0 }, first_seen: null, age_frames: 0,
     key: `forward.${id}`, camera: 'forward', bearingTrue: 0.1,
     position: { latitude: 60, longitude: 25 },
-    aisCorrelated: false, aisMmsi: null, cpa: null, tcpa: null, threatLevel: 'none', lastSeen: 0,
+    aisCorrelated: false, aisMmsi: null, aisCog: null, aisSog: null, cpa: null, tcpa: null, threatLevel: 'none', lastSeen: 0,
     ...partial,
   };
 }

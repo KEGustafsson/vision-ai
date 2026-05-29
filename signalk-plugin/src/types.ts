@@ -73,6 +73,8 @@ export interface EnrichedTarget extends RawTarget {
   position: LatLon | null;
   aisCorrelated: boolean;
   aisMmsi: string | null;
+  aisCog: number | null; // rad, from a correlated AIS contact
+  aisSog: number | null; // m/s, from a correlated AIS contact
   cpa: number | null; // m
   tcpa: number | null; // s
   threatLevel: ThreatLevel;

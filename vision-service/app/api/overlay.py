@@ -22,7 +22,7 @@ def _severity_colour(t: Target) -> tuple:
 
 
 def annotate(image: np.ndarray, event: DetectionEvent) -> np.ndarray:
-    img = image
+    img = image.copy()
     if event.horizon_y is not None:
         y = int(event.horizon_y)
         cv2.line(img, (0, y), (img.shape[1], y), (200, 200, 200), 1)
@@ -40,7 +40,7 @@ def annotate(image: np.ndarray, event: DetectionEvent) -> np.ndarray:
         cv2.putText(img, label, (x, max(y - 6, 12)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 2, cv2.LINE_AA)
 
-    hud = f"{event.camera.value}  {event.inference.backend.value}  {event.inference.latency_ms:.0f}ms  n={len(event.targets)}"
+    hud = f"{event.camera}  {event.inference.backend.value}  {event.inference.latency_ms:.0f}ms  n={len(event.targets)}"
     cv2.putText(img, hud, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
     return img
 

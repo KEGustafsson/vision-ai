@@ -3,7 +3,6 @@
 // ages out stale tracks by publishing null.
 
 import { PluginConfig } from './config';
-import { rad2deg } from './geo';
 import { ServerApp } from './skapp';
 import { EnrichedTarget } from './types';
 
@@ -153,6 +152,7 @@ export class Publisher {
 
   /** Optional: render high-confidence visual targets as synthetic AIS vessels. */
   private publishBlips(targets: EnrichedTarget[]): void {
+    const ts = new Date().toISOString();
     const current = new Set<string>();
     for (const t of targets) {
       if (!t.position || t.track_id === null) continue;
@@ -163,11 +163,25 @@ export class Publisher {
         updates: [
           {
             source: { label: 'vision-ai' },
-            timestamp: new Date().toISOString(),
+            timestamp: ts,
             values: [
               { path: 'navigation.position', value: t.position },
-              { path: '', value: { name: `VIS-${t.label}-${t.track_id}` } },
+              { path: 'name', value: `VIS-${t.label}-${t.track_id}` },
             ],
+          },
+        ],
+      });
+    }
+    // Age out departed blips by nulling their position (best-effort removal).
+    for (const uuid of this.publishedBlips) {
+      if (current.has(uuid)) continue;
+      this.app.handleMessage(this.pluginId, {
+        context: `vessels.${uuid}`,
+        updates: [
+          {
+            source: { label: 'vision-ai' },
+            timestamp: ts,
+            values: [{ path: 'navigation.position', value: null }],
           },
         ],
       });
@@ -181,5 +195,3 @@ export class Publisher {
     this.publishedBlips.clear();
   }
 }
-
-export { rad2deg };

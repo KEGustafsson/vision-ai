@@ -13,7 +13,7 @@ function visualTarget(bearingRad: number, range: number, key = 'forward.1'): Enr
     geometry: { relative_bearing_deg: 0, range_m: range, range_method: 'horizon', range_confidence: 0.7 },
     pixel_velocity: { vx: 0, vy: 0 }, first_seen: null, age_frames: 0,
     key, camera: 'forward', bearingTrue: bearingRad, position: destinationPoint(own.position, bearingRad, range),
-    aisCorrelated: false, aisMmsi: null, cpa: null, tcpa: null, threatLevel: 'none', lastSeen: 0,
+    aisCorrelated: false, aisMmsi: null, aisCog: null, aisSog: null, cpa: null, tcpa: null, threatLevel: 'none', lastSeen: 0,
   };
 }
 
@@ -42,6 +42,27 @@ describe('aisFusion', () => {
     expect(res.targets[0].aisCorrelated).toBe(true);
     expect(res.targets[0].aisMmsi).toBe('111');
     expect(res.darkTargetKeys).toHaveLength(0);
+  });
+
+  it('captures AIS COG/SOG and a null MMSI for UUID-only contacts', () => {
+    const brg = deg2rad(90);
+    const aisPos = destinationPoint(own.position, brg, 600);
+    const vessels = {
+      'urn:mrn:signalk:uuid:abc': {
+        navigation: {
+          position: { value: aisPos },
+          courseOverGroundTrue: { value: deg2rad(270) },
+          speedOverGround: { value: 4 },
+        },
+      },
+    };
+    const contacts = collectAisContacts(vessels, own);
+    expect(contacts[0].mmsi).toBeNull();
+    expect(contacts[0].cog).toBeCloseTo(deg2rad(270), 5);
+    expect(contacts[0].sog).toBe(4);
+    const res = fuse([visualTarget(brg, 610)], contacts, cfg);
+    expect(res.targets[0].aisCorrelated).toBe(true);
+    expect(res.targets[0].aisSog).toBe(4);
   });
 
   it('flags an uncorrelated in-range vessel as a dark target', () => {

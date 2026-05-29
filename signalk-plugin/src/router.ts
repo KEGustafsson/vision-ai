@@ -24,6 +24,10 @@ function proxy(targetUrl: string, res: any): void {
     });
     up.pipe(res);
   });
+  // Don't let a slow/hung container hold the connection open forever. MJPEG is
+  // a long-lived stream, so only guard the time-to-first-byte (the response
+  // headers), not the streaming body.
+  upstream.setTimeout(10000, () => upstream.destroy(new Error('upstream timeout')));
   upstream.on('error', () => {
     if (!res.headersSent) res.status(502).json({ error: 'vision container unreachable' });
     else res.end();
@@ -31,11 +35,36 @@ function proxy(targetUrl: string, res: any): void {
   res.on('close', () => upstream.destroy());
 }
 
+// Minimal JSON body parser: SignalK mounts plugin routers without guaranteeing
+// a JSON body parser, so populate req.body ourselves when it's absent.
+function ensureJsonBody(req: any, _res: any, next: () => void): void {
+  if (req.body !== undefined || req.method === 'GET' || req.method === 'HEAD') return next();
+  let data = '';
+  req.on('data', (c: Buffer) => {
+    data += c;
+    if (data.length > 1e6) req.destroy(); // guard against oversized bodies
+  });
+  req.on('end', () => {
+    try {
+      req.body = data ? JSON.parse(data) : {};
+    } catch {
+      req.body = {};
+    }
+    next();
+  });
+  req.on('error', () => next());
+}
+
 export function registerRoutes(
   router: any,
   shared: SharedState,
   getCfg: () => PluginConfig
 ): void {
+  router.use(ensureJsonBody);
+
+  const knownCamera = (name: string): boolean =>
+    shared.system.cameras.includes(name) || name === 'forward' || name === 'aft';
+
   router.get('/targets', (_req: any, res: any) => {
     res.json({
       ownShip: shared.ownShip,
@@ -74,12 +103,14 @@ export function registerRoutes(
   router.get('/stream/:camera', (req: any, res: any) => {
     const client = shared.client();
     if (!client) return res.status(503).json({ error: 'not started' });
+    if (!knownCamera(req.params.camera)) return res.status(404).json({ error: 'unknown camera' });
     proxy(client.streamUrl(req.params.camera), res);
   });
 
   router.get('/snapshot/:camera', (req: any, res: any) => {
     const client = shared.client();
     if (!client) return res.status(503).json({ error: 'not started' });
+    if (!knownCamera(req.params.camera)) return res.status(404).json({ error: 'unknown camera' });
     proxy(client.snapshotUrl(req.params.camera), res);
   });
 }

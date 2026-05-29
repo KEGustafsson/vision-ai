@@ -11,8 +11,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /opt/vision-service
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Default build installs only the light deps (mock mode runs anywhere). Set
+# --build-arg WITH_DETECTION=1 to also install ultralytics/torch for `cpu` mode.
+ARG WITH_DETECTION=0
+COPY requirements.txt requirements-cpu.txt ./
+RUN if [ "$WITH_DETECTION" = "1" ]; then \
+        pip install --no-cache-dir -r requirements-cpu.txt; \
+    else \
+        pip install --no-cache-dir -r requirements.txt; \
+    fi
 
 COPY app ./app
 COPY config ./config

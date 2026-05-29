@@ -17,6 +17,7 @@ export class NotificationManager {
   private active = new Set<string>();
   private mobCounters = new Map<string, number>();
   private mobHoldUntil = new Map<string, number>();
+  private lastMobMessage: string | null = null;
 
   constructor(
     private app: ServerApp,
@@ -70,7 +71,6 @@ export class NotificationManager {
   private evaluateMob(targets: EnrichedTarget[], nowMs: number, want: Set<string>): void {
     const path = 'notifications.mob';
     let fire = false;
-    let message = 'Man overboard detected by vision system';
 
     for (const t of targets) {
       if (!t.is_person_in_water || t.confidence < this.cfg.mobMinConfidence) continue;
@@ -80,13 +80,15 @@ export class NotificationManager {
         fire = true;
         // Hold the alarm for 60s after last sighting (drift / occlusion).
         this.mobHoldUntil.set(t.key, nowMs + 60000);
+        // Capture the last-known position/bearing so the message stays useful
+        // even if the detection drops out during the hold window.
         if (t.position) {
-          message =
+          this.lastMobMessage =
             `MAN OVERBOARD — person in water at ` +
             `${t.position.latitude.toFixed(5)}, ${t.position.longitude.toFixed(5)}` +
             ` (${t.camera} camera)`;
         } else {
-          message = `MAN OVERBOARD — person in water, bearing ${
+          this.lastMobMessage = `MAN OVERBOARD — person in water, bearing ${
             t.bearingTrue !== null ? ((t.bearingTrue * 180) / Math.PI).toFixed(0) + '°T' : 'unknown'
           } (${t.camera} camera)`;
         }
@@ -113,8 +115,12 @@ export class NotificationManager {
     }
 
     if (fire) {
-      this.send(path, 'emergency', message, ['visual', 'sound']);
+      this.send(path, 'emergency',
+        this.lastMobMessage ?? 'Man overboard detected by vision system',
+        ['visual', 'sound']);
       want.add(path);
+    } else {
+      this.lastMobMessage = null;
     }
   }
 
@@ -146,5 +152,6 @@ export class NotificationManager {
     for (const path of [...this.active]) this.clear(path);
     this.mobCounters.clear();
     this.mobHoldUntil.clear();
+    this.lastMobMessage = null;
   }
 }

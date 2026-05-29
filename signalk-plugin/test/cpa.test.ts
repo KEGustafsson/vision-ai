@@ -13,7 +13,7 @@ function target(pos: LatLon): EnrichedTarget {
     geometry: { relative_bearing_deg: 0, range_m: 1000, range_method: 'horizon', range_confidence: 0.8 },
     pixel_velocity: { vx: 0, vy: 0 }, first_seen: null, age_frames: 0,
     key: 'forward.1', camera: 'forward', bearingTrue: 0, position: pos,
-    aisCorrelated: false, aisMmsi: null, cpa: null, tcpa: null, threatLevel: 'none', lastSeen: 0,
+    aisCorrelated: false, aisMmsi: null, aisCog: null, aisSog: null, cpa: null, tcpa: null, threatLevel: 'none', lastSeen: 0,
   };
 }
 
@@ -37,6 +37,20 @@ describe('CpaEstimator', () => {
     expect(t.tcpa!).toBeGreaterThan(0);
     expect(t.cpa!).toBeLessThan(50);
     expect(t.threatLevel).toBe('high');
+  });
+
+  it('uses AIS velocity for a correlated target on the first sample', () => {
+    const est = new CpaEstimator();
+    const own: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 0, cog: 0 };
+    // Target 1000 m due north, moving due south (180°T) at 5 m/s via AIS.
+    const tgtAbs = destinationPoint(own.position!, 0, 1000);
+    const t = { ...target(tgtAbs), aisCorrelated: true, aisCog: deg2rad(180), aisSog: 5 };
+    // Single update: finite-difference would yield nothing, but AIS velocity
+    // gives an immediate closing solution.
+    est.update([t], own, cfg, 0);
+    expect(t.tcpa).not.toBeNull();
+    expect(t.tcpa!).toBeGreaterThan(0);
+    expect(t.cpa!).toBeLessThan(50);
   });
 
   it('classify thresholds', () => {

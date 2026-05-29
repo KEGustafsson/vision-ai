@@ -40,6 +40,8 @@ export function enrichTarget(
     position,
     aisCorrelated: false,
     aisMmsi: null,
+    aisCog: null,
+    aisSog: null,
     cpa: null,
     tcpa: null,
     threatLevel: 'none',
