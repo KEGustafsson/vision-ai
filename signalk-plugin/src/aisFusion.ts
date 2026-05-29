@@ -60,6 +60,13 @@ export function fuse(
   const bearingTol = deg2rad(cfg.correlationBearingDeg);
 
   for (const t of targets) {
+    // Reset correlation state every pass — targets persist across cycles, so a
+    // target that loses its AIS match must not retain stale identity/kinematics.
+    t.aisCorrelated = false;
+    t.aisMmsi = null;
+    t.aisCog = null;
+    t.aisSog = null;
+
     if (t.bearingTrue === null) continue;
     const range = t.geometry.range_m;
 

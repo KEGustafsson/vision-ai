@@ -37,7 +37,10 @@ class DetectorConfig(BaseModel):
     backend: str = "mock"              # mock | torch-cpu | torch-cuda | tensorrt
     model_pt: str = "yolov8n.pt"
     model_engine: str = "yolov8n.engine"
-    confidence: float = 0.35
+    confidence: float = 0.35           # publish threshold (worker-side filter)
+    # Lower floor fed to YOLO/ByteTrack so runtime /control can both raise AND
+    # lower the effective confidence; the worker filters at `confidence`.
+    track_floor: float = 0.1
     imgsz: int = 640
     tracker: str = "bytetrack.yaml"
 
@@ -48,6 +51,9 @@ class ServerConfig(BaseModel):
     target_fps: float = 10.0           # processing cadence cap
     jpeg_quality: int = 80
     event_buffer: int = 200
+    # Allowed CORS origins; default permissive for dev. Restrict to the SignalK
+    # origin(s) in production (the plugin proxies same-origin anyway).
+    cors_origins: List[str] = Field(default_factory=lambda: ["*"])
 
 
 class Settings(BaseModel):

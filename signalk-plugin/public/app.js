@@ -88,5 +88,9 @@ async function poll() {
   }
 }
 
-setInterval(poll, 1000);
-poll();
+// Self-scheduling so a slow SignalK server can't pile up overlapping polls.
+async function loop() {
+  await poll();
+  setTimeout(loop, 1000);
+}
+loop();

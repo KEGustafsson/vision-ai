@@ -141,15 +141,18 @@ export = function (app: ServerApp): Plugin {
     const hour = new Date().getHours();
     const night = hour < 6 || hour >= 21;
     // Underway: watch ahead. Low speed (docking/manoeuvring): watch astern.
-    activeCamera = underway ? 'forward' : 'aft';
-    modeHint = underway ? 'underway' : 'docking';
+    const nextCamera = underway ? 'forward' : 'aft';
+    const nextModeHint = underway ? 'underway' : 'docking';
     const confidence = night ? Math.max(0.25, cfg.minConfidence - 0.1) : cfg.minConfidence;
     try {
       await client.control({
-        active_camera: activeCamera,
+        active_camera: nextCamera,
         confidence,
-        mode_hint: modeHint,
+        mode_hint: nextModeHint,
       });
+      // Only reflect the switch locally once the container has accepted it.
+      activeCamera = nextCamera;
+      modeHint = nextModeHint;
     } catch (e) {
       app.debug(`vision-ai: context control failed: ${e}`);
     }

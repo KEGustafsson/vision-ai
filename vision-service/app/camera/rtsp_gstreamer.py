@@ -14,7 +14,18 @@ import cv2
 from .base import Frame, FrameSource
 
 
+def _validate_url(url: str) -> None:
+    if not url.startswith(("rtsp://", "rtspt://")):
+        raise ValueError(f"RTSP url must start with rtsp://: {url!r}")
+    # Reject characters that would break out of the GStreamer pipeline string.
+    if any(c in url for c in " \t\n!'\"\\"):
+        raise ValueError(f"RTSP url contains unsafe characters: {url!r}")
+
+
 def build_pipeline(url: str, codec: str = "h264", width: int = 1280, height: int = 720) -> str:
+    _validate_url(url)
+    if codec not in ("h264", "h265"):
+        raise ValueError(f"unsupported codec: {codec!r}")
     depay = "rtph264depay ! h264parse" if codec == "h264" else "rtph265depay ! h265parse"
     return (
         f"rtspsrc location={url} latency=100 ! {depay} ! "

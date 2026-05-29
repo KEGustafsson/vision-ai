@@ -3,6 +3,7 @@ hosts or cameras where HW decode is unavailable."""
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 import cv2
@@ -14,13 +15,22 @@ class RtspCpuSource(FrameSource):
     def __init__(self, name: str, url: str):
         super().__init__(name)
         self._url = url
+        # Fail fast on unreachable cameras instead of stalling the worker.
+        os.environ.setdefault(
+            "OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|timeout;5000000"
+        )
         self._cap = cv2.VideoCapture(url)
         # Keep latency low: small internal buffer.
-        try:
-            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        except Exception:
-            pass
+        for prop, val in ((cv2.CAP_PROP_BUFFERSIZE, 1),
+                          (getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", -1), 5000),
+                          (getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", -1), 5000)):
+            if prop != -1:
+                try:
+                    self._cap.set(prop, val)
+                except Exception:
+                    pass
         if not self._cap.isOpened():
+            self._cap.release()
             raise RuntimeError(f"cannot open RTSP stream: {url}")
         self._w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
         self._h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720

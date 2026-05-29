@@ -40,7 +40,7 @@ export interface RawTarget {
 
 export interface DetectionEvent {
   schema_version: string;
-  camera: CameraName;
+  camera: string; // free-form per contract; "forward"/"aft" are the defaults
   timestamp: string;
   frame_seq: number;
   frame_size: { w: number; h: number };
@@ -68,7 +68,7 @@ export interface OwnShip {
 
 export interface EnrichedTarget extends RawTarget {
   key: string; // `${camera}.${track_id}`
-  camera: CameraName;
+  camera: string;
   bearingTrue: number | null; // rad
   position: LatLon | null;
   aisCorrelated: boolean;

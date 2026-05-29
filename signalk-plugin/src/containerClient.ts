@@ -37,11 +37,11 @@ export class ContainerClient {
 
   /** URL of the annotated MJPEG stream for a camera (used by the proxy). */
   streamUrl(camera: string): string {
-    return this.url(`/stream/${camera}.mjpg`);
+    return this.url(`/stream/${encodeURIComponent(camera)}.mjpg`);
   }
 
   snapshotUrl(camera: string): string {
-    return this.url(`/snapshot/${camera}`);
+    return this.url(`/snapshot/${encodeURIComponent(camera)}`);
   }
 
   wsUrl(): string {

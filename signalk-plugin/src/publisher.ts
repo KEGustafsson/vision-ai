@@ -13,6 +13,13 @@ interface Meta {
   zones?: Array<{ state: string; lower?: number; upper?: number }>;
 }
 
+// Every leaf published under vision.targets.<camera>.<trackId>; used both to
+// age out departed tracks and to fully retract state on reset().
+const TARGET_LEAVES = [
+  'label', 'confidence', 'bearingTrue', 'distance', 'position',
+  'cpa', 'tcpa', 'threatLevel', 'aisCorrelated', 'aisMmsi', 'rangeMethod',
+];
+
 const FIELD_META: Record<string, Meta> = {
   bearingTrue: { units: 'rad', description: 'True bearing to visual target' },
   distance: { units: 'm', description: 'Estimated range to visual target' },
@@ -75,24 +82,34 @@ export class Publisher {
         }
       };
 
+      // Optional measurements: emit the value, or an explicit null if it has
+      // gone away while the track stays live — otherwise SignalK would keep
+      // showing the last known value indefinitely.
+      const pushOptional = (leaf: string, value: unknown, field?: string) => {
+        if (value === null || value === undefined) {
+          values.push({ path: `${base}.${leaf}`, value: null });
+        } else {
+          push(leaf, value, field);
+        }
+      };
+
       push('label', t.label);
       push('confidence', t.confidence, 'confidence');
       push('rangeMethod', t.geometry.range_method);
       push('aisCorrelated', t.aisCorrelated);
       push('aisMmsi', t.aisMmsi);
       push('threatLevel', t.threatLevel);
-      if (t.bearingTrue !== null) push('bearingTrue', t.bearingTrue, 'bearingTrue');
-      if (t.geometry.range_m !== null) push('distance', t.geometry.range_m, 'distance');
-      if (t.position) push('position', t.position);
-      if (t.cpa !== null) push('cpa', t.cpa, 'cpa');
-      if (t.tcpa !== null) push('tcpa', t.tcpa, 'tcpa');
+      pushOptional('bearingTrue', t.bearingTrue, 'bearingTrue');
+      pushOptional('distance', t.geometry.range_m, 'distance');
+      pushOptional('position', t.position);
+      pushOptional('cpa', t.cpa, 'cpa');
+      pushOptional('tcpa', t.tcpa, 'tcpa');
     }
 
     // Age out tracks that disappeared.
     for (const base of [...this.publishedTracks]) {
       if (!current.has(base)) {
-        for (const leaf of ['label', 'confidence', 'bearingTrue', 'distance', 'position',
-          'cpa', 'tcpa', 'threatLevel', 'aisCorrelated', 'aisMmsi', 'rangeMethod']) {
+        for (const leaf of TARGET_LEAVES) {
           values.push({ path: `${base}.${leaf}`, value: null });
         }
       }
@@ -189,7 +206,23 @@ export class Publisher {
     this.publishedBlips = current;
   }
 
+  /** Retract all previously published state, then clear bookkeeping. Called on
+   * plugin stop so stale vision.* leaves and synthetic blips don't linger. */
   reset(): void {
+    const ts = new Date().toISOString();
+    const values: Array<{ path: string; value: unknown }> = [];
+    for (const base of this.publishedTracks) {
+      for (const leaf of TARGET_LEAVES) values.push({ path: `${base}.${leaf}`, value: null });
+    }
+    this.emit(values);
+    for (const uuid of this.publishedBlips) {
+      this.app.handleMessage(this.pluginId, {
+        context: `vessels.${uuid}`,
+        updates: [
+          { source: { label: 'vision-ai' }, timestamp: ts, values: [{ path: 'navigation.position', value: null }] },
+        ],
+      });
+    }
     this.metaSent.clear();
     this.publishedTracks.clear();
     this.publishedBlips.clear();

@@ -3,7 +3,8 @@
 # Install on top of: ultralytics/ultralytics:latest-jetson-jetpack6
 fastapi>=0.110
 uvicorn[standard]>=0.29
-pydantic>=2.6
+h11>=0.16.0           # avoid GHSA-vqfr-h8mv-ghfj (uvicorn pulls h11>=0.8)
+pydantic>=2.6,<3
 PyYAML>=6.0
 websockets>=12.0
 # NOTE: do not install opencv-python here — it would shadow the CUDA/GStreamer

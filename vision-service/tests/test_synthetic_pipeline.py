@@ -15,18 +15,19 @@ def test_synthetic_source_and_mock_detector_produce_tracks():
     src = SyntheticSource("forward", with_mob=True)
     det = MockDetector()
     labels = set()
+    all_tracks = []
     for _ in range(5):
-        frame = det_frame = src.read()
-        tracks = det.detect_and_track(det_frame)
+        frame = src.read()
+        tracks = det.detect_and_track(frame)
+        all_tracks.extend(tracks)
         for t in tracks:
             labels.add(t.label)
     # We expect vessels, a buoy and a person from the synthetic scene.
     assert "vessel" in labels
     assert "buoy" in labels
     assert "person" in labels
-    # Track ids should be stable/assigned.
-    assert all(t.track_id is not None for t in tracks)
-    _ = frame
+    # Track ids should be stable/assigned across all detections.
+    assert all_tracks and all(t.track_id is not None for t in all_tracks)
 
 
 def test_app_health_and_events():

@@ -1,5 +1,5 @@
 # CPU detection backend: real YOLOv8 inference on CPU (mode: cpu, backend:
-# torch-cpu). Pulls in torch via ultralytics, so this is a large install — only
-# needed when you want real detections off the Jetson. Mock mode does NOT need it.
+# torch-cpu). Pulls in torch via ultralytics, so this is a large install —
+# needed only for CPU-based detections (non-Jetson). Mock mode does NOT need it.
 -r requirements.txt
-ultralytics>=8.1
+ultralytics>=8.1,<9   # cap to the 8.x API used by the detector/export code

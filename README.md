@@ -24,7 +24,7 @@ SignalK, produces:
 
 ## Architecture
 
-```
+```text
   ┌─────────────┐  RTSP   ┌──────────────────────────┐
   │ fwd camera  ├────────►│  vision-service (Python)  │
   ├─────────────┤  RTSP   │  YOLOv8 + ByteTrack        │

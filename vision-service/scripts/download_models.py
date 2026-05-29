@@ -16,7 +16,12 @@ def main() -> None:
     MODELS.mkdir(exist_ok=True)
     from ultralytics import YOLO
 
-    YOLO(args.model)  # triggers download into the ultralytics cache
+    try:
+        model = YOLO(args.model)  # triggers download into the ultralytics cache
+        _ = model.names  # touch metadata to confirm the weights are usable
+    except Exception as exc:
+        print(f"failed to download {args.model}: {exc}")
+        raise
     print(f"ensured weights available: {args.model}")
 
 

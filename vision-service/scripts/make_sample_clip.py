@@ -28,9 +28,13 @@ def main() -> None:
     src = SyntheticSource("forward", with_mob=True, fps=args.fps)
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(str(OUT), fourcc, args.fps, (src.width, src.height))
-    for _ in range(args.seconds * args.fps):
-        writer.write(src.read().image)
-    writer.release()
+    if not writer.isOpened():
+        raise RuntimeError(f"failed to open VideoWriter for {OUT} (codec unavailable?)")
+    try:
+        for _ in range(args.seconds * args.fps):
+            writer.write(src.read().image)
+    finally:
+        writer.release()
     print(f"wrote {OUT}")
 
 

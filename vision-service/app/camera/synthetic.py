@@ -45,8 +45,8 @@ class SyntheticSource(FrameSource):
 
     def _background(self) -> np.ndarray:
         img = np.empty((self._h, self._w, 3), dtype=np.uint8)
-        img[: self.horizon_y] = (235, 206, 135)   # sky (light blue)
-        img[self.horizon_y:] = (120, 70, 30)       # sea (dark blue)
+        img[: self.horizon_y] = (235, 206, 135)   # sky (light blue, BGR)
+        img[self.horizon_y:] = (120, 70, 30)       # sea (dark blue, BGR)
         cv2.line(img, (0, self.horizon_y), (self._w, self.horizon_y), (180, 150, 90), 2)
         return img
 
@@ -82,8 +82,10 @@ class SyntheticSource(FrameSource):
 
     def _draw(self, img, truth, actor, cx, cy, w, h):
         cls, label, colour = actor
-        x1, y1 = int(cx - w / 2), int(cy - h / 2)
-        x2, y2 = int(cx + w / 2), int(cy + h / 2)
+        x1 = max(0, min(int(cx - w / 2), self._w - 1))
+        y1 = max(0, min(int(cy - h / 2), self._h - 1))
+        x2 = max(0, min(int(cx + w / 2), self._w - 1))
+        y2 = max(0, min(int(cy + h / 2), self._h - 1))
         cv2.rectangle(img, (x1, y1), (x2, y2), colour, -1)
         truth.append(TruthBox(cls=cls, label=label, x=float(x1), y=float(y1),
-                              w=float(w), h=float(h)))
+                              w=float(x2 - x1), h=float(y2 - y1)))

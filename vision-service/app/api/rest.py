@@ -34,7 +34,12 @@ def health(request: Request) -> HealthResponse:
 
 @router.get("/config")
 def get_config(request: Request):
-    return _pipeline(request).settings.model_dump()
+    cfg = _pipeline(request).settings.model_dump()
+    # RTSP URLs often embed credentials (rtsp://user:pass@host) — never expose them.
+    for cam in cfg.get("cameras", []):
+        if cam.get("url"):
+            cam["url"] = "***redacted***"
+    return cfg
 
 
 @router.get("/cameras")
@@ -55,6 +60,8 @@ def control(request: Request, body: ControlRequest):
         p.set_confidence(body.confidence)
         applied["confidence"] = body.confidence
     if body.active_camera is not None:
+        if body.active_camera not in p.workers:
+            raise HTTPException(status_code=404, detail=f"unknown camera {body.active_camera}")
         p.set_active_camera(body.active_camera)
         applied["active_camera"] = p.active_camera
     if body.mode_hint is not None:

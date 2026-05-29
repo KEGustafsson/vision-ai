@@ -33,7 +33,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app = FastAPI(title="Marine Vision-AI Service", version="1.0", lifespan=lifespan)
     app.add_middleware(
-        CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"],
+        CORSMiddleware,
+        allow_origins=settings.server.cors_origins or ["*"],
+        allow_methods=["*"], allow_headers=["*"],
     )
 
     pipeline = Pipeline(settings, log)

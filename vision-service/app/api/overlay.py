@@ -31,7 +31,7 @@ def annotate(image: np.ndarray, event: DetectionEvent) -> np.ndarray:
         colour = _severity_colour(t)
         x, y, w, h = int(t.bbox.x), int(t.bbox.y), int(t.bbox.w), int(t.bbox.h)
         cv2.rectangle(img, (x, y), (x + w, y + h), colour, 2)
-        brg = f"{t.geometry.relative_bearing_deg:+.0f}°"
+        brg = f"{t.geometry.relative_bearing_deg:+.0f}deg"
         rng = f"{t.geometry.range_m:.0f}m" if t.geometry.range_m is not None else "?"
         tid = f"#{t.track_id}" if t.track_id is not None else ""
         label = f"{t.label}{tid} {brg} {rng}"

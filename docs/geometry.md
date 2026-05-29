@@ -9,7 +9,7 @@ For a rectilinear lens of horizontal field of view `HFOV` over image width `W`,
 a detection centred at pixel column `px` has bearing relative to the optical
 axis:
 
-```
+```text
 relative_bearing_deg = (HFOV / 2) * (2 * px / W - 1)
 ```
 
@@ -25,7 +25,7 @@ For an object floating on the water, its waterline contact (bottom of the bbox)
 sits below the horizon by a depression angle θ. With camera height `h` above the
 waterline:
 
-```
+```text
 VFOV  = 2 * atan(tan(HFOV/2) * H / W)        # vertical FOV (square pixels)
 IFOV  = VFOV / H                              # degrees per pixel (vertical)
 θ     = (object_y - horizon_y) * IFOV         # depression angle
@@ -40,7 +40,7 @@ noisy). Implemented in `app/geometry/range.py`.
 If the horizon is unavailable but the object's real-world width is known
 (`geometry.known_widths_m`):
 
-```
+```text
 focal_px = (W / 2) / tan(HFOV / 2)
 range    = focal_px * real_width_m / pixel_width
 ```

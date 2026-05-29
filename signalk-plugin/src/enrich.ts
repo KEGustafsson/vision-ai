@@ -3,16 +3,16 @@
 
 import { deg2rad, destinationPoint, normalizeRad } from './geo';
 import { PluginConfig } from './config';
-import { CameraName, EnrichedTarget, OwnShip, RawTarget } from './types';
+import { EnrichedTarget, OwnShip, RawTarget } from './types';
 
-export function targetKey(camera: CameraName, raw: RawTarget): string {
+export function targetKey(camera: string, raw: RawTarget): string {
   const id = raw.track_id ?? `anon-${Math.round(raw.bbox.x)}-${Math.round(raw.bbox.y)}`;
   return `${camera}.${id}`;
 }
 
 export function enrichTarget(
   raw: RawTarget,
-  camera: CameraName,
+  camera: string,
   own: OwnShip,
   cfg: PluginConfig,
   now: number

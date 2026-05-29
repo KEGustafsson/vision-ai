@@ -25,7 +25,7 @@
 
 ## Data flow
 
-```
+```text
 camera → FrameSource.read() → Detector.detect_and_track() → RawTrack[]
        → geometry (bearing + range) → DetectionEvent
        → EventBuffer (→ WebSocket)   and   annotate() → LatestFrame (→ MJPEG)
@@ -33,7 +33,7 @@ camera → FrameSource.read() → Detector.detect_and_track() → RawTrack[]
 
 On the plugin side, each `DetectionEvent` is:
 
-```
+```text
 enrichTarget()       relative bearing + own heading → true bearing
                      own position + bearing + range → target lat/lon
 collectAisContacts() enumerate vessels.* with positions

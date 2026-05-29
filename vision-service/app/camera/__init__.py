@@ -30,7 +30,9 @@ def create_source(cfg: CameraConfig, settings: Settings) -> FrameSource:
             from .rtsp_cpu import RtspCpuSource
             return RtspCpuSource(cfg.name, cfg.url)
         from .synthetic import SyntheticSource
-        return SyntheticSource(cfg.name, with_mob=(cfg.name == "aft"))
+        return SyntheticSource(
+            cfg.name, with_mob=(cfg.name == "aft"), fps=settings.server.target_fps
+        )
 
     if mode == "jetson":
         if not cfg.url:

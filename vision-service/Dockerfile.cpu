@@ -30,5 +30,9 @@ ENV VISION_MODE=mock \
     VISION_PORT=8000 \
     PYTHONUNBUFFERED=1
 
+# Run as a non-root user to reduce blast radius (Trivy DS-0002).
+RUN useradd --create-home --uid 10001 appuser && chown -R appuser /opt/vision-service
+USER appuser
+
 EXPOSE 8000
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
