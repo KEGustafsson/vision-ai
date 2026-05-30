@@ -58,6 +58,11 @@ class DetectorConfig(BaseModel):
     # producing false dark-target/collision alerts. Real contacts of interest
     # (distant vessels, buoys, persons) occupy a small fraction. 1.0 disables.
     max_area_frac: float = 0.4
+    # Canonical labels to surface (person | vessel | buoy). None/empty => all.
+    # The SignalK plugin overrides this at runtime via POST /control so the
+    # operator can pick object types from the admin UI. Filtering here keeps
+    # both the event stream and the annotated overlay limited to the selection.
+    classes: Optional[List[str]] = None
 
 
 class ServerConfig(BaseModel):

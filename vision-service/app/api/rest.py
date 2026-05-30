@@ -71,6 +71,9 @@ def control(request: Request, body: ControlRequest):
     if body.mode_hint is not None:
         p.mode_hint = body.mode_hint
         applied["mode_hint"] = body.mode_hint
+    if body.labels is not None:
+        p.set_labels(body.labels)
+        applied["labels"] = body.labels
     return {"applied": applied}
 
 

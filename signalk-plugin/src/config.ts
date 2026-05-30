@@ -16,6 +16,7 @@ export interface PluginConfig {
   enableCollision: boolean;
   enableAisBlips: boolean; // project visual targets as synthetic vessels.* (default off)
   enableContextControl: boolean;
+  detectClasses: string[]; // object types to surface (person | vessel | buoy); empty => all
   // Thresholds
   minConfidence: number;
   minRangeConfidence: number; // gate georeferencing
@@ -40,6 +41,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
   enableCollision: true,
   enableAisBlips: false,
   enableContextControl: true,
+  detectClasses: ['person', 'vessel', 'buoy'],
   minConfidence: 0.4,
   minRangeConfidence: 0.3,
   darkTargetRangeM: 800,
@@ -79,6 +81,17 @@ export function schema(): object {
         default: false,
       },
       enableContextControl: { type: 'boolean', title: 'Context-aware camera/model control', default: true },
+      detectClasses: {
+        type: 'array',
+        title: 'Object types to detect',
+        description:
+          'Which detections to surface, draw on the video, and alert on. ' +
+          'Person and Vessel work with the stock YOLO model; Buoy needs a ' +
+          'maritime-trained model. Leave all unchecked to detect everything.',
+        items: { type: 'string', enum: ['person', 'vessel', 'buoy'] },
+        uniqueItems: true,
+        default: ['person', 'vessel', 'buoy'],
+      },
       minConfidence: { type: 'number', title: 'Minimum detection confidence', default: 0.4, minimum: 0, maximum: 1 },
       minRangeConfidence: { type: 'number', title: 'Minimum range confidence to georeference', default: 0.3, minimum: 0, maximum: 1 },
       darkTargetRangeM: { type: 'number', title: 'Dark-target alert range (m)', default: 800 },
@@ -106,6 +119,7 @@ export function uiSchema(): object {
       'enableCollision',
       'enableContextControl',
       'enableAisBlips',
+      'detectClasses',
       '*',
     ],
   };

@@ -125,6 +125,8 @@ class ControlRequest(BaseModel):
     active_camera: Optional[str] = None
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
     mode_hint: Optional[str] = None  # e.g. "underway" | "docking" | "anchored"
+    # Canonical labels to surface (person | vessel | buoy). Empty list => all.
+    labels: Optional[List[str]] = None
 
 
 class PtzRequest(BaseModel):

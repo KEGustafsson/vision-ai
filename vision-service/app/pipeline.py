@@ -50,6 +50,10 @@ class CameraWorker(threading.Thread):
         self._source = None
         # Runtime-adjustable via /control.
         self.confidence = settings.detector.confidence
+        # Canonical labels to surface; None => all. Seeded from config, then
+        # driven by the SignalK plugin's object-type selection via /control.
+        self.allowed_labels: set | None = (
+            set(settings.detector.classes) if settings.detector.classes else None)
         self.error: str | None = None
 
     def stop(self) -> None:
@@ -140,6 +144,11 @@ class CameraWorker(threading.Thread):
         for tr in tracks:
             if tr.confidence < self.confidence:
                 continue
+            # Only surface the operator-selected object types (set via the
+            # SignalK plugin). None => all. Filtering here also keeps the
+            # annotated overlay limited to the selected classes.
+            if self.allowed_labels is not None and tr.label not in self.allowed_labels:
+                continue
             # Drop oversized detections (own hull / very-near structure): they
             # swamp the frame and create phantom dark-target/collision alerts.
             if (tr.w * tr.h) / frame_area > max_area_frac:
@@ -219,6 +228,13 @@ class Pipeline:
     def set_confidence(self, value: float) -> None:
         for w in self.workers.values():
             w.confidence = value
+
+    def set_labels(self, labels: list | None) -> None:
+        """Restrict surfaced detections to these canonical labels. An empty list
+        or None means "all" (a safe default — never blacks out detection)."""
+        allowed = set(labels) if labels else None
+        for w in self.workers.values():
+            w.allowed_labels = allowed
 
     def set_active_camera(self, name: str) -> None:
         if name in self.workers:

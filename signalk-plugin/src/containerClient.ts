@@ -4,6 +4,7 @@ export interface ControlBody {
   active_camera?: string;
   confidence?: number;
   mode_hint?: string;
+  labels?: string[]; // canonical object types to surface (person | vessel | buoy)
 }
 
 export interface PtzBody {
