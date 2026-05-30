@@ -10,6 +10,7 @@ services:
       context: ./vision-service
       dockerfile: Dockerfile          # Jetson base image
     image: vision-ai:jetson
+    container_name: vision-service-jetson
     runtime: nvidia
     environment:
       VISION_MODE: jetson
