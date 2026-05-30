@@ -87,7 +87,8 @@ export function schema(): object {
         description:
           'Which detections to surface, draw on the video, and alert on. ' +
           'Person and Vessel work with the stock YOLO model; Buoy needs a ' +
-          'maritime-trained model. Leave all unchecked to detect everything.',
+          'maritime-trained model. Note: man-overboard detection requires ' +
+          '"person" to be selected. Leave all unchecked to detect everything.',
         items: { type: 'string', enum: ['person', 'vessel', 'buoy'] },
         uniqueItems: true,
         default: ['person', 'vessel', 'buoy'],
