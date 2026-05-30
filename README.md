@@ -25,25 +25,25 @@ SignalK, produces:
 ## Architecture
 
 ```text
-  ┌─────────────┐  RTSP   ┌──────────────────────────┐
-  │ fwd camera  ├────────►│  vision-service (Python)  │
-  ├─────────────┤  RTSP   │  YOLOv8 + ByteTrack        │
-  │ aft camera  ├────────►│  + monocular geometry      │
-  └─────────────┘         │  (bearing / range)         │
-                          └───────────┬──────────────┬─┘
+  ┌─────────────┐  RTSP   ┌─────────────────────────────────┐
+  │ fwd camera  ├────────►│  vision-service (Python)        │
+  ├─────────────┤  RTSP   │  YOLOv8 + ByteTrack             │
+  │ aft camera  ├────────►│  + monocular geometry           │
+  └─────────────┘         │  (bearing / range)              │
+                          └───────────┬──────────────┬──────┘
             WebSocket events          │  MJPEG       │ REST control
             (DetectionEvent JSON)     ▼              ▼
-                          ┌────────────────────────────────┐
+                          ┌─────────────────────────────────┐
                           │  signalk-vision-ai plugin (TS)  │
-                          │  enrich · AIS fusion · CPA/TCPA  │
-                          │  notifications · publisher       │
-                          └───────────┬──────────────┬─────┘
+                          │  enrich · AIS fusion · CPA/TCPA │
+                          │  notifications · publisher      │
+                          └───────────┬──────────────┬──────┘
                   vision.* deltas +   │              │  webapp + MJPEG proxy
                   notifications.*     ▼              ▼
-                          ┌────────────────────────────────┐
-                          │  SignalK server  →  MFD / chart │
+                          ┌──────────────────────────────────┐
+                          │  SignalK server  →  MFD / chart  │
                           │                  →  Captain view │
-                          └────────────────────────────────┘
+                          └──────────────────────────────────┘
 ```
 
 Two processes, one contract. The container owns the GPU/pixels/geometry and
