@@ -43,6 +43,12 @@ class DetectorConfig(BaseModel):
     track_floor: float = 0.1
     imgsz: int = 640
     tracker: str = "bytetrack.yaml"
+    # Reject detections whose bbox covers more than this fraction of the frame.
+    # The boat's own hull/superstructure fills most of the frame when a camera
+    # is aimed inboard and is otherwise mis-detected as a nearby "vessel",
+    # producing false dark-target/collision alerts. Real contacts of interest
+    # (distant vessels, buoys, persons) occupy a small fraction. 1.0 disables.
+    max_area_frac: float = 0.4
 
 
 class ServerConfig(BaseModel):

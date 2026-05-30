@@ -74,11 +74,11 @@ function threatRank(t) {
 
 async function poll() {
   try {
-    const [cfg, data] = await Promise.all([
-      fetch(`${API}/config`).then((r) => r.json()),
-      fetch(`${API}/targets`).then((r) => r.json()),
-    ]);
-    renderCameras(cfg.cameras || []);
+    // Camera list comes from /targets' `system` block, not /config: SignalK
+    // reserves GET /plugins/<id>/config for the plugin's own settings, which
+    // shadows the plugin router's /config — so cfg.cameras would be undefined.
+    const data = await fetch(`${API}/targets`).then((r) => r.json());
+    renderCameras((data.system && data.system.cameras) || []);
     renderOwnShip(data.ownShip);
     renderTargets(data.targets || []);
     document.getElementById('status').textContent =

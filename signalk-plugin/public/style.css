@@ -28,7 +28,7 @@ main { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; padding: 14px; 
 @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
 .video { position: relative; background: #000; border-radius: 10px; overflow: hidden; }
 .video img { width: 100%; display: block; min-height: 240px; background: #000; }
-.cameras { position: absolute; top: 8px; left: 8px; z-index: 2; display: flex; gap: 6px; }
+.cameras { position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; gap: 6px; }
 .cameras button {
   background: rgba(20, 27, 48, 0.8);
   color: var(--fg);

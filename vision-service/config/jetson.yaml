@@ -1,5 +1,11 @@
-# Production mode: Jetson Orin Nano. TensorRT engine + HW-accelerated RTSP
-# decode via GStreamer. Camera URLs come from VISION_CAMERA_*_URL env vars.
+# Production mode: Jetson Orin Nano. TensorRT backend. Camera URLs come from
+# VISION_CAMERA_*_URL env vars. RTSP decode falls back to FFmpeg/TCP when the
+# base image's OpenCV lacks GStreamer (see app/camera/__init__.py).
+#
+# Cameras on Arabella are Hikvision PTZ zoom domes (4x). hfov_deg below is the
+# WIDE-end (absoluteZoom=10) datasheet estimate and is ONLY valid while the
+# zoom stays wide — zooming in narrows the true HFOV and breaks bearing.
+# Validate/refine via the AIS cross-check (docs/onboard-verification.md §4.3).
 mode: jetson
 
 detector:
@@ -9,17 +15,17 @@ detector:
   imgsz: 640
 
 cameras:
-  - name: forward
-    url: null              # set via VISION_CAMERA_FORWARD_URL
-    hfov_deg: 90.0
-    height_m: 2.5
-    horizon_y: null        # calibrate on installation; see docs/geometry.md
-    bearing_offset_deg: 0.0
-  - name: aft
-    url: null              # set via VISION_CAMERA_AFT_URL
-    hfov_deg: 90.0
-    height_m: 2.5
-    horizon_y: null
+  - name: forward            # bow dome, DS-2DE2A404IW-DE3 (2MP), 192.168.220.21
+    url: null                # set via VISION_CAMERA_FORWARD_URL
+    hfov_deg: 96.0           # wide-end estimate; refine against AIS
+    height_m: 2.5            # TODO[skipper]: measure lens height above waterline
+    horizon_y: null          # TODO[skipper]: pixel row of horizon once aimed level
+    bearing_offset_deg: 0.0  # +ve = starboard; adjust for PTZ pan vs bow
+  - name: aft                # stern dome, DS-2DE3304W-DE (3MP), 192.168.220.20
+    url: null                # set via VISION_CAMERA_AFT_URL
+    hfov_deg: 96.0           # wide-end estimate; refine against AIS
+    height_m: 2.5            # TODO[skipper]: measure lens height above waterline
+    horizon_y: null          # TODO[skipper]: pixel row of horizon once aimed level
     bearing_offset_deg: 180.0
 
 server:

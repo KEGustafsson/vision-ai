@@ -116,8 +116,14 @@ class CameraWorker(threading.Thread):
                  else CalibrationStatus.uncalibrated)
 
         targets = []
+        max_area_frac = self._settings.detector.max_area_frac
+        frame_area = float(w * h) or 1.0
         for tr in tracks:
             if tr.confidence < self.confidence:
+                continue
+            # Drop oversized detections (own hull / very-near structure): they
+            # swamp the frame and create phantom dark-target/collision alerts.
+            if (tr.w * tr.h) / frame_area > max_area_frac:
                 continue
             brg = estimate_bearing(tr, self._cam, w)
             rng, method, rconf = estimate_range(

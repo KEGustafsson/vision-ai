@@ -21,6 +21,9 @@ detector:
   confidence: 0.35
   imgsz: 640
   tracker: bytetrack.yaml
+  # Drop detections whose bbox exceeds this fraction of the frame (own hull /
+  # very-near structure mis-detected as a vessel). 1.0 disables the filter.
+  max_area_frac: 0.4
 
 geometry:
   auto_horizon: false

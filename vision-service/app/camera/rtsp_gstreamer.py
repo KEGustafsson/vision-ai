@@ -22,25 +22,37 @@ def _validate_url(url: str) -> None:
         raise ValueError(f"RTSP url contains unsafe characters: {url!r}")
 
 
-def build_pipeline(url: str, codec: str = "h264", width: int = 1280, height: int = 720) -> str:
+def build_pipeline(url: str, codec: str = "h264",
+                   width: Optional[int] = None, height: Optional[int] = None) -> str:
     _validate_url(url)
     if codec not in ("h264", "h265"):
         raise ValueError(f"unsupported codec: {codec!r}")
     depay = "rtph264depay ! h264parse" if codec == "h264" else "rtph265depay ! h265parse"
+    # protocols=tcp forces RTP-over-RTSP (interleaved) instead of separate UDP
+    # streams: UDP RTP can't traverse the Docker bridge NAT back to the
+    # container, so the default (UDP-first) pipeline never prerolls. TCP uses the
+    # single outbound RTSP connection and works through NAT.
+    #
+    # width/height are left unset by default so nvvidconv passes the camera's
+    # native resolution through unscaled — forcing a fixed size (e.g. 1280x720)
+    # would distort a 4:3 (1280x960) sensor into 16:9 and corrupt the vertical
+    # geometry (horizon depression / range) which assumes square pixels.
+    scale = f",width={width},height={height}" if width and height else ""
     return (
-        f"rtspsrc location={url} latency=100 ! {depay} ! "
+        f"rtspsrc location={url} protocols=tcp latency=100 ! {depay} ! "
         f"nvv4l2decoder ! nvvidconv ! "
-        f"video/x-raw,format=BGRx,width={width},height={height} ! "
+        f"video/x-raw,format=BGRx{scale} ! "
         f"videoconvert ! video/x-raw,format=BGR ! appsink drop=true max-buffers=1"
     )
 
 
 class RtspGstreamerSource(FrameSource):
     def __init__(self, name: str, url: str, codec: str = "h264",
-                 width: int = 1280, height: int = 720):
+                 width: Optional[int] = None, height: Optional[int] = None):
         super().__init__(name)
-        self._w = width
-        self._h = height
+        # Native resolution by default; populated from the first decoded frame.
+        self._w = width or 0
+        self._h = height or 0
         pipeline = build_pipeline(url, codec, width, height)
         self._cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
         if not self._cap.isOpened():
@@ -58,6 +70,8 @@ class RtspGstreamerSource(FrameSource):
         ok, img = self._cap.read()
         if not ok:
             return None
+        if not self._w:
+            self._h, self._w = img.shape[:2]
         return Frame(image=img, seq=self._next_seq())
 
     def close(self) -> None:
