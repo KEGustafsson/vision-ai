@@ -4,6 +4,8 @@
 const API = '/plugins/signalk-vision-ai';
 let cameras = [];
 let activeCamera = null;
+let ptzCameras = [];
+const PTZ_SPEED = 0.6; // normalised ONVIF velocity for held buttons
 
 const rad2deg = (r) => (r * 180) / Math.PI;
 const fmtBrg = (r) => (r == null ? '—' : `${Math.round(((rad2deg(r) % 360) + 360) % 360)}°`);
@@ -17,11 +19,79 @@ function setStream(camera) {
   document.querySelectorAll('.cameras button').forEach((b) => {
     b.classList.toggle('active', b.dataset.cam === camera);
   });
+  updatePtzVisibility();
+}
+
+// --- ONVIF PTZ -------------------------------------------------------------
+// Show the control pad only for PTZ-capable cameras. The list comes from the
+// container (via the plugin proxy) and only resolves once the container is up,
+// so we (re)load it whenever the camera set changes.
+async function loadPtzCameras() {
+  try {
+    const r = await fetch(`${API}/ptz`).then((res) => res.json());
+    ptzCameras = r.cameras || [];
+  } catch {
+    ptzCameras = [];
+  }
+  updatePtzVisibility();
+}
+
+function updatePtzVisibility() {
+  document.getElementById('ptzPad').hidden = !ptzCameras.includes(activeCamera);
+}
+
+async function ptzSend(body) {
+  if (!activeCamera) return;
+  try {
+    await fetch(`${API}/ptz/${activeCamera}`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    /* transient; the camera's ONVIF Timeout auto-stops it anyway */
+  }
+}
+
+let ptzHold = null;
+function ptzStartMove(pan, tilt, zoom) {
+  const body = { action: 'move', pan: pan * PTZ_SPEED, tilt: tilt * PTZ_SPEED, zoom: zoom * PTZ_SPEED };
+  ptzSend(body);
+  // Re-send while held so the camera's short auto-stop Timeout doesn't halt
+  // motion mid-press (and motion stops within ~2s if the page goes away).
+  clearInterval(ptzHold);
+  ptzHold = setInterval(() => ptzSend(body), 1000);
+}
+function ptzStopMove() {
+  if (ptzHold === null) return;
+  clearInterval(ptzHold);
+  ptzHold = null;
+  ptzSend({ action: 'stop' });
+}
+
+function wirePtzPad() {
+  document.querySelectorAll('#ptzPad button').forEach((btn) => {
+    if (btn.dataset.home) {
+      btn.addEventListener('click', () => ptzSend({ action: 'home' }));
+      return;
+    }
+    const pan = Number(btn.dataset.pan);
+    const tilt = Number(btn.dataset.tilt);
+    const zoom = Number(btn.dataset.zoom);
+    btn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      ptzStartMove(pan, tilt, zoom);
+    });
+    ['pointerup', 'pointerleave', 'pointercancel'].forEach((ev) =>
+      btn.addEventListener(ev, ptzStopMove)
+    );
+  });
 }
 
 function renderCameras(list) {
   if (JSON.stringify(list) === JSON.stringify(cameras)) return;
   cameras = list;
+  loadPtzCameras();
   const box = document.getElementById('cameraButtons');
   box.innerHTML = '';
   list.forEach((cam) => {
@@ -93,4 +163,5 @@ async function loop() {
   await poll();
   setTimeout(loop, 1000);
 }
+wirePtzPad();
 loop();

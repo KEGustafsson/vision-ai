@@ -100,6 +100,25 @@ export function registerRoutes(
     }
   });
 
+  // List of PTZ-capable cameras (so the webapp shows the control pad only when
+  // the active camera actually supports PTZ).
+  router.get('/ptz', (_req: any, res: any) => {
+    const client = shared.client();
+    if (!client) return res.status(503).json({ error: 'not started' });
+    proxy(client.ptzListUrl(), res);
+  });
+
+  router.post('/ptz/:camera', async (req: any, res: any) => {
+    const client = shared.client();
+    if (!client) return res.status(503).json({ error: 'not started' });
+    if (!knownCamera(req.params.camera)) return res.status(404).json({ error: 'unknown camera' });
+    try {
+      res.json(await client.ptz(req.params.camera, req.body || {}));
+    } catch (e) {
+      res.status(502).json({ error: String(e) });
+    }
+  });
+
   router.get('/stream/:camera', (req: any, res: any) => {
     const client = shared.client();
     if (!client) return res.status(503).json({ error: 'not started' });

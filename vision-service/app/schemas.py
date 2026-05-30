@@ -127,6 +127,19 @@ class ControlRequest(BaseModel):
     mode_hint: Optional[str] = None  # e.g. "underway" | "docking" | "anchored"
 
 
+class PtzRequest(BaseModel):
+    """POST /ptz/{camera} — ONVIF PTZ control.
+
+    ``action`` selects the operation; ``move`` uses the normalised pan/tilt/zoom
+    velocities (-1..1, +pan = right, +tilt = up, +zoom = in).
+    """
+
+    action: str = "move"  # move | stop | home
+    pan: float = Field(0.0, ge=-1.0, le=1.0)
+    tilt: float = Field(0.0, ge=-1.0, le=1.0)
+    zoom: float = Field(0.0, ge=-1.0, le=1.0)
+
+
 class HealthResponse(BaseModel):
     status: str = "ok"
     mode: str

@@ -6,6 +6,13 @@ export interface ControlBody {
   mode_hint?: string;
 }
 
+export interface PtzBody {
+  action?: 'move' | 'stop' | 'home';
+  pan?: number;
+  tilt?: number;
+  zoom?: number;
+}
+
 export class ContainerClient {
   constructor(private baseUrl: string) {}
 
@@ -33,6 +40,21 @@ export class ContainerClient {
     });
     if (!r.ok) throw new Error(`control ${r.status}`);
     return r.json();
+  }
+
+  async ptz(camera: string, body: PtzBody): Promise<any> {
+    const r = await fetch(this.url(`/ptz/${encodeURIComponent(camera)}`), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (!r.ok) throw new Error(`ptz ${r.status}`);
+    return r.json();
+  }
+
+  /** URL of the list of PTZ-capable cameras (used by the proxy). */
+  ptzListUrl(): string {
+    return this.url('/ptz');
   }
 
   /** URL of the annotated MJPEG stream for a camera (used by the proxy). */

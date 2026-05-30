@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from .api import mjpeg, rest, ws
 from .config import Settings, load_settings
 from .pipeline import Pipeline
+from .ptz import PtzManager
 from .util import setup_logging
 
 
@@ -40,6 +41,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     pipeline = Pipeline(settings, log)
     app.state.pipeline = pipeline
+    app.state.ptz = PtzManager(settings)
 
     app.include_router(rest.router)
     app.include_router(ws.router)

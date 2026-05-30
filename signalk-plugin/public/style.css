@@ -44,6 +44,33 @@ main { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; padding: 14px; 
   background: rgba(0,0,0,0.5); padding: 3px 8px; border-radius: 6px;
   font-size: 12px; color: var(--muted);
 }
+.ptz {
+  position: absolute; bottom: 10px; right: 10px; z-index: 3;
+  display: grid; gap: 5px;
+  grid-template-columns: repeat(3, 42px);
+  grid-template-rows: repeat(3, 42px);
+  grid-template-areas:
+    ".    up    zin"
+    "left home  right"
+    ".    down  zout";
+}
+.ptz[hidden] { display: none; }
+.ptz button {
+  background: rgba(20, 27, 48, 0.82);
+  color: var(--fg);
+  border: 1px solid #2a3550;
+  border-radius: 8px;
+  font-size: 18px; line-height: 1;
+  cursor: pointer;
+  touch-action: none;        /* let pointer drags drive PTZ, not page scroll */
+  user-select: none; -webkit-user-select: none;
+}
+.ptz button:active { background: var(--green); color: #00150a; border-color: var(--green); }
+.ptz-up { grid-area: up; } .ptz-down { grid-area: down; }
+.ptz-left { grid-area: left; } .ptz-right { grid-area: right; }
+.ptz-home { grid-area: home; font-size: 16px; }
+.ptz-zin { grid-area: zin; } .ptz-zout { grid-area: zout; }
+
 .targets { background: var(--panel); border-radius: 10px; padding: 12px 14px; }
 .targets h2 { font-size: 15px; margin: 0 0 10px; }
 .badge { background: #2a3550; border-radius: 10px; padding: 1px 8px; font-size: 12px; }

@@ -23,6 +23,15 @@ class CameraConfig(BaseModel):
     height_m: float = 2.5             # camera height above waterline
     horizon_y: Optional[float] = None  # pixel row of horizon; None => auto/uncalibrated
     bearing_offset_deg: float = 0.0   # mounting offset from bow (forward=0, aft=180)
+    # ONVIF PTZ control (Hikvision zoom domes). When ptz is true the web UI
+    # shows a control pad. Host/credentials default to those embedded in `url`
+    # (rtsp://user:pass@host) so they're configured once; override here only if
+    # the ONVIF service is on a different host/port/account than the RTSP feed.
+    ptz: bool = False
+    onvif_host: Optional[str] = None
+    onvif_port: int = 80
+    onvif_user: Optional[str] = None
+    onvif_password: Optional[str] = None
 
 
 class GeometryConfig(BaseModel):

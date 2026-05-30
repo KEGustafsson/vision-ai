@@ -21,12 +21,14 @@ cameras:
     height_m: 2.5            # TODO[skipper]: measure lens height above waterline
     horizon_y: null          # TODO[skipper]: pixel row of horizon once aimed level
     bearing_offset_deg: 0.0  # +ve = starboard; adjust for PTZ pan vs bow
+    ptz: true                # ONVIF host/creds taken from VISION_CAMERA_FORWARD_URL
   - name: aft                # stern dome, DS-2DE3304W-DE (3MP), 192.168.220.20
     url: null                # set via VISION_CAMERA_AFT_URL
     hfov_deg: 96.0           # wide-end estimate; refine against AIS
     height_m: 2.5            # TODO[skipper]: measure lens height above waterline
     horizon_y: null          # TODO[skipper]: pixel row of horizon once aimed level
     bearing_offset_deg: 180.0
+    ptz: true                # ONVIF host/creds taken from VISION_CAMERA_AFT_URL
 
 server:
   target_fps: 12.0

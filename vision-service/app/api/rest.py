@@ -6,7 +6,7 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from ..schemas import Backend, ControlRequest, HealthResponse
+from ..schemas import Backend, ControlRequest, HealthResponse, PtzRequest
 from .overlay import encode_jpeg
 
 router = APIRouter()
@@ -14,6 +14,10 @@ router = APIRouter()
 
 def _pipeline(request: Request):
     return request.app.state.pipeline
+
+
+def _ptz(request: Request):
+    return request.app.state.ptz
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -68,6 +72,33 @@ def control(request: Request, body: ControlRequest):
         p.mode_hint = body.mode_hint
         applied["mode_hint"] = body.mode_hint
     return {"applied": applied}
+
+
+@router.get("/ptz")
+def ptz_cameras(request: Request):
+    """Names of cameras that have ONVIF PTZ control enabled."""
+    return {"cameras": _ptz(request).ptz_cameras()}
+
+
+@router.post("/ptz/{camera}")
+def ptz(request: Request, camera: str, body: PtzRequest):
+    mgr = _ptz(request)
+    if camera not in mgr.ptz_cameras():
+        raise HTTPException(status_code=404, detail=f"camera {camera} has no PTZ")
+    try:
+        if body.action == "stop":
+            mgr.stop(camera)
+        elif body.action == "home":
+            mgr.home(camera)
+        elif body.action == "move":
+            mgr.move(camera, body.pan, body.tilt, body.zoom)
+        else:
+            raise HTTPException(status_code=400, detail=f"unknown action {body.action}")
+    except HTTPException:
+        raise
+    except Exception as e:  # ONVIF/network failure -> 502 (camera unreachable)
+        raise HTTPException(status_code=502, detail=str(e))
+    return {"ok": True, "action": body.action}
 
 
 @router.get("/snapshot/{camera}")
