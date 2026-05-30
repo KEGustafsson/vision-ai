@@ -66,6 +66,10 @@ export function registerRoutes(
     shared.system.cameras.includes(name) || name === 'forward' || name === 'aft';
 
   router.get('/targets', (_req: any, res: any) => {
+    // Live snapshot — never cache it. Without this Express adds a weak ETag and
+    // no Cache-Control, so a browser can serve a stale/304 body and the UI
+    // appears frozen (own-ship/targets stop updating).
+    res.set('Cache-Control', 'no-store');
     res.json({
       ownShip: shared.ownShip,
       system: shared.system,

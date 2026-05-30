@@ -110,9 +110,12 @@ function renderOwnShip(own) {
     el.textContent = 'no position';
     return;
   }
-  const hdg = own.headingTrue != null ? `${Math.round(rad2deg(own.headingTrue))}°` : '—';
-  const sog = own.sog != null ? `${(own.sog * 1.94384).toFixed(1)} kn` : '—';
-  el.textContent = `${own.position.latitude.toFixed(4)}, ${own.position.longitude.toFixed(4)} · HDG ${hdg} · SOG ${sog}`;
+  // Show enough precision that small movement is visible: 5 decimal degrees
+  // (~1 m), 0.1° heading, 0.01 kn. At a dock a stationary boat still looks
+  // near-constant — that's real, not a frozen feed (see the "updated" clock).
+  const hdg = own.headingTrue != null ? `${rad2deg(own.headingTrue).toFixed(1)}°` : '—';
+  const sog = own.sog != null ? `${(own.sog * 1.94384).toFixed(2)} kn` : '—';
+  el.textContent = `${own.position.latitude.toFixed(5)}, ${own.position.longitude.toFixed(5)} · HDG ${hdg} · SOG ${sog}`;
 }
 
 function renderTargets(targets) {
@@ -147,12 +150,16 @@ async function poll() {
     // Camera list comes from /targets' `system` block, not /config: SignalK
     // reserves GET /plugins/<id>/config for the plugin's own settings, which
     // shadows the plugin router's /config — so cfg.cameras would be undefined.
-    const data = await fetch(`${API}/targets`).then((r) => r.json());
+    // no-store: the response carries a weak ETag and no Cache-Control, so
+    // without this the browser could serve a stale/304 body and freeze the UI.
+    const data = await fetch(`${API}/targets`, { cache: 'no-store' }).then((r) => r.json());
     renderCameras((data.system && data.system.cameras) || []);
     renderOwnShip(data.ownShip);
     renderTargets(data.targets || []);
+    // The trailing clock ticks every poll, so it's obvious the feed is live
+    // even when a stationary boat's nav values don't change.
     document.getElementById('status').textContent =
-      `${(data.targets || []).length} targets · ${activeCamera || '—'}`;
+      `${(data.targets || []).length} targets · ${activeCamera || '—'} · updated ${new Date().toLocaleTimeString()}`;
   } catch (e) {
     document.getElementById('status').textContent = 'plugin offline';
   }
