@@ -29,18 +29,25 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+# A camera whose source returns no frames for this long is reported as an error
+# in /health, instead of silently disappearing (read()==None sets no error).
+STALL_TIMEOUT_S = 5.0
+
+
 class CameraWorker(threading.Thread):
     def __init__(self, cam: CameraConfig, settings: Settings,
-                 events: EventBuffer, frames: LatestFrame, logger):
+                 events: EventBuffer, frames: LatestFrame, logger, detector):
         super().__init__(daemon=True, name=f"cam-{cam.name}")
         self._cam = cam
         self._settings = settings
         self._events = events
         self._frames = frames
         self._log = logger
+        # One detector instance is shared across all camera workers (single
+        # model / CUDA context); it isolates tracker state per camera name.
+        self._detector = detector
         self._stop = threading.Event()
         self._source = None
-        self._detector = None
         # Runtime-adjustable via /control.
         self.confidence = settings.detector.confidence
         self.error: str | None = None
@@ -59,9 +66,12 @@ class CameraWorker(threading.Thread):
             self._source = None
 
     def run(self) -> None:
+        if self._detector is None:
+            self.error = "detector unavailable (init failed)"
+            self._log.error("camera %s: no detector", self._cam.name)
+            return
         try:
             self._source = create_source(self._cam, self._settings)
-            self._detector = create_detector(self._settings)
         except Exception as exc:  # pragma: no cover - hardware/runtime dependent
             self.error = f"init failed: {exc}"
             self._log.error("camera %s init failed: %s", self._cam.name, exc)
@@ -69,16 +79,25 @@ class CameraWorker(threading.Thread):
 
         period = 1.0 / max(self._settings.server.target_fps, 0.1)
         backend = Backend(self._detector.backend)
+        stalled_since: float | None = None
         try:
             while not self._stop.is_set():
                 t0 = time.perf_counter()
                 try:
                     frame = self._source.read()
                     if frame is None:
+                        # No frame: flag a sustained stall so a wedged RTSP feed
+                        # shows up in /health rather than vanishing silently.
+                        if stalled_since is None:
+                            stalled_since = t0
+                        elif t0 - stalled_since > STALL_TIMEOUT_S:
+                            self.error = (f"no frames for {int(t0 - stalled_since)}s "
+                                          "(camera/RTSP stalled)")
                         time.sleep(0.1)
                         continue
+                    stalled_since = None
 
-                    tracks = self._detector.detect_and_track(frame)
+                    tracks = self._detector.detect_and_track(frame, self._cam.name)
                     latency_ms = (time.perf_counter() - t0) * 1000.0
                     event = self._build_event(frame, tracks, backend, latency_ms)
 
@@ -166,13 +185,23 @@ class Pipeline:
         self.events = EventBuffer(maxlen=settings.server.event_buffer)
         self.frames = LatestFrame()
         self.workers: dict[str, CameraWorker] = {}
+        self.detector = None  # shared across workers; created in start()
         self.started_at = time.time()
         self.active_camera: str = settings.cameras[0].name if settings.cameras else "forward"
         self.mode_hint: str | None = None
 
     def start(self) -> None:
+        # One detector for all cameras: a single model load / CUDA context. Two
+        # concurrent TensorRT inits on the Orin Nano race the allocator and one
+        # camera dies (NvMap ENOMEM); sharing avoids that entirely.
+        detector = None
+        try:
+            detector = create_detector(self.settings)
+        except Exception as exc:  # pragma: no cover - hardware/runtime dependent
+            self._log.error("detector init failed: %s", exc)
+        self.detector = detector
         for cam in self.settings.cameras:
-            w = CameraWorker(cam, self.settings, self.events, self.frames, self._log)
+            w = CameraWorker(cam, self.settings, self.events, self.frames, self._log, detector)
             self.workers[cam.name] = w
             w.start()
             self._log.info("started camera worker: %s", cam.name)

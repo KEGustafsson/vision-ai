@@ -29,14 +29,18 @@ class MockDetector(Detector):
     backend = "mock"
 
     def __init__(self, assoc_dist: float = 80.0):
-        self._tracker = VelocityTracker()
-        self._next_id = 1
-        self._prev = {}  # track_id -> (cx, cy)
         self._assoc_dist = assoc_dist
+        # Per-camera association/velocity state (one shared detector, many cams).
+        self._state: dict = {}  # stream -> {tracker, next_id, prev}
 
-    def detect_and_track(self, frame: Frame) -> List[RawTrack]:
+    def _stream_state(self, stream: str) -> dict:
+        return self._state.setdefault(
+            stream, {"tracker": VelocityTracker(), "next_id": 1, "prev": {}}
+        )
+
+    def detect_and_track(self, frame: Frame, stream: str = "default") -> List[RawTrack]:
         dets = self._from_truth(frame) if frame.truth else self._from_colour(frame.image)
-        return self._associate(frame.seq, dets)
+        return self._associate(frame.seq, dets, self._stream_state(stream))
 
     def _from_truth(self, frame: Frame):
         out = []
@@ -57,29 +61,30 @@ class MockDetector(Detector):
                 out.append((cls, label, 0.85, float(x), float(y), float(w), float(h)))
         return out
 
-    def _associate(self, seq: int, dets) -> List[RawTrack]:
+    def _associate(self, seq: int, dets, state: dict) -> List[RawTrack]:
         tracks: List[RawTrack] = []
         used = set()
         new_prev = {}
+        prev = state["prev"]
         for cls, label, conf, x, y, w, h in dets:
             cx, cy = x + w / 2, y + h / 2
             # Greedy nearest previous centroid.
             best_id, best_d = None, self._assoc_dist
-            for tid, (pcx, pcy) in self._prev.items():
+            for tid, (pcx, pcy) in prev.items():
                 if tid in used:
                     continue
                 d = ((cx - pcx) ** 2 + (cy - pcy) ** 2) ** 0.5
                 if d < best_d:
                     best_id, best_d = tid, d
             if best_id is None:
-                best_id = self._next_id
-                self._next_id += 1
+                best_id = state["next_id"]
+                state["next_id"] += 1
             used.add(best_id)
-            vx, vy, age = self._tracker.update(best_id, seq, cx, cy)
+            vx, vy, age = state["tracker"].update(best_id, seq, cx, cy)
             new_prev[best_id] = (cx, cy)
             tracks.append(RawTrack(track_id=best_id, cls=cls, label=label,
                                    confidence=conf, x=x, y=y, w=w, h=h,
                                    vx=vx, vy=vy, age_frames=age))
-        self._prev = new_prev
-        self._tracker.prune(used, seq)
+        state["prev"] = new_prev
+        state["tracker"].prune(used, seq)
         return tracks

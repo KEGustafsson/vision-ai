@@ -37,5 +37,13 @@ class Detector(abc.ABC):
     backend: str = "base"
 
     @abc.abstractmethod
-    def detect_and_track(self, frame: Frame) -> List[RawTrack]:
+    def detect_and_track(self, frame: Frame, stream: str = "default") -> List[RawTrack]:
+        """Detect + track on a frame.
+
+        ``stream`` names the camera the frame came from. A single detector is
+        shared across all cameras (one model / CUDA context on the Jetson), so
+        it must keep tracker state isolated per ``stream`` — otherwise frames
+        from different cameras interleave through one tracker and corrupt the
+        track IDs / motion model.
+        """
         ...
