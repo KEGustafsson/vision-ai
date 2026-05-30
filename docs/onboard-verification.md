@@ -142,8 +142,11 @@ carries `units:"Hz"` + zones.
 ### 3.3 Live delta stream
 ```bash
 # stream self deltas for ~15s and grep the vision/notification paths
-( printf '{"context":"vessels.self","subscribe":[{"path":"vision.*"},{"path":"notifications.*"}]}\n'; sleep 15 ) \
-  | websocat -n1 "$SK/signalk/v1/stream?subscribe=none" 2>/dev/null | tee $OUT/sk-deltas.log | head -40
+{
+  printf '{"context":"vessels.self","subscribe":[{"path":"vision.*"},{"path":"notifications.*"}]}\n'
+  sleep 15
+} | timeout 20 websocat "$SK/signalk/v1/stream?subscribe=none" 2>/dev/null \
+  | tee "$OUT/sk-deltas.log" | head -40
 ```
 (If `websocat` is unavailable I'll use a short Node/Python WS client instead.)
 **PASS:** live deltas for `vision.targets.*` arrive at roughly the processing
@@ -257,6 +260,7 @@ timeout 600 tegrastats --interval 2000 | tee $OUT/soak-tegrastats.log   # 10 min
 ---
 
 ## 9. Troubleshooting quick map
+
 | Symptom | Check | Likely fix |
 |---------|-------|-----------|
 | `backend:"mock"` on Jetson | engine path / `VISION_MODEL_ENGINE` | build `.engine` with `scripts/export_engine.py` |
