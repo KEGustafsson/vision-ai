@@ -94,6 +94,7 @@ docker compose -f docker-compose.yml -f docker-compose.mock.yml up
 - [Geometry & calibration](docs/geometry.md)
 - [Jetson setup & deployment](docs/jetson-setup.md)
 - [Dev quickstart (end-to-end)](docs/dev-quickstart.md)
+- [Onboard verification runbook](docs/onboard-verification.md)
 
 ## Tests
 
