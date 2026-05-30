@@ -20,7 +20,7 @@ services:
       - ./vision-service/models:/opt/vision-service/models
     # Bind to localhost on the boat network; the SignalK plugin proxies it.
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:7000:7000"
     deploy:
       resources:
         reservations:

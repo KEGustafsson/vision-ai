@@ -47,7 +47,7 @@ class DetectorConfig(BaseModel):
 
 class ServerConfig(BaseModel):
     host: str = "0.0.0.0"
-    port: int = 8000
+    port: int = 7000
     target_fps: float = 10.0           # processing cadence cap
     jpeg_quality: int = 80
     event_buffer: int = 200

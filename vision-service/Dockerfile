@@ -20,8 +20,8 @@ COPY scripts ./scripts
 COPY models ./models
 
 ENV VISION_MODE=jetson \
-    VISION_PORT=8000 \
+    VISION_PORT=7000 \
     PYTHONUNBUFFERED=1
 
-EXPOSE 8000
-CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+EXPOSE 7000
+CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7000"]

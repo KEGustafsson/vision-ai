@@ -67,10 +67,10 @@ detector, so you can develop and demo on a laptop.
 cd vision-service
 python3 -m venv .venv && . .venv/bin/activate
 pip install -r requirements.txt          # or just the light deps for mock
-VISION_MODE=mock python -m uvicorn app.main:app --port 8000
+VISION_MODE=mock python -m uvicorn app.main:app --port 7000
 
-# open http://localhost:8000/stream/forward.mjpg  → annotated video
-# open http://localhost:8000/stream/aft.mjpg       → includes a person-in-water
+# open http://localhost:7000/stream/forward.mjpg  → annotated video
+# open http://localhost:7000/stream/aft.mjpg       → includes a person-in-water
 
 # 2. SignalK plugin
 cd ../signalk-plugin

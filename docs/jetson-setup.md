@@ -42,7 +42,7 @@ export VISION_CAMERA_AFT_URL="rtsp://user:pass@192.168.1.11:554/stream"
 docker compose -f docker-compose.yml -f docker-compose.jetson.yml up -d
 ```
 
-The service binds to `127.0.0.1:8000` on the boat network; the SignalK plugin
+The service binds to `127.0.0.1:7000` on the boat network; the SignalK plugin
 (running on the same box or reachable host) proxies the video and control behind
 SignalK's authentication. Point the plugin's `containerUrl` at it.
 

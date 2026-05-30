@@ -33,7 +33,7 @@ export interface PluginConfig {
 }
 
 export const DEFAULT_CONFIG: PluginConfig = {
-  containerUrl: 'http://localhost:8000',
+  containerUrl: 'http://localhost:7000',
   enableVisualRadar: true,
   enableAisFusion: true,
   enableMob: true,

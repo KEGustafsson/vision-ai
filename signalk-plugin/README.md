@@ -16,7 +16,7 @@ ln -s "$PWD" ~/.signalk/node_modules/signalk-vision-ai
 ```
 
 Then enable **Marine Vision-AI** in the SignalK admin UI and set `containerUrl`
-to the vision container (default `http://localhost:8000`).
+to the vision container (default `http://localhost:7000`).
 
 ## Configuration
 
@@ -24,7 +24,7 @@ All options have sensible defaults (`src/config.ts`). Highlights:
 
 | Option | Default | Meaning |
 |--------|---------|---------|
-| `containerUrl` | `http://localhost:8000` | Vision container base URL |
+| `containerUrl` | `http://localhost:7000` | Vision container base URL |
 | `enableVisualRadar` / `enableAisFusion` / `enableMob` / `enableCollision` | on | Feature toggles |
 | `enableAisBlips` | **off** | Project targets as synthetic `vessels.*` blips |
 | `enableContextControl` | on | Steer active camera/confidence by SOG + time of day |

@@ -14,10 +14,10 @@ services:
     image: vision-ai:cpu
     environment:
       VISION_MODE: mock
-      VISION_PORT: "8000"
+      VISION_PORT: "7000"
       VISION_MOCK_SOURCE: synthetic
     # Bound to localhost by default — the service is unauthenticated, so don't
     # expose it on all interfaces. The SignalK plugin proxies it behind auth.
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:7000:7000"
     restart: unless-stopped

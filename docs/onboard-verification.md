@@ -12,7 +12,7 @@
 ## 0. Before starting
 
 ### 0.1 Information to collect from the skipper
-- `NANO_HOST` / port of the **vision container** (default `:8000`) and whether it
+- `NANO_HOST` / port of the **vision container** (default `:7000`) and whether it
   is bound to localhost or a LAN IP.
 - `SK_HOST` / port of the **SignalK server** (default `:3000`) and an admin
   login / token if the API requires auth.
@@ -37,7 +37,7 @@
 
 ### 0.3 Set convenience variables
 ```bash
-export NANO=http://127.0.0.1:8000          # vision container
+export NANO=http://127.0.0.1:7000          # vision container
 export SK=http://127.0.0.1:3000            # SignalK server
 export OUT=/tmp/vision-verify && mkdir -p $OUT
 ```
