@@ -44,6 +44,73 @@ function proxy(targetUrl: string, res: any): void {
   res.on('close', () => upstream.destroy());
 }
 
+// Reverse-proxy a long-lived MJPEG stream, transparently reconnecting to the
+// container when its connection drops. A browser <img> never reconnects an
+// MJPEG stream on its own — and a closed multipart stream fires neither `error`
+// nor `load` — so on a container restart the frame just freezes until a manual
+// reload. Instead we keep the *browser's* connection open and re-dial the
+// container behind it: the client sees a brief pause, then frames resume. The
+// multipart boundary is identical across reconnects, so the browser resyncs at
+// the next `--frame` marker (at most one frame is glitched at the seam).
+function proxyStream(targetUrl: string, res: any): void {
+  const mod = targetUrl.startsWith('https') ? https : http;
+  let closed = false;
+  let headersWritten = false;
+  let current: any = null;
+  let retrying = false;
+
+  const scheduleRetry = () => {
+    if (closed || retrying) return;
+    retrying = true;
+    setTimeout(() => {
+      retrying = false;
+      connect();
+    }, 1000);
+  };
+
+  const connect = () => {
+    if (closed) return;
+    const req = mod.get(targetUrl, (up) => {
+      current = up;
+      const ok = (up.statusCode || 0) >= 200 && (up.statusCode || 0) < 300;
+      if (!ok) {
+        up.resume(); // drain and retry (e.g. 502/503 while the container boots)
+        scheduleRetry();
+        return;
+      }
+      if (!headersWritten) {
+        res.writeHead(up.statusCode, {
+          'content-type': up.headers['content-type'] || 'multipart/x-mixed-replace',
+          'cache-control': 'no-store, no-cache, must-revalidate, max-age=0',
+          pragma: 'no-cache',
+          'x-accel-buffering': 'no',
+        });
+        headersWritten = true;
+      }
+      up.pipe(res, { end: false }); // keep res open across reconnects
+      // One terminal event per upstream, and ignore a stale upstream once a
+      // newer one is live, so two upstreams can never pipe into res at once.
+      let done = false;
+      const onTerminal = () => {
+        if (done || up !== current) return;
+        done = true;
+        scheduleRetry();
+      };
+      up.on('end', onTerminal);
+      up.on('error', onTerminal);
+    });
+    // Guard only the time-to-first-byte; a healthy stream is long-lived.
+    req.setTimeout(10000, () => req.destroy(new Error('upstream timeout')));
+    req.on('error', scheduleRetry);
+  };
+
+  res.on('close', () => {
+    closed = true;
+    if (current) current.destroy();
+  });
+  connect();
+}
+
 // Minimal JSON body parser: SignalK mounts plugin routers without guaranteeing
 // a JSON body parser, so populate req.body ourselves when it's absent.
 function ensureJsonBody(req: any, _res: any, next: () => void): void {
@@ -163,7 +230,7 @@ export function registerRoutes(
     const client = shared.client();
     if (!client) return res.status(503).json({ error: 'not started' });
     if (!knownCamera(req.params.camera)) return res.status(404).json({ error: 'unknown camera' });
-    proxy(client.streamUrl(req.params.camera), res);
+    proxyStream(client.streamUrl(req.params.camera), res);
   });
 
   router.get('/snapshot/:camera', (req: any, res: any) => {
