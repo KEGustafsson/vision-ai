@@ -124,6 +124,8 @@ class ControlRequest(BaseModel):
 
     active_camera: Optional[str] = None
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
+    # Maximum detections to keep per frame before tracking/event generation.
+    max_targets: Optional[int] = Field(None, ge=1, le=300)
     mode_hint: Optional[str] = None  # e.g. "underway" | "docking" | "anchored"
     # Canonical labels to surface (person | vessel | buoy). Empty list => all.
     labels: Optional[List[str]] = None
@@ -155,3 +157,7 @@ class HealthResponse(BaseModel):
     camera_errors: dict = Field(default_factory=dict)
     # Whether detection is currently running (toggled via /control `enabled`).
     detection_enabled: bool = True
+    # Active maximum detections/tracks kept per processed frame.
+    max_targets: int = 20
+    # Active canonical labels surfaced by the workers; null means all labels.
+    labels: Optional[List[str]] = None

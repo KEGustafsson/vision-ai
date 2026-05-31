@@ -44,7 +44,9 @@ class YoloTorchDetector(Detector):
         self._trackers: Dict[str, list] = {}
         self._vels: Dict[str, VelocityTracker] = {}
 
-    def detect_and_track(self, frame: Frame, stream: str = "default") -> List[RawTrack]:
+    def detect_and_track(
+        self, frame: Frame, stream: str = "default", max_det: int | None = None
+    ) -> List[RawTrack]:
         with self._lock:
             # Always call with persist=True. Ultralytics only (re)registers its
             # tracker callbacks when the predictor has no `trackers` attribute,
@@ -58,11 +60,15 @@ class YoloTorchDetector(Detector):
                 pred.trackers = self._trackers.get(stream) or self._new_trackers()
             results = self._model.track(
                 frame.image, persist=True, tracker=self._tracker_cfg,
-                conf=self._conf, imgsz=self._imgsz, device=self._device, verbose=False,
+                conf=self._conf, imgsz=self._imgsz, device=self._device,
+                max_det=max_det, verbose=False,
             )
             self._trackers[stream] = self._model.predictor.trackers
             vel = self._vels.setdefault(stream, VelocityTracker())
-            return self._parse(results, frame, vel)
+            tracks = self._parse(results, frame, vel)
+            if max_det is not None:
+                tracks = sorted(tracks, key=lambda tr: tr.confidence, reverse=True)[:max_det]
+            return tracks
 
     def _new_trackers(self) -> list:
         """Build a fresh ByteTracker list the way Ultralytics' on_predict_start

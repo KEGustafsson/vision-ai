@@ -37,7 +37,9 @@ class Detector(abc.ABC):
     backend: str = "base"
 
     @abc.abstractmethod
-    def detect_and_track(self, frame: Frame, stream: str = "default") -> List[RawTrack]:
+    def detect_and_track(
+        self, frame: Frame, stream: str = "default", max_det: int | None = None
+    ) -> List[RawTrack]:
         """Detect + track on a frame.
 
         ``stream`` names the camera the frame came from. A single detector is

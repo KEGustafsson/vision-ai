@@ -133,7 +133,8 @@ class CameraWorker(threading.Thread):
                         continue
                     stalled_since = None
 
-                    tracks = self._detector.detect_and_track(frame, self._cam.name)
+                    tracks = self._detector.detect_and_track(
+                        frame, self._cam.name, max_det=self._settings.detector.max_det)
                     latency_ms = (time.perf_counter() - t0) * 1000.0
                     event = self._build_event(frame, tracks, backend, latency_ms)
 
@@ -190,6 +191,9 @@ class CameraWorker(threading.Thread):
             brg = estimate_bearing(tr, self._cam, w)
             rng, method, rconf = estimate_range(
                 tr, self._cam, self._settings.geometry, w, h, horizon_y)
+            own_hull_min = self._settings.detector.own_hull_min_range_m
+            if tr.label == "vessel" and rng is not None and 0 < rng < own_hull_min:
+                continue
             # Use the waterline (bbox bottom) consistently with range estimation.
             piw = is_person_in_water(tr.label, tr.y + tr.h, horizon_y)
             targets.append(Target(
@@ -208,6 +212,9 @@ class CameraWorker(threading.Thread):
                 pixel_velocity=PixelVelocity(vx=tr.vx, vy=tr.vy),
                 age_frames=tr.age_frames,
             ))
+        targets = sorted(
+            targets, key=lambda t: t.confidence, reverse=True
+        )[:self._settings.detector.max_det]
 
         return DetectionEvent(
             camera=self._cam.name,
@@ -270,6 +277,22 @@ class Pipeline:
         allowed = set(labels) if labels else None
         for w in self.workers.values():
             w.allowed_labels = allowed
+
+    def labels(self) -> list | None:
+        vals = []
+        for w in self.workers.values():
+            vals.append(None if w.allowed_labels is None else tuple(sorted(w.allowed_labels)))
+        unique = set(vals)
+        if len(unique) != 1:
+            return None
+        only = unique.pop()
+        return None if only is None else list(only)
+
+    def set_max_targets(self, value: int) -> None:
+        self.settings.detector.max_det = value
+
+    def max_targets(self) -> int:
+        return self.settings.detector.max_det
 
     def set_active_camera(self, name: str) -> None:
         if name in self.workers:

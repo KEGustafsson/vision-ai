@@ -20,10 +20,13 @@ detector:
   model_engine: yolov8n.engine
   confidence: 0.35
   imgsz: 640
+  max_det: 20
   tracker: bytetrack.yaml
   # Drop detections whose bbox exceeds this fraction of the frame (own hull /
   # very-near structure mis-detected as a vessel). 1.0 disables the filter.
   max_area_frac: 0.4
+  # Drop vessel detections closer than this as own hull/superstructure. 0 disables.
+  own_hull_min_range_m: 8.0
   # Object types to surface (person | vessel | buoy). Omitted/empty => all.
   # The SignalK plugin overrides this at runtime from its admin UI.
   # classes: [person, vessel]

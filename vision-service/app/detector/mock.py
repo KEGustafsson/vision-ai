@@ -38,8 +38,12 @@ class MockDetector(Detector):
             stream, {"tracker": VelocityTracker(), "next_id": 1, "prev": {}}
         )
 
-    def detect_and_track(self, frame: Frame, stream: str = "default") -> List[RawTrack]:
+    def detect_and_track(
+        self, frame: Frame, stream: str = "default", max_det: int | None = None
+    ) -> List[RawTrack]:
         dets = self._from_truth(frame) if frame.truth else self._from_colour(frame.image)
+        if max_det is not None:
+            dets = sorted(dets, key=lambda d: d[2], reverse=True)[:max_det]
         return self._associate(frame.seq, dets, self._stream_state(stream))
 
     def _from_truth(self, frame: Frame):

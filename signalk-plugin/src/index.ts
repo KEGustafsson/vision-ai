@@ -40,6 +40,7 @@ export = function (app: ServerApp): Plugin {
   // captain webapp can flip it at runtime (see router POST /detection). Held
   // here (not in cfg) so a live toggle isn't reverted by the next sync.
   let detectionEnabled = true;
+  let maxTargets = cfg.maxTargets;
 
   const shared: SharedState = {
     get targets() {
@@ -53,12 +54,18 @@ export = function (app: ServerApp): Plugin {
         activeCamera,
         cameras: [...lastEventByCamera.keys()],
         detectionEnabled,
+        maxTargets,
       };
     },
     setDetection(on: boolean) {
       detectionEnabled = on;
       // Push immediately so the webapp toggle takes effect without waiting for
       // the next periodic sync.
+      void syncContainer();
+    },
+    setMaxTargets(value: number) {
+      maxTargets = value;
+      pruneTargetLimit();
       void syncContainer();
     },
     client: () => client,
@@ -78,9 +85,36 @@ export = function (app: ServerApp): Plugin {
 
     for (const raw of ev.targets) {
       if (raw.confidence < cfg.minConfidence) continue;
+      if (cfg.detectClasses.length > 0 && !cfg.detectClasses.includes(raw.label)) continue;
       if (raw.track_id === null) continue;
       const t = enrichTarget(raw, ev.camera, own, cfg, now);
       targets.set(t.key, t);
+    }
+    pruneLabelSelection();
+    pruneTargetLimit();
+  }
+
+  function pruneLabelSelection(): void {
+    if (cfg.detectClasses.length === 0) return;
+    for (const [key, t] of targets) {
+      if (!cfg.detectClasses.includes(t.label)) targets.delete(key);
+    }
+  }
+
+  function pruneTargetLimit(): void {
+    if (targets.size <= maxTargets) return;
+    const keep = new Set(
+      [...targets.values()]
+        .sort((a, b) => {
+          const bySeen = b.lastSeen - a.lastSeen;
+          if (bySeen !== 0) return bySeen;
+          return b.confidence - a.confidence;
+        })
+        .slice(0, maxTargets)
+        .map((t) => t.key)
+    );
+    for (const key of targets.keys()) {
+      if (!keep.has(key)) targets.delete(key);
     }
   }
 
@@ -94,12 +128,14 @@ export = function (app: ServerApp): Plugin {
     for (const [key, t] of [...targets]) {
       if (now - t.lastSeen > timeoutMs) targets.delete(key);
     }
+    pruneLabelSelection();
+    pruneTargetLimit();
     const all = [...targets.values()];
 
     let darkKeys = new Set<string>();
     let aisCount = 0;
     if (cfg.enableAisFusion) {
-      const contacts = collectAisContacts(app.getPath('vessels'), own);
+      const contacts = collectAisContacts(app.getPath('vessels'), own, cfg.ownAisMinRangeM);
       const res = fuse(all, contacts, cfg);
       darkKeys = new Set(res.darkTargetKeys);
       aisCount = res.aisCorrelatedCount;
@@ -154,7 +190,11 @@ export = function (app: ServerApp): Plugin {
     if (!client) return;
     // Always carry the master on/off and the object-type selection so a
     // restarted container re-learns both even when context control is off.
-    const body: ControlBody = { labels: cfg.detectClasses, enabled: detectionEnabled };
+    const body: ControlBody = {
+      labels: cfg.detectClasses,
+      enabled: detectionEnabled,
+      max_targets: maxTargets,
+    };
     let nextCamera: string | null = null;
     let nextModeHint: string | null = null;
     if (cfg.enableContextControl) {
@@ -193,6 +233,7 @@ export = function (app: ServerApp): Plugin {
     start(settings: Partial<PluginConfig>) {
       cfg = withDefaults(settings);
       detectionEnabled = cfg.enableDetection;
+      maxTargets = cfg.maxTargets;
       client = new ContainerClient(cfg.containerUrl);
       publisher = new Publisher(app, pluginId, cfg);
       notifier = new NotificationManager(app, pluginId, cfg);
@@ -226,6 +267,7 @@ export = function (app: ServerApp): Plugin {
       frameCount.clear();
       activeCamera = 'forward';
       modeHint = null;
+      maxTargets = cfg.maxTargets;
       lastStatsAt = 0;
       stream = null;
     },

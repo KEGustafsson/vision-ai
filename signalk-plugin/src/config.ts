@@ -22,7 +22,9 @@ export interface PluginConfig {
   detectClasses: string[]; // object types to surface (person | vessel | buoy); empty => all
   // Thresholds
   minConfidence: number;
+  maxTargets: number; // maximum detections/tracks kept per frame in the container
   minRangeConfidence: number; // gate georeferencing
+  ownAisMinRangeM: number; // ignore AIS contacts this close to own-ship
   darkTargetRangeM: number;
   correlationBearingDeg: number;
   correlationRangeFrac: number; // tolerance as fraction of range
@@ -47,7 +49,9 @@ export const DEFAULT_CONFIG: PluginConfig = {
   enableContextControl: true,
   detectClasses: ['person', 'vessel', 'buoy'],
   minConfidence: 0.4,
+  maxTargets: 20,
   minRangeConfidence: 0.3,
+  ownAisMinRangeM: 25,
   darkTargetRangeM: 800,
   correlationBearingDeg: 8,
   correlationRangeFrac: 0.4,
@@ -104,7 +108,22 @@ export function schema(): object {
         default: ['person', 'vessel', 'buoy'],
       },
       minConfidence: { type: 'number', title: 'Minimum detection confidence', default: 0.4, minimum: 0, maximum: 1 },
+      maxTargets: {
+        type: 'number',
+        title: 'Maximum targets per frame',
+        description: 'Caps YOLO detections before tracking/event generation. Lower values reduce workload in busy scenes.',
+        default: 20,
+        minimum: 1,
+        maximum: 300,
+      },
       minRangeConfidence: { type: 'number', title: 'Minimum range confidence to georeference', default: 0.3, minimum: 0, maximum: 1 },
+      ownAisMinRangeM: {
+        type: 'number',
+        title: 'Ignore AIS contacts closer than (m)',
+        description: 'Filters duplicate own-ship AIS entries before visual/AIS correlation. Set 0 to disable.',
+        default: 25,
+        minimum: 0,
+      },
       darkTargetRangeM: { type: 'number', title: 'Dark-target alert range (m)', default: 800 },
       correlationBearingDeg: { type: 'number', title: 'AIS correlation bearing tolerance (deg)', default: 8 },
       correlationRangeFrac: { type: 'number', title: 'AIS correlation range tolerance (fraction)', default: 0.4 },
@@ -132,6 +151,9 @@ export function uiSchema(): object {
       'enableContextControl',
       'enableAisBlips',
       'detectClasses',
+      'minConfidence',
+      'maxTargets',
+      'ownAisMinRangeM',
       '*',
     ],
   };

@@ -34,6 +34,8 @@ def health(request: Request) -> HealthResponse:
         active_camera=p.active_camera,
         camera_errors=errors,
         detection_enabled=p.enabled,
+        max_targets=p.max_targets(),
+        labels=p.labels(),
     )
 
 
@@ -64,6 +66,9 @@ def control(request: Request, body: ControlRequest):
     if body.confidence is not None:
         p.set_confidence(body.confidence)
         applied["confidence"] = body.confidence
+    if body.max_targets is not None:
+        p.set_max_targets(body.max_targets)
+        applied["max_targets"] = p.max_targets()
     if body.active_camera is not None:
         if body.active_camera not in p.workers:
             raise HTTPException(status_code=404, detail=f"unknown camera {body.active_camera}")
@@ -74,7 +79,7 @@ def control(request: Request, body: ControlRequest):
         applied["mode_hint"] = body.mode_hint
     if body.labels is not None:
         p.set_labels(body.labels)
-        applied["labels"] = body.labels
+        applied["labels"] = p.labels()
     if body.enabled is not None:
         p.set_enabled(body.enabled)
         applied["enabled"] = body.enabled

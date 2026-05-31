@@ -32,6 +32,17 @@ describe('aisFusion', () => {
     expect(contacts[0].range).toBeCloseTo(600, -1);
   });
 
+  it('filters AIS contacts too close to own ship', () => {
+    const nearPos = destinationPoint(own.position, deg2rad(90), 5);
+    const farPos = destinationPoint(own.position, deg2rad(90), 100);
+    const vessels = {
+      'urn:mrn:imo:mmsi:111': { navigation: { position: { value: nearPos } } },
+      'urn:mrn:imo:mmsi:222': { navigation: { position: { value: farPos } } },
+    };
+    const contacts = collectAisContacts(vessels, own, 25);
+    expect(contacts.map((c) => c.mmsi)).toEqual(['222']);
+  });
+
   it('correlates a visual target with a co-located AIS contact', () => {
     const brg = deg2rad(90);
     const aisPos = destinationPoint(own.position, brg, 600);

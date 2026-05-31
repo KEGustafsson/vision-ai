@@ -51,6 +51,9 @@ class DetectorConfig(BaseModel):
     # lower the effective confidence; the worker filters at `confidence`.
     track_floor: float = 0.1
     imgsz: int = 640
+    # Maximum detections kept by YOLO/NMS and passed into tracking per frame.
+    # Lower values reduce post-processing/tracker/event/overlay workload in busy scenes.
+    max_det: int = 20
     tracker: str = "bytetrack.yaml"
     # Reject detections whose bbox covers more than this fraction of the frame.
     # The boat's own hull/superstructure fills most of the frame when a camera
@@ -58,6 +61,9 @@ class DetectorConfig(BaseModel):
     # producing false dark-target/collision alerts. Real contacts of interest
     # (distant vessels, buoys, persons) occupy a small fraction. 1.0 disables.
     max_area_frac: float = 0.4
+    # Treat very-near vessel detections as own hull/superstructure and suppress
+    # them before events/AIS fusion. Set 0 to disable.
+    own_hull_min_range_m: float = 8.0
     # Canonical labels to surface (person | vessel | buoy). None/empty => all.
     # The SignalK plugin overrides this at runtime via POST /control so the
     # operator can pick object types from the admin UI. Filtering here keeps

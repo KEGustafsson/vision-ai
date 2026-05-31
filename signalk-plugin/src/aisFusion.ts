@@ -22,7 +22,11 @@ const num = (v: any): number | null =>
 const VESSEL_LABELS = new Set(['vessel', 'boat', 'ship', 'ferry', 'sail boat', 'speed boat']);
 
 /** Extract AIS contacts (excluding self) that have a position. */
-export function collectAisContacts(vessels: any, own: OwnShip): AisContact[] {
+export function collectAisContacts(
+  vessels: any,
+  own: OwnShip,
+  minRangeM = 0
+): AisContact[] {
   const out: AisContact[] = [];
   if (!vessels || !own.position) return out;
   for (const [id, v] of Object.entries<any>(vessels)) {
@@ -30,13 +34,15 @@ export function collectAisContacts(vessels: any, own: OwnShip): AisContact[] {
     const p = v?.navigation?.position?.value ?? v?.navigation?.position;
     if (!p || typeof p.latitude !== 'number') continue;
     const pos: LatLon = { latitude: p.latitude, longitude: p.longitude };
+    const range = haversine(own.position, pos);
+    if (minRangeM > 0 && range < minRangeM) continue;
     const mmsi = id.includes('mmsi:') ? id.split('mmsi:').pop()! : null;
     out.push({
       mmsi,
       name: v?.name?.value ?? v?.name,
       position: pos,
       bearing: bearingTo(own.position, pos),
-      range: haversine(own.position, pos),
+      range,
       cog: num(v?.navigation?.courseOverGroundTrue?.value ?? v?.navigation?.courseOverGroundTrue),
       sog: num(v?.navigation?.speedOverGround?.value ?? v?.navigation?.speedOverGround),
     });

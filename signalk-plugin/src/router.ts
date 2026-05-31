@@ -11,8 +11,14 @@ import { EnrichedTarget, OwnShip } from './types';
 export interface SharedState {
   readonly targets: EnrichedTarget[];
   readonly ownShip: OwnShip;
-  readonly system: { activeCamera: string; cameras: string[]; detectionEnabled: boolean };
+  readonly system: {
+    activeCamera: string;
+    cameras: string[];
+    detectionEnabled: boolean;
+    maxTargets: number;
+  };
   setDetection: (on: boolean) => void;
+  setMaxTargets: (value: number) => void;
   client: () => ContainerClient | null;
 }
 
@@ -21,7 +27,9 @@ function proxy(targetUrl: string, res: any): void {
   const upstream = mod.get(targetUrl, (up) => {
     res.writeHead(up.statusCode || 502, {
       'content-type': up.headers['content-type'] || 'application/octet-stream',
-      'cache-control': 'no-cache',
+      'cache-control': 'no-store, no-cache, must-revalidate, max-age=0',
+      pragma: 'no-cache',
+      'x-accel-buffering': 'no',
     });
     up.pipe(res);
   });
@@ -92,6 +100,7 @@ export function registerRoutes(
       cameras: shared.system.cameras,
       activeCamera: shared.system.activeCamera,
       detectionEnabled: shared.system.detectionEnabled,
+      maxTargets: shared.system.maxTargets,
     });
   });
 
@@ -109,6 +118,15 @@ export function registerRoutes(
     }
     shared.setDetection(enabled);
     res.json({ enabled });
+  });
+
+  router.post('/target-limit', (req: any, res: any) => {
+    const maxTargets = Number(req.body?.maxTargets);
+    if (!Number.isInteger(maxTargets) || maxTargets < 1 || maxTargets > 300) {
+      return res.status(400).json({ error: 'maxTargets must be an integer from 1 to 300' });
+    }
+    shared.setMaxTargets(maxTargets);
+    res.json({ maxTargets });
   });
 
   router.post('/control', async (req: any, res: any) => {

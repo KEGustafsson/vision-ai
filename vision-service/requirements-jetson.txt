@@ -7,5 +7,6 @@ h11>=0.16.0           # avoid GHSA-vqfr-h8mv-ghfj (uvicorn pulls h11>=0.8)
 pydantic>=2.6,<3
 PyYAML>=6.0
 websockets>=12.0
+lap>=0.5.12             # ByteTrack dependency; avoid Ultralytics runtime AutoUpdate
 # NOTE: do not install opencv-python here — it would shadow the CUDA/GStreamer
 # build provided by the base image. ultralytics is already present in the image.

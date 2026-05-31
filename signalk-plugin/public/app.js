@@ -6,6 +6,7 @@ let cameras = [];
 let activeCamera = null;
 let ptzCameras = [];
 let detectionEnabled = null; // unknown until first poll
+let maxTargets = null;
 const PTZ_SPEED = 0.6; // normalised ONVIF velocity for held buttons
 
 const rad2deg = (r) => (r * 180) / Math.PI;
@@ -60,6 +61,40 @@ async function toggleDetection() {
     /* leave state alone; the next poll will reflect the real value */
   } finally {
     btn.disabled = false;
+  }
+}
+
+// --- Container target limit --------------------------------------------------
+function renderTargetLimit(value) {
+  const select = document.getElementById('targetLimit');
+  if (!Number.isFinite(value) || value <= 0) return;
+  const asText = String(value);
+  if (![...select.options].some((opt) => opt.value === asText)) {
+    select.add(new Option(asText, asText));
+    [...select.options]
+      .sort((a, b) => Number(a.value) - Number(b.value))
+      .forEach((opt) => select.add(opt));
+  }
+  maxTargets = value;
+  select.value = asText;
+  select.hidden = false;
+}
+
+async function setTargetLimit(value) {
+  if (!Number.isInteger(value) || value <= 0) return;
+  const select = document.getElementById('targetLimit');
+  select.disabled = true;
+  try {
+    await fetch(`${API}/target-limit`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ maxTargets: value }),
+    });
+    renderTargetLimit(value);
+  } catch {
+    if (maxTargets != null) renderTargetLimit(maxTargets);
+  } finally {
+    select.disabled = false;
   }
 }
 
@@ -197,6 +232,9 @@ async function poll() {
     if (data.system && typeof data.system.detectionEnabled === 'boolean') {
       renderDetection(data.system.detectionEnabled);
     }
+    if (data.system && Number.isFinite(data.system.maxTargets)) {
+      renderTargetLimit(data.system.maxTargets);
+    }
     renderCameras((data.system && data.system.cameras) || []);
     renderOwnShip(data.ownShip);
     renderTargets(data.targets || []);
@@ -216,5 +254,8 @@ async function loop() {
   setTimeout(loop, 1000);
 }
 document.getElementById('detToggle').addEventListener('click', toggleDetection);
+document.getElementById('targetLimit').addEventListener('change', (e) => {
+  setTargetLimit(Number(e.target.value));
+});
 wirePtzPad();
 loop();
