@@ -141,11 +141,9 @@ class CameraWorker(threading.Thread):
                     self._events.publish(payload)
                     jpeg = encode_jpeg(annotate(frame.image, event),
                                        self._settings.server.jpeg_quality)
-                    # If detection was disabled mid-frame, drop this jpeg: a
-                    # concurrent set_enabled(False) has already cleared frames,
-                    # so re-publishing here would resurrect a stale image on the
-                    # MJPEG/snapshot endpoints.
-                    if jpeg and self._enabled.is_set():
+                    # set() is a no-op while the store is paused (detection off),
+                    # so a frame encoded just before a disable cannot resurface.
+                    if jpeg:
                         self._frames.set(self._cam.name, jpeg)
                     self.error = None
                 except Exception as exc:
@@ -281,13 +279,16 @@ class Pipeline:
         """Master on/off. Disabling pauses every camera worker (capture released,
         no inference); enabling resumes them. Idempotent."""
         self.enabled = value
+        # Flip the frame store first: pause() atomically blocks further writes
+        # and drops retained frames, so a worker finishing a frame concurrently
+        # with this disable can't re-publish a stale image (its set() is rejected
+        # under the same lock). resume() re-allows writes on enable.
+        if value:
+            self.frames.resume()
+        else:
+            self.frames.pause()
         for w in self.workers.values():
             w.set_enabled(value)
-        if not value:
-            # Drop any retained frames immediately so the MJPEG/snapshot endpoints
-            # stop serving a stale last frame the moment detection is turned off.
-            for name in self.workers:
-                self.frames.clear(name)
 
     def camera_errors(self) -> dict:
         return {name: w.error for name, w in self.workers.items() if w.error}
