@@ -4,6 +4,10 @@
 const API = '/plugins/signalk-vision-ai';
 let cameras = [];
 let activeCamera = null;
+// Last activeCamera the plugin reported (driven by context control). The view
+// auto-follows it when it changes; a manual click still lets you peek at the
+// other camera until the system next switches.
+let systemActiveCamera = null;
 let ptzCameras = [];
 let detectionEnabled = null; // unknown until first poll
 let maxTargets = null;
@@ -199,6 +203,15 @@ function renderCameras(list) {
   if (!activeCamera && list.length) setStream(list[0]);
 }
 
+// Open the camera the plugin currently marks active (context control picks it
+// from speed/time). Only acts on a *change*, so a manual peek at the other
+// camera isn't yanked back on every poll — only when the active camera flips.
+function followActiveCamera(cam) {
+  if (!cam || cam === systemActiveCamera) return;
+  systemActiveCamera = cam;
+  if (cameras.includes(cam)) setStream(cam);
+}
+
 function renderOwnShip(own) {
   const el = document.getElementById('ownship');
   if (!own || !own.position) {
@@ -255,6 +268,7 @@ async function poll() {
       renderTargetLimit(data.system.maxTargets);
     }
     renderCameras((data.system && data.system.cameras) || []);
+    if (data.system) followActiveCamera(data.system.activeCamera);
     renderOwnShip(data.ownShip);
     renderTargets(data.targets || []);
     // The trailing clock ticks every poll, so it's obvious the feed is live
