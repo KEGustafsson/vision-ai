@@ -47,6 +47,10 @@ class CameraWorker(threading.Thread):
         # model / CUDA context); it isolates tracker state per camera name.
         self._detector = detector
         self._stop = threading.Event()
+        # Master on/off (set => running). When cleared the worker releases its
+        # capture device and idles; toggled from SignalK via /control `enabled`.
+        self._enabled = threading.Event()
+        self._enabled.set()
         self._source = None
         # Runtime-adjustable via /control.
         self.confidence = settings.detector.confidence
@@ -58,6 +62,14 @@ class CameraWorker(threading.Thread):
 
     def stop(self) -> None:
         self._stop.set()
+        # Unblock the run loop if it's parked in the disabled-idle wait.
+        self._enabled.set()
+
+    def set_enabled(self, value: bool) -> None:
+        if value:
+            self._enabled.set()
+        else:
+            self._enabled.clear()
 
     def close_source(self) -> None:
         """Release the capture device; safe to call from another thread once the
@@ -74,12 +86,6 @@ class CameraWorker(threading.Thread):
             self.error = "detector unavailable (init failed)"
             self._log.error("camera %s: no detector", self._cam.name)
             return
-        try:
-            self._source = create_source(self._cam, self._settings)
-        except Exception as exc:  # pragma: no cover - hardware/runtime dependent
-            self.error = f"init failed: {exc}"
-            self._log.error("camera %s init failed: %s", self._cam.name, exc)
-            return
 
         period = 1.0 / max(self._settings.server.target_fps, 0.1)
         backend = Backend(self._detector.backend)
@@ -87,6 +93,32 @@ class CameraWorker(threading.Thread):
         try:
             while not self._stop.is_set():
                 t0 = time.perf_counter()
+
+                # Detection disabled from SignalK: release the capture device so
+                # we stop decoding the feed entirely, drop the last frame, and
+                # park until re-enabled (wakes within 0.5s of a toggle).
+                if not self._enabled.is_set():
+                    if self._source is not None:
+                        self.close_source()
+                    self._frames.clear(self._cam.name)
+                    self.error = None
+                    stalled_since = None
+                    self._enabled.wait(timeout=0.5)
+                    continue
+
+                # Lazily (re)open the source — on first enable and after a
+                # disable/enable cycle. A failed open is retried, not fatal, so a
+                # camera that's briefly unreachable recovers on its own.
+                if self._source is None:
+                    try:
+                        self._source = create_source(self._cam, self._settings)
+                    except Exception as exc:  # pragma: no cover - hardware dependent
+                        self.error = f"init failed: {exc}"
+                        self._log.error("camera %s init failed: %s", self._cam.name, exc)
+                        if self._stop.wait(timeout=2.0):
+                            break
+                        continue
+
                 try:
                     frame = self._source.read()
                     if frame is None:
@@ -109,6 +141,8 @@ class CameraWorker(threading.Thread):
                     self._events.publish(payload)
                     jpeg = encode_jpeg(annotate(frame.image, event),
                                        self._settings.server.jpeg_quality)
+                    # set() is a no-op while the store is paused (detection off),
+                    # so a frame encoded just before a disable cannot resurface.
                     if jpeg:
                         self._frames.set(self._cam.name, jpeg)
                     self.error = None
@@ -198,6 +232,7 @@ class Pipeline:
         self.started_at = time.time()
         self.active_camera: str = settings.cameras[0].name if settings.cameras else "forward"
         self.mode_hint: str | None = None
+        self.enabled: bool = True
 
     def start(self) -> None:
         # One detector for all cameras: a single model load / CUDA context. Two
@@ -239,6 +274,21 @@ class Pipeline:
     def set_active_camera(self, name: str) -> None:
         if name in self.workers:
             self.active_camera = name
+
+    def set_enabled(self, value: bool) -> None:
+        """Master on/off. Disabling pauses every camera worker (capture released,
+        no inference); enabling resumes them. Idempotent."""
+        self.enabled = value
+        # Flip the frame store first: pause() atomically blocks further writes
+        # and drops retained frames, so a worker finishing a frame concurrently
+        # with this disable can't re-publish a stale image (its set() is rejected
+        # under the same lock). resume() re-allows writes on enable.
+        if value:
+            self.frames.resume()
+        else:
+            self.frames.pause()
+        for w in self.workers.values():
+            w.set_enabled(value)
 
     def camera_errors(self) -> dict:
         return {name: w.error for name, w in self.workers.items() if w.error}

@@ -17,14 +17,39 @@ class LatestFrame:
     def __init__(self):
         self._lock = threading.Lock()
         self._frames: Dict[str, bytes] = {}
+        # When paused, set() is rejected. The pause flag and the frame store
+        # share one lock so a worker's "am I still enabled?" check and its frame
+        # write are atomic w.r.t. pause(): a frame encoded just before a disable
+        # can never land after pause() has cleared the store.
+        self._paused = False
 
     def set(self, camera: str, jpeg: bytes) -> None:
         with self._lock:
+            if self._paused:
+                return  # detection disabled: never publish a new frame
             self._frames[camera] = jpeg
 
     def get(self, camera: str) -> Optional[bytes]:
         with self._lock:
             return self._frames.get(camera)
+
+    def clear(self, camera: str) -> None:
+        """Drop the retained frame for a camera so MJPEG/snapshot stop serving a
+        stale image once that camera is paused."""
+        with self._lock:
+            self._frames.pop(camera, None)
+
+    def pause(self) -> None:
+        """Atomically stop accepting frames and drop every retained one. Used by
+        the master detection-off toggle so no in-flight frame can resurface."""
+        with self._lock:
+            self._paused = True
+            self._frames.clear()
+
+    def resume(self) -> None:
+        """Re-allow frame writes (master detection-on)."""
+        with self._lock:
+            self._paused = False
 
 
 class EventBuffer:

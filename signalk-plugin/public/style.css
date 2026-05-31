@@ -24,6 +24,14 @@ header {
 }
 header h1 { font-size: 18px; margin: 0; }
 .ownship { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 14px; }
+.det-toggle {
+  font: inherit; font-size: 13px; font-weight: 600;
+  color: #00150a; background: var(--green);
+  border: 1px solid var(--green); border-radius: 6px;
+  padding: 5px 12px; cursor: pointer;
+}
+.det-toggle.off { background: var(--red); color: #fff; border-color: var(--red); }
+.det-toggle:disabled { opacity: 0.6; cursor: default; }
 main { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; padding: 14px; }
 @media (max-width: 860px) { main { grid-template-columns: 1fr; } }
 .video { position: relative; background: #000; border-radius: 10px; overflow: hidden; }

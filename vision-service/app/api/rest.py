@@ -33,6 +33,7 @@ def health(request: Request) -> HealthResponse:
         uptime_s=time.time() - p.started_at,
         active_camera=p.active_camera,
         camera_errors=errors,
+        detection_enabled=p.enabled,
     )
 
 
@@ -74,6 +75,9 @@ def control(request: Request, body: ControlRequest):
     if body.labels is not None:
         p.set_labels(body.labels)
         applied["labels"] = body.labels
+    if body.enabled is not None:
+        p.set_enabled(body.enabled)
+        applied["enabled"] = body.enabled
     return {"applied": applied}
 
 

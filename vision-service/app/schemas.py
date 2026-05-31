@@ -127,6 +127,9 @@ class ControlRequest(BaseModel):
     mode_hint: Optional[str] = None  # e.g. "underway" | "docking" | "anchored"
     # Canonical labels to surface (person | vessel | buoy). Empty list => all.
     labels: Optional[List[str]] = None
+    # Master on/off: when False the camera workers release their capture devices
+    # and stop reading/inferring entirely (no frames, no events) until re-enabled.
+    enabled: Optional[bool] = None
 
 
 class PtzRequest(BaseModel):
@@ -150,3 +153,5 @@ class HealthResponse(BaseModel):
     uptime_s: float
     active_camera: Optional[str] = None
     camera_errors: dict = Field(default_factory=dict)
+    # Whether detection is currently running (toggled via /control `enabled`).
+    detection_enabled: bool = True
