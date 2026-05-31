@@ -59,8 +59,14 @@ export class NotificationManager {
     const wantActive = new Set<string>();
 
     if (this.cfg.enableMob) this.evaluateMob(targets, nowMs, wantActive);
-    if (this.cfg.enableAisFusion) this.evaluateDark(targets, darkTargetKeys, wantActive);
-    if (this.cfg.enableCollision) this.evaluateCollision(targets, wantActive);
+    // Collision/dark notifications need their computation on (they read values
+    // it produces) and the notification itself enabled.
+    if (this.cfg.enableAisFusion && this.cfg.notifyDarkTarget) {
+      this.evaluateDark(targets, darkTargetKeys, wantActive);
+    }
+    if (this.cfg.enableCollision && this.cfg.notifyCollision) {
+      this.evaluateCollision(targets, wantActive);
+    }
 
     // Clear any previously-active notification no longer wanted.
     for (const path of [...this.active]) {

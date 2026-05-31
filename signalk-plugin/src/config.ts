@@ -12,11 +12,15 @@ export interface PluginConfig {
   // Master on/off for detection in the container. Persisted default; the captain
   // webapp can flip it live (the live state is re-synced to the container).
   enableDetection: boolean;
-  // Feature toggles
-  enableVisualRadar: boolean;
-  enableAisFusion: boolean;
-  enableMob: boolean;
-  enableCollision: boolean;
+  // Computation toggles — run the analysis and publish its data paths.
+  enableVisualRadar: boolean; // publish vision.targets.* (data only, no alert)
+  enableAisFusion: boolean; // AIS correlation + dark-target detection + vision.fusion.*
+  enableCollision: boolean; // CPA/TCPA + threatLevel on vision.targets.*
+  // Notification toggles — raise/clear the SignalK alert. Collision and dark
+  // target require their computation (above) to be on.
+  enableMob: boolean; // notifications.mob (no separate computation)
+  notifyCollision: boolean; // notifications.vision.collision.*
+  notifyDarkTarget: boolean; // notifications.vision.darkTarget.*
   enableAisBlips: boolean; // project visual targets as synthetic vessels.* (default off)
   enableContextControl: boolean;
   detectClasses: string[]; // object types to surface (person | vessel | buoy); empty => all
@@ -43,8 +47,10 @@ export const DEFAULT_CONFIG: PluginConfig = {
   enableDetection: true,
   enableVisualRadar: true,
   enableAisFusion: true,
-  enableMob: true,
   enableCollision: true,
+  enableMob: true,
+  notifyCollision: true,
+  notifyDarkTarget: true,
   enableAisBlips: false,
   enableContextControl: true,
   detectClasses: ['person', 'vessel', 'buoy'],
@@ -84,29 +90,42 @@ export function schema(): object {
         description: 'When off, the vision container keeps running but releases the cameras and stops all inference. Can also be toggled live from the captain webapp.',
         default: true,
       },
+      // --- Computation: run the analysis and publish its data paths. ---
       enableVisualRadar: {
         type: 'boolean',
-        title: 'Data: publish visual-radar targets',
-        description: 'Publishes each tracked detection under vision.targets.<camera>.<id>.* (bearing, range, position, CPA…). No notifications — data only.',
-        default: true,
-      },
-      // --- Alerts: each toggle below raises one SignalK notification type. ---
-      enableMob: {
-        type: 'boolean',
-        title: 'Alert: man overboard',
-        description: 'Raises notifications.mob (state: emergency, visual+sound) when a person-in-water persists. Requires "person" in the detected object types below.',
+        title: 'Compute: visual-radar targets',
+        description: 'Publishes each tracked detection under vision.targets.<camera>.<id>.* (bearing, range, position…). Data only — never raises a notification.',
         default: true,
       },
       enableCollision: {
         type: 'boolean',
-        title: 'Alert: collision risk',
-        description: 'Computes CPA/TCPA and raises notifications.vision.collision.<track> (state: warn, then alarm; visual+sound) for targets on a risky approach.',
+        title: 'Compute: collision (CPA/TCPA)',
+        description: 'Computes CPA/TCPA and threat level for each target (published on vision.targets.*). Required for the collision notification below.',
         default: true,
       },
       enableAisFusion: {
         type: 'boolean',
-        title: 'Alert: dark target (+ AIS fusion)',
-        description: 'Correlates visual targets with AIS contacts. Targets with no AIS match raise notifications.vision.darkTarget.<track> (state: alert, visual). Also feeds the vision.fusion.* counts; turning this off disables both fusion and the dark-target alert.',
+        title: 'Compute: AIS fusion / dark targets',
+        description: 'Correlates visual targets with AIS contacts and flags non-AIS ("dark") targets; feeds the vision.fusion.* counts. Required for the dark-target notification below.',
+        default: true,
+      },
+      // --- Notifications: raise/clear the SignalK alert (cleared when resolved). ---
+      enableMob: {
+        type: 'boolean',
+        title: 'Notify: man overboard',
+        description: 'Raises notifications.mob (state: emergency, visual+sound) when a person-in-water persists. Requires "person" in the detected object types below.',
+        default: true,
+      },
+      notifyCollision: {
+        type: 'boolean',
+        title: 'Notify: collision risk',
+        description: 'Raises notifications.vision.collision.<track> (state: warn, then alarm; visual+sound) for risky approaches. Needs "Compute: collision" on. Turn this off to keep CPA data on the radar without an audible alarm.',
+        default: true,
+      },
+      notifyDarkTarget: {
+        type: 'boolean',
+        title: 'Notify: dark target (non-AIS)',
+        description: 'Raises notifications.vision.darkTarget.<track> (state: alert, visual) for targets with no AIS match. Needs "Compute: AIS fusion" on.',
         default: true,
       },
       enableAisBlips: {
@@ -176,11 +195,14 @@ export function uiSchema(): object {
     'ui:order': [
       'containerUrl',
       'enableDetection',
+      // Computation toggles grouped first…
       'enableVisualRadar',
-      // Alerts grouped together.
-      'enableMob',
       'enableCollision',
       'enableAisFusion',
+      // …then the notification toggles.
+      'enableMob',
+      'notifyCollision',
+      'notifyDarkTarget',
       'enableContextControl',
       'enableAisBlips',
       'detectClasses',

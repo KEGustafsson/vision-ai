@@ -183,8 +183,10 @@ export function registerRoutes(
       features: {
         visualRadar: c.enableVisualRadar,
         aisFusion: c.enableAisFusion,
-        mob: c.enableMob,
         collision: c.enableCollision,
+        mob: c.enableMob,
+        notifyCollision: c.notifyCollision,
+        notifyDarkTarget: c.notifyDarkTarget,
         aisBlips: c.enableAisBlips,
       },
       cameras: shared.system.cameras,
