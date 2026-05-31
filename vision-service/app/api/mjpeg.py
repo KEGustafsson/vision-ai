@@ -38,4 +38,11 @@ async def stream(request: Request, camera: str):
             await asyncio.sleep(period)
 
     return StreamingResponse(
-        gen(), media_type=f"multipart/x-mixed-replace; boundary={_BOUNDARY}")
+        gen(),
+        media_type=f"multipart/x-mixed-replace; boundary={_BOUNDARY}",
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )

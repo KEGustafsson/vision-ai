@@ -10,6 +10,7 @@ capture (throttled) instead of leaving the camera dead until a restart.
 from __future__ import annotations
 
 import os
+import threading
 import time
 from typing import Optional
 
@@ -19,24 +20,41 @@ from .base import Frame, FrameSource
 
 # Don't hammer a down camera: wait this long between reconnect attempts.
 _REOPEN_INTERVAL_S = 3.0
+_READ_WAIT_S = 1.0
+_FFMPEG_LOW_LATENCY_OPTIONS = (
+    "rtsp_transport;tcp|"
+    "fflags;nobuffer|"
+    "flags;low_delay|"
+    "max_delay;0|"
+    "reorder_queue_size;0|"
+    "timeout;5000000"
+)
 
 
 class RtspCpuSource(FrameSource):
     def __init__(self, name: str, url: str):
         super().__init__(name)
         self._url = url
-        # Fail fast on unreachable cameras instead of stalling the worker.
-        os.environ.setdefault(
-            "OPENCV_FFMPEG_CAPTURE_OPTIONS", "rtsp_transport;tcp|timeout;5000000"
-        )
+        # Fail fast on unreachable cameras and bias FFmpeg toward live frames
+        # instead of preserving a deep RTSP jitter buffer.
+        os.environ.setdefault("OPENCV_FFMPEG_CAPTURE_OPTIONS", _FFMPEG_LOW_LATENCY_OPTIONS)
         self._cap: Optional[cv2.VideoCapture] = None
         self._last_reopen = 0.0
+        self._closed = False
+        self._lock = threading.Lock()
+        self._frame_ready = threading.Condition(self._lock)
+        self._latest_img = None
+        self._latest_seq = 0
+        self._last_delivered_seq = 0
         cap = self._open_capture()
         if cap is None:
             raise RuntimeError(f"cannot open RTSP stream: {url}")
         self._cap = cap
         self._w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
         self._h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
+        self._reader = threading.Thread(
+            target=self._reader_loop, name=f"rtsp-cpu-{name}", daemon=True)
+        self._reader.start()
 
     def _open_capture(self) -> Optional["cv2.VideoCapture"]:
         cap = cv2.VideoCapture(self._url)
@@ -69,6 +87,26 @@ class RtspCpuSource(FrameSource):
             self._cap = None
         self._cap = self._open_capture()  # may be None; retried next interval
 
+    def _reader_loop(self) -> None:
+        """Continuously drain FFmpeg so slow inference never sees stale frames."""
+        while not self._closed:
+            if self._cap is None:
+                self._reconnect()
+                time.sleep(0.05)
+                continue
+
+            ok, img = self._cap.read()
+            if not ok:
+                self._reconnect()
+                time.sleep(0.05)
+                continue
+
+            seq = self._next_seq()
+            with self._frame_ready:
+                self._latest_img = img
+                self._latest_seq = seq
+                self._frame_ready.notify_all()
+
     @property
     def width(self) -> int:
         return self._w
@@ -78,18 +116,25 @@ class RtspCpuSource(FrameSource):
         return self._h
 
     def read(self) -> Optional[Frame]:
-        if self._cap is None:
-            self._reconnect()
-            return None
-        ok, img = self._cap.read()
-        if not ok:
-            # Stream dropped or a frame failed to decode — try to re-establish
-            # it; the worker keeps polling and recovers once frames flow again.
-            self._reconnect()
-            return None
-        return Frame(image=img, seq=self._next_seq())
+        deadline = time.monotonic() + _READ_WAIT_S
+        with self._frame_ready:
+            while (
+                not self._closed
+                and self._latest_seq == self._last_delivered_seq
+                and time.monotonic() < deadline
+            ):
+                self._frame_ready.wait(timeout=max(0.0, deadline - time.monotonic()))
+            if self._closed or self._latest_img is None:
+                return None
+            self._last_delivered_seq = self._latest_seq
+            return Frame(image=self._latest_img, seq=self._latest_seq)
 
     def close(self) -> None:
+        self._closed = True
+        with self._frame_ready:
+            self._frame_ready.notify_all()
         if self._cap is not None:
             self._cap.release()
             self._cap = None
+        if threading.current_thread() is not self._reader:
+            self._reader.join(timeout=1.0)

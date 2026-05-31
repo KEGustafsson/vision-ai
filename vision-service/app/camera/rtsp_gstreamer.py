@@ -39,10 +39,10 @@ def build_pipeline(url: str, codec: str = "h264",
     # geometry (horizon depression / range) which assumes square pixels.
     scale = f",width={width},height={height}" if width and height else ""
     return (
-        f"rtspsrc location={url} protocols=tcp latency=100 ! {depay} ! "
+        f"rtspsrc location={url} protocols=tcp latency=50 drop-on-latency=true ! {depay} ! "
         f"nvv4l2decoder ! nvvidconv ! "
         f"video/x-raw,format=BGRx{scale} ! "
-        f"videoconvert ! video/x-raw,format=BGR ! appsink drop=true max-buffers=1"
+        f"videoconvert ! video/x-raw,format=BGR ! appsink sync=false drop=true max-buffers=1"
     )
 
 
