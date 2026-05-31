@@ -147,16 +147,14 @@ export class Publisher {
       values.push({ path, value: stats.inferenceFps });
       if (!this.metaSent.has(path)) {
         this.metaSent.add(path);
+        // No zones: zone metadata makes SignalK auto-raise
+        // notifications.vision.system.inferenceFps. Keep this a plain telemetry
+        // value with units only.
         meta.push({
           path,
           value: {
             units: 'Hz',
             description: 'Vision inference frame rate',
-            zones: [
-              { state: 'alarm', upper: 3 },
-              { state: 'warn', lower: 3, upper: 6 },
-              { state: 'normal', lower: 6 },
-            ],
           },
         });
       }
