@@ -84,10 +84,31 @@ export function schema(): object {
         description: 'When off, the vision container keeps running but releases the cameras and stops all inference. Can also be toggled live from the captain webapp.',
         default: true,
       },
-      enableVisualRadar: { type: 'boolean', title: 'Publish visual-radar targets (vision.targets.*)', default: true },
-      enableAisFusion: { type: 'boolean', title: 'Fuse with AIS / detect dark targets', default: true },
-      enableMob: { type: 'boolean', title: 'Man-overboard detection (notifications.mob)', default: true },
-      enableCollision: { type: 'boolean', title: 'Collision risk (CPA/TCPA)', default: true },
+      enableVisualRadar: {
+        type: 'boolean',
+        title: 'Data: publish visual-radar targets',
+        description: 'Publishes each tracked detection under vision.targets.<camera>.<id>.* (bearing, range, position, CPA…). No notifications — data only.',
+        default: true,
+      },
+      // --- Alerts: each toggle below raises one SignalK notification type. ---
+      enableMob: {
+        type: 'boolean',
+        title: 'Alert: man overboard',
+        description: 'Raises notifications.mob (state: emergency, visual+sound) when a person-in-water persists. Requires "person" in the detected object types below.',
+        default: true,
+      },
+      enableCollision: {
+        type: 'boolean',
+        title: 'Alert: collision risk',
+        description: 'Computes CPA/TCPA and raises notifications.vision.collision.<track> (state: warn, then alarm; visual+sound) for targets on a risky approach.',
+        default: true,
+      },
+      enableAisFusion: {
+        type: 'boolean',
+        title: 'Alert: dark target (+ AIS fusion)',
+        description: 'Correlates visual targets with AIS contacts. Targets with no AIS match raise notifications.vision.darkTarget.<track> (state: alert, visual). Also feeds the vision.fusion.* counts; turning this off disables both fusion and the dark-target alert.',
+        default: true,
+      },
       enableAisBlips: {
         type: 'boolean',
         title: 'Project visual targets as synthetic AIS vessels (advanced)',
@@ -145,9 +166,10 @@ export function uiSchema(): object {
       'containerUrl',
       'enableDetection',
       'enableVisualRadar',
-      'enableAisFusion',
+      // Alerts grouped together.
       'enableMob',
       'enableCollision',
+      'enableAisFusion',
       'enableContextControl',
       'enableAisBlips',
       'detectClasses',
