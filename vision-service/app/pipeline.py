@@ -29,6 +29,36 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _contained_fraction(inner: BBox, outer: BBox) -> float:
+    """Fraction of *inner*'s area that overlaps *outer* (0..1)."""
+    ix = max(inner.x, outer.x)
+    iy = max(inner.y, outer.y)
+    ax = min(inner.x + inner.w, outer.x + outer.w)
+    ay = min(inner.y + inner.h, outer.y + outer.h)
+    overlap = max(0.0, ax - ix) * max(0.0, ay - iy)
+    inner_area = inner.w * inner.h
+    return overlap / inner_area if inner_area > 0 else 0.0
+
+
+def _drop_contained_targets(targets: list, frac: float) -> list:
+    """Drop detections whose bbox lies largely inside a larger detection's bbox
+    (a buoy/person on a vessel's deck, a duplicate nested box). The larger
+    containing object is kept; a person-in-water is never dropped (MOB safety)."""
+    if frac >= 1.0 or len(targets) < 2:
+        return targets
+    keep = [True] * len(targets)
+    for i, outer in enumerate(targets):
+        for j, inner in enumerate(targets):
+            if i == j or not keep[i] or not keep[j] or inner.is_person_in_water:
+                continue
+            # `inner` must be the strictly smaller box of the pair.
+            if outer.bbox.w * outer.bbox.h <= inner.bbox.w * inner.bbox.h:
+                continue
+            if _contained_fraction(inner.bbox, outer.bbox) > frac:
+                keep[j] = False
+    return [t for k, t in enumerate(targets) if keep[k]]
+
+
 # A camera whose source returns no frames for this long is reported as an error
 # in /health, instead of silently disappearing (read()==None sets no error).
 STALL_TIMEOUT_S = 5.0
@@ -212,6 +242,10 @@ class CameraWorker(threading.Thread):
                 pixel_velocity=PixelVelocity(vx=tr.vx, vy=tr.vy),
                 age_frames=tr.age_frames,
             ))
+        # Drop detections nested inside a larger detection's box (deck clutter,
+        # duplicate nested boxes) before ranking/capping.
+        targets = _drop_contained_targets(
+            targets, self._settings.detector.contained_frac)
         targets = sorted(
             targets, key=lambda t: t.confidence, reverse=True
         )[:self._settings.detector.max_det]

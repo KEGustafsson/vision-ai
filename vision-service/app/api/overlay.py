@@ -33,6 +33,14 @@ def _draw_label(image: np.ndarray, text: str, org: tuple, fg: tuple,
     cv2.putText(image, text, (x + pad, y), _FONT, scale, fg, thickness, cv2.LINE_AA)
 
 
+def _format_timestamp(ts: str) -> str:
+    """Turn the event's ISO-8601 UTC timestamp (e.g. ``2026-05-31T12:34:56.789Z``)
+    into a compact, human-readable ``2026-05-31 12:34:56 UTC`` for the overlay."""
+    date, _, rest = ts.partition("T")
+    clock = rest.rstrip("Z").split(".", 1)[0].split("+", 1)[0]
+    return f"{date} {clock} UTC".strip()
+
+
 def _severity_colour(t: Target) -> tuple:
     if t.is_person_in_water:
         return _RED
@@ -61,6 +69,11 @@ def annotate(image: np.ndarray, event: DetectionEvent) -> np.ndarray:
 
     hud = f"{event.camera}  {event.inference.backend.value}  {event.inference.latency_ms:.0f}ms  n={len(event.targets)}"
     _draw_label(img, hud, (10, 24), (255, 255, 255), scale=0.6)
+
+    # Stamp the capture time on every frame, just below the HUD line in the
+    # top-left corner, so any streamed or saved frame carries its own timestamp.
+    _draw_label(img, _format_timestamp(event.timestamp),
+                (10, 50), (255, 255, 255), scale=0.6)
     return img
 
 

@@ -17,6 +17,12 @@ class LatestFrame:
     def __init__(self):
         self._lock = threading.Lock()
         self._frames: Dict[str, bytes] = {}
+        # Monotonic per-camera counter bumped on every set(). MJPEG clients use it
+        # to send each frame at most once (the inference loop produces only
+        # ~4-9 fps; re-sending the latest frame at the full poll rate would
+        # triple the stream bandwidth and pile duplicate frames into the
+        # client's socket buffer, drifting the video seconds behind real time).
+        self._seq: Dict[str, int] = {}
         # When paused, set() is rejected. The pause flag and the frame store
         # share one lock so a worker's "am I still enabled?" check and its frame
         # write are atomic w.r.t. pause(): a frame encoded just before a disable
@@ -28,10 +34,21 @@ class LatestFrame:
             if self._paused:
                 return  # detection disabled: never publish a new frame
             self._frames[camera] = jpeg
+            self._seq[camera] = self._seq.get(camera, 0) + 1
 
     def get(self, camera: str) -> Optional[bytes]:
         with self._lock:
             return self._frames.get(camera)
+
+    def get_if_new(self, camera: str, last_seq: int) -> tuple[int, Optional[bytes]]:
+        """Return ``(seq, jpeg)`` only when a frame newer than *last_seq* exists;
+        otherwise ``(last_seq, None)``. Lets a stream skip unchanged frames so its
+        output rate tracks the real production rate instead of the poll rate."""
+        with self._lock:
+            seq = self._seq.get(camera, 0)
+            if seq == last_seq:
+                return last_seq, None
+            return seq, self._frames.get(camera)
 
     def clear(self, camera: str) -> None:
         """Drop the retained frame for a camera so MJPEG/snapshot stop serving a

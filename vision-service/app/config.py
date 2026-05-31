@@ -64,6 +64,12 @@ class DetectorConfig(BaseModel):
     # Treat very-near vessel detections as own hull/superstructure and suppress
     # them before events/AIS fusion. Set 0 to disable.
     own_hull_min_range_m: float = 8.0
+    # Suppress a detection whose bbox lies largely inside a larger detection's
+    # bbox (e.g. a buoy/person on a vessel's deck, or a duplicate nested box):
+    # if intersection / inner-box-area exceeds this fraction, the inner
+    # detection is dropped and the larger containing one is kept. A
+    # person-in-water is never dropped (MOB safety). 1.0 disables.
+    contained_frac: float = 0.8
     # Canonical labels to surface (person | vessel | buoy). None/empty => all.
     # The SignalK plugin overrides this at runtime via POST /control so the
     # operator can pick object types from the admin UI. Filtering here keeps

@@ -23,15 +23,34 @@ function setStream(camera) {
   updatePtzVisibility();
 }
 
+let reconnectTimer = null;
+
+// Whether we currently want a live stream (detection on and a camera selected).
+function streamIntended() {
+  return detectionEnabled !== false && !!activeCamera;
+}
+
 // Point the <img> at the live MJPEG, unless detection is off (the container has
 // released the cameras, so there's nothing to show) — then clear it.
 function applyStream() {
   const img = document.getElementById('stream');
-  if (detectionEnabled === false || !activeCamera) {
+  clearTimeout(reconnectTimer);
+  if (!streamIntended()) {
     img.removeAttribute('src');
   } else {
     img.src = `${API}/stream/${activeCamera}?t=${Date.now()}`;
   }
+}
+
+// An <img> MJPEG stream never reconnects on its own: when the vision container
+// restarts the connection drops, the <img> fires `error`, and the frame just
+// freezes until a manual page reload. Re-point it at a fresh stream URL a moment
+// later (and keep retrying — each failed attempt errors again) so the video
+// resumes by itself once the container is back.
+function onStreamError() {
+  if (!streamIntended()) return; // src was cleared on purpose, not a failure
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(applyStream, 2000);
 }
 
 // --- Detection master on/off ----------------------------------------------
@@ -253,6 +272,7 @@ async function loop() {
   await poll();
   setTimeout(loop, 1000);
 }
+document.getElementById('stream').addEventListener('error', onStreamError);
 document.getElementById('detToggle').addEventListener('click', toggleDetection);
 document.getElementById('targetLimit').addEventListener('change', (e) => {
   setTargetLimit(Number(e.target.value));
