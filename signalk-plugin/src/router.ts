@@ -52,12 +52,20 @@ function proxy(targetUrl: string, res: any): void {
 // container behind it: the client sees a brief pause, then frames resume. The
 // multipart boundary is identical across reconnects, so the browser resyncs at
 // the next `--frame` marker (at most one frame is glitched at the seam).
+// Upstream statuses worth retrying — the container is up but briefly not ready
+// (booting, restarting). Any other non-2xx (401/403/404, ...) is permanent and
+// is surfaced to the browser instead of retried.
+const RETRYABLE_STATUS = new Set([500, 502, 503, 504]);
+
 function proxyStream(targetUrl: string, res: any): void {
   const mod = targetUrl.startsWith('https') ? https : http;
   let closed = false;
   let headersWritten = false;
   let current: any = null;
   let retrying = false;
+  // The in-flight request, so a browser disconnect can cancel it before its
+  // response callback fires and pipes onto an already-closed response.
+  let req: http.ClientRequest | null = null;
 
   const scheduleRetry = () => {
     if (closed || retrying) return;
@@ -70,12 +78,25 @@ function proxyStream(targetUrl: string, res: any): void {
 
   const connect = () => {
     if (closed) return;
-    const req = mod.get(targetUrl, (up) => {
+    const r = mod.get(targetUrl, (up) => {
+      req = null; // response received; nothing left to cancel
       current = up;
-      const ok = (up.statusCode || 0) >= 200 && (up.statusCode || 0) < 300;
-      if (!ok) {
-        up.resume(); // drain and retry (e.g. 502/503 while the container boots)
-        scheduleRetry();
+      const status = up.statusCode || 0;
+      if (status < 200 || status >= 300) {
+        if (RETRYABLE_STATUS.has(status)) {
+          up.resume(); // drain and retry (container booting/restarting)
+          scheduleRetry();
+        } else {
+          // Permanent error (auth/not-found/...): stop retrying and forward it.
+          closed = true;
+          if (!headersWritten) {
+            res.writeHead(status, { 'content-type': up.headers['content-type'] || 'application/json' });
+            up.pipe(res); // forward the error body and end the response
+          } else {
+            up.resume();
+            res.end();
+          }
+        }
         return;
       }
       if (!headersWritten) {
@@ -99,13 +120,15 @@ function proxyStream(targetUrl: string, res: any): void {
       up.on('end', onTerminal);
       up.on('error', onTerminal);
     });
+    req = r;
     // Guard only the time-to-first-byte; a healthy stream is long-lived.
-    req.setTimeout(10000, () => req.destroy(new Error('upstream timeout')));
-    req.on('error', scheduleRetry);
+    r.setTimeout(10000, () => r.destroy(new Error('upstream timeout')));
+    r.on('error', scheduleRetry);
   };
 
   res.on('close', () => {
     closed = true;
+    if (req) req.destroy();
     if (current) current.destroy();
   });
   connect();
