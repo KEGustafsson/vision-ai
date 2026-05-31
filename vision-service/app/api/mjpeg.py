@@ -25,11 +25,17 @@ async def stream(request: Request, camera: str):
     fps = pipeline.settings.server.target_fps
 
     async def gen():
-        period = 1.0 / max(fps, 1.0)
+        # Poll a little faster than the configured cap so a freshly produced
+        # frame is forwarded promptly, but only emit frames we haven't sent yet.
+        # Output rate then equals the real production rate (~4-9 fps), not the
+        # poll rate — no duplicate frames to saturate the client link and drift
+        # the video behind real time.
+        period = 1.0 / max(fps * 2.0, 1.0)
+        last_seq = 0
         while True:
             if await request.is_disconnected():
                 break
-            jpeg = pipeline.frames.get(camera)
+            last_seq, jpeg = pipeline.frames.get_if_new(camera, last_seq)
             if jpeg:
                 yield (b"--" + _BOUNDARY.encode() + b"\r\n"
                        b"Content-Type: image/jpeg\r\n"
