@@ -115,7 +115,18 @@ export function schema(): object {
         description: 'Renders blips on chartplotters as vessels.* with a VIS- name prefix. Off by default to avoid confusion with real AIS.',
         default: false,
       },
-      enableContextControl: { type: 'boolean', title: 'Context-aware camera/model control', default: true },
+      enableContextControl: {
+        type: 'boolean',
+        title: 'Context-aware camera/model control',
+        description:
+          'Automatically adapts the active camera and detection sensitivity to the situation. ' +
+          'By speed: underway (SOG ≥ "Underway SOG threshold") watches the forward camera; ' +
+          'slow/stopped switches to the aft camera for docking. By time of day: at night ' +
+          '(21:00–06:00) the confidence threshold is lowered by 0.1 (floor 0.25) to catch dimmer ' +
+          'targets. When off, the camera stays fixed (no auto-switch) and confidence stays at ' +
+          '"Minimum detection confidence" — pick the camera manually from the captain webapp.',
+        default: true,
+      },
       detectClasses: {
         type: 'array',
         title: 'Object types to detect',
