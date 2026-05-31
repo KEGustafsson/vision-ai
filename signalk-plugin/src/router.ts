@@ -11,7 +11,8 @@ import { EnrichedTarget, OwnShip } from './types';
 export interface SharedState {
   readonly targets: EnrichedTarget[];
   readonly ownShip: OwnShip;
-  readonly system: { activeCamera: string; cameras: string[] };
+  readonly system: { activeCamera: string; cameras: string[]; detectionEnabled: boolean };
+  setDetection: (on: boolean) => void;
   client: () => ContainerClient | null;
 }
 
@@ -90,7 +91,21 @@ export function registerRoutes(
       },
       cameras: shared.system.cameras,
       activeCamera: shared.system.activeCamera,
+      detectionEnabled: shared.system.detectionEnabled,
     });
+  });
+
+  // Master on/off for detection. GET reports the live state; POST flips it and
+  // pushes the change to the container immediately.
+  router.get('/detection', (_req: any, res: any) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({ enabled: shared.system.detectionEnabled });
+  });
+
+  router.post('/detection', (req: any, res: any) => {
+    const enabled = !!(req.body && req.body.enabled);
+    shared.setDetection(enabled);
+    res.json({ enabled });
   });
 
   router.post('/control', async (req: any, res: any) => {

@@ -5,6 +5,7 @@ const API = '/plugins/signalk-vision-ai';
 let cameras = [];
 let activeCamera = null;
 let ptzCameras = [];
+let detectionEnabled = null; // unknown until first poll
 const PTZ_SPEED = 0.6; // normalised ONVIF velocity for held buttons
 
 const rad2deg = (r) => (r * 180) / Math.PI;
@@ -14,12 +15,52 @@ const fmtTcpa = (s) => (s == null || s <= 0 ? '—' : s >= 60 ? `${(s / 60).toFi
 
 function setStream(camera) {
   activeCamera = camera;
-  const img = document.getElementById('stream');
-  img.src = `${API}/stream/${camera}?t=${Date.now()}`;
   document.querySelectorAll('.cameras button').forEach((b) => {
     b.classList.toggle('active', b.dataset.cam === camera);
   });
+  applyStream();
   updatePtzVisibility();
+}
+
+// Point the <img> at the live MJPEG, unless detection is off (the container has
+// released the cameras, so there's nothing to show) — then clear it.
+function applyStream() {
+  const img = document.getElementById('stream');
+  if (detectionEnabled === false || !activeCamera) {
+    img.removeAttribute('src');
+  } else {
+    img.src = `${API}/stream/${activeCamera}?t=${Date.now()}`;
+  }
+}
+
+// --- Detection master on/off ----------------------------------------------
+function renderDetection(on) {
+  if (on === detectionEnabled) return;
+  detectionEnabled = on;
+  const btn = document.getElementById('detToggle');
+  btn.hidden = false;
+  btn.textContent = `Detection: ${on ? 'ON' : 'OFF'}`;
+  btn.classList.toggle('off', !on);
+  applyStream(); // stop the stream when off, resume it when back on
+}
+
+async function toggleDetection() {
+  if (detectionEnabled === null) return;
+  const next = !detectionEnabled;
+  const btn = document.getElementById('detToggle');
+  btn.disabled = true;
+  try {
+    await fetch(`${API}/detection`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: next }),
+    });
+    renderDetection(next); // optimistic; the poll loop reconciles either way
+  } catch {
+    /* leave state alone; the next poll will reflect the real value */
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 // --- ONVIF PTZ -------------------------------------------------------------
@@ -153,13 +194,17 @@ async function poll() {
     // no-store: the response carries a weak ETag and no Cache-Control, so
     // without this the browser could serve a stale/304 body and freeze the UI.
     const data = await fetch(`${API}/targets`, { cache: 'no-store' }).then((r) => r.json());
+    if (data.system && typeof data.system.detectionEnabled === 'boolean') {
+      renderDetection(data.system.detectionEnabled);
+    }
     renderCameras((data.system && data.system.cameras) || []);
     renderOwnShip(data.ownShip);
     renderTargets(data.targets || []);
     // The trailing clock ticks every poll, so it's obvious the feed is live
     // even when a stationary boat's nav values don't change.
-    document.getElementById('status').textContent =
-      `${(data.targets || []).length} targets · ${activeCamera || '—'} · updated ${new Date().toLocaleTimeString()}`;
+    document.getElementById('status').textContent = detectionEnabled === false
+      ? `detection off · updated ${new Date().toLocaleTimeString()}`
+      : `${(data.targets || []).length} targets · ${activeCamera || '—'} · updated ${new Date().toLocaleTimeString()}`;
   } catch (e) {
     document.getElementById('status').textContent = 'plugin offline';
   }
@@ -170,5 +215,6 @@ async function loop() {
   await poll();
   setTimeout(loop, 1000);
 }
+document.getElementById('detToggle').addEventListener('click', toggleDetection);
 wirePtzPad();
 loop();

@@ -9,6 +9,9 @@ export interface CameraOverride {
 
 export interface PluginConfig {
   containerUrl: string;
+  // Master on/off for detection in the container. Persisted default; the captain
+  // webapp can flip it live (the live state is re-synced to the container).
+  enableDetection: boolean;
   // Feature toggles
   enableVisualRadar: boolean;
   enableAisFusion: boolean;
@@ -35,6 +38,7 @@ export interface PluginConfig {
 
 export const DEFAULT_CONFIG: PluginConfig = {
   containerUrl: 'http://localhost:7000',
+  enableDetection: true,
   enableVisualRadar: true,
   enableAisFusion: true,
   enableMob: true,
@@ -69,6 +73,12 @@ export function schema(): object {
         type: 'string',
         title: 'Vision container base URL',
         default: DEFAULT_CONFIG.containerUrl,
+      },
+      enableDetection: {
+        type: 'boolean',
+        title: 'Enable detection (master on/off)',
+        description: 'When off, the vision container keeps running but releases the cameras and stops all inference. Can also be toggled live from the captain webapp.',
+        default: true,
       },
       enableVisualRadar: { type: 'boolean', title: 'Publish visual-radar targets (vision.targets.*)', default: true },
       enableAisFusion: { type: 'boolean', title: 'Fuse with AIS / detect dark targets', default: true },
@@ -114,6 +124,7 @@ export function uiSchema(): object {
   return {
     'ui:order': [
       'containerUrl',
+      'enableDetection',
       'enableVisualRadar',
       'enableAisFusion',
       'enableMob',

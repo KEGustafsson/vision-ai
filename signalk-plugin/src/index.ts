@@ -36,6 +36,10 @@ export = function (app: ServerApp): Plugin {
   let activeCamera = 'forward';
   let modeHint: string | null = null;
   let lastStatsAt = 0;
+  // Live master on/off. Seeded from the persisted config in start(), but the
+  // captain webapp can flip it at runtime (see router POST /detection). Held
+  // here (not in cfg) so a live toggle isn't reverted by the next sync.
+  let detectionEnabled = true;
 
   const shared: SharedState = {
     get targets() {
@@ -48,7 +52,14 @@ export = function (app: ServerApp): Plugin {
       return {
         activeCamera,
         cameras: [...lastEventByCamera.keys()],
+        detectionEnabled,
       };
+    },
+    setDetection(on: boolean) {
+      detectionEnabled = on;
+      // Push immediately so the webapp toggle takes effect without waiting for
+      // the next periodic sync.
+      void syncContainer();
     },
     client: () => client,
   };
@@ -141,7 +152,9 @@ export = function (app: ServerApp): Plugin {
   // re-learns the settings.
   async function syncContainer(): Promise<void> {
     if (!client) return;
-    const body: ControlBody = { labels: cfg.detectClasses };
+    // Always carry the master on/off and the object-type selection so a
+    // restarted container re-learns both even when context control is off.
+    const body: ControlBody = { labels: cfg.detectClasses, enabled: detectionEnabled };
     let nextCamera: string | null = null;
     let nextModeHint: string | null = null;
     if (cfg.enableContextControl) {
@@ -179,6 +192,7 @@ export = function (app: ServerApp): Plugin {
 
     start(settings: Partial<PluginConfig>) {
       cfg = withDefaults(settings);
+      detectionEnabled = cfg.enableDetection;
       client = new ContainerClient(cfg.containerUrl);
       publisher = new Publisher(app, pluginId, cfg);
       notifier = new NotificationManager(app, pluginId, cfg);

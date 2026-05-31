@@ -26,6 +26,12 @@ class LatestFrame:
         with self._lock:
             return self._frames.get(camera)
 
+    def clear(self, camera: str) -> None:
+        """Drop the retained frame for a camera so MJPEG/snapshot stop serving a
+        stale image once that camera is paused."""
+        with self._lock:
+            self._frames.pop(camera, None)
+
 
 class EventBuffer:
     def __init__(self, maxlen: int = 200):

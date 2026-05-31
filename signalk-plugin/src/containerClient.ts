@@ -5,6 +5,7 @@ export interface ControlBody {
   confidence?: number;
   mode_hint?: string;
   labels?: string[]; // canonical object types to surface (person | vessel | buoy)
+  enabled?: boolean; // master on/off: pause/resume detection in the container
 }
 
 export interface PtzBody {
