@@ -103,7 +103,10 @@ export function registerRoutes(
   });
 
   router.post('/detection', (req: any, res: any) => {
-    const enabled = !!(req.body && req.body.enabled);
+    const enabled = req.body?.enabled;
+    if (typeof enabled !== 'boolean') {
+      return res.status(400).json({ error: 'enabled must be a boolean' });
+    }
     shared.setDetection(enabled);
     res.json({ enabled });
   });

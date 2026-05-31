@@ -141,7 +141,11 @@ class CameraWorker(threading.Thread):
                     self._events.publish(payload)
                     jpeg = encode_jpeg(annotate(frame.image, event),
                                        self._settings.server.jpeg_quality)
-                    if jpeg:
+                    # If detection was disabled mid-frame, drop this jpeg: a
+                    # concurrent set_enabled(False) has already cleared frames,
+                    # so re-publishing here would resurrect a stale image on the
+                    # MJPEG/snapshot endpoints.
+                    if jpeg and self._enabled.is_set():
                         self._frames.set(self._cam.name, jpeg)
                     self.error = None
                 except Exception as exc:
