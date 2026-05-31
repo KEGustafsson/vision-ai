@@ -12,6 +12,26 @@ _GREEN = (0, 200, 0)
 _AMBER = (0, 165, 255)
 _RED = (0, 0, 255)
 
+_FONT = cv2.FONT_HERSHEY_SIMPLEX
+_BG_COLOUR = (0, 0, 0)  # black plate behind text for contrast over sky/water
+
+
+def _draw_label(image: np.ndarray, text: str, org: tuple, fg: tuple,
+                scale: float = 0.5, thickness: int = 1) -> None:
+    """Draw *text* on a filled black plate so it stays readable over any
+    background. *org* is the text baseline-left (same anchor as cv2.putText);
+    the plate and text are clamped to stay fully on-frame."""
+    x, y = int(org[0]), int(org[1])
+    (tw, th), base = cv2.getTextSize(text, _FONT, scale, thickness)
+    h, w = image.shape[:2]
+    pad = 3
+    # Keep the whole label (plate included) inside the frame.
+    x = max(0, min(x, w - tw - 2 * pad))
+    y = max(th + pad, min(y, h - base - pad))
+    cv2.rectangle(image, (x, y - th - pad), (x + tw + 2 * pad, y + base + pad),
+                  _BG_COLOUR, cv2.FILLED)
+    cv2.putText(image, text, (x + pad, y), _FONT, scale, fg, thickness, cv2.LINE_AA)
+
 
 def _severity_colour(t: Target) -> tuple:
     if t.is_person_in_water:
@@ -37,11 +57,10 @@ def annotate(image: np.ndarray, event: DetectionEvent) -> np.ndarray:
         label = f"{t.label}{tid} {brg} {rng}"
         if t.is_person_in_water:
             label = "MOB! " + label
-        cv2.putText(img, label, (x, max(y - 6, 12)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, colour, 2, cv2.LINE_AA)
+        _draw_label(img, label, (x, max(y - 6, 12)), colour)
 
     hud = f"{event.camera}  {event.inference.backend.value}  {event.inference.latency_ms:.0f}ms  n={len(event.targets)}"
-    cv2.putText(img, hud, (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2, cv2.LINE_AA)
+    _draw_label(img, hud, (10, 24), (255, 255, 255), scale=0.6)
     return img
 
 
