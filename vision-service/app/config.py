@@ -42,6 +42,15 @@ class CameraConfig(BaseModel):
     undistort_f_factor: float = 0.75   # assumed focal length as a fraction of width
     undistort_alpha: float = 0.0       # 0 crop to valid pixels, 1 keep all (black edges)
     undistort_rotation_deg: float = 0.0  # CCW image-plane rotation to level the horizon
+    # EXPERIMENTAL: apply the correction to the frame BEFORE detection (the
+    # detector + geometry then see the corrected image) instead of display-only.
+    # Feeds YOLO straighter frames, but bearings/range now depend on the (still
+    # eyeballed) coefficients AND on horizon_y being re-measured on the corrected
+    # frame — so treat geometry as approximate until a real calibration exists.
+    undistort_before_detect: bool = False
+    # Run the undistort resample on the GPU (torch grid_sample) when CUDA is
+    # available; falls back to CPU (cv2.remap) automatically if not.
+    undistort_gpu: bool = True
 
 
 class GeometryConfig(BaseModel):
@@ -102,6 +111,12 @@ class DetectorConfig(BaseModel):
     # its last spot, 1 = full extrapolation). Damps a noisy velocity so a
     # coasted (dashed) box doesn't drift fast off the object across dropouts.
     stabilize_coast_velocity_factor: float = 0.4
+    # Batch both cameras into a single inference (needs a batch-capable engine).
+    # Removes the one-camera-at-a-time detector serialization. Falls back to
+    # per-camera inference automatically when the engine is batch=1.
+    batch_cameras: bool = False
+    # How long a camera waits to rendezvous with the other before inferring solo.
+    batch_wait_ms: int = 20
 
 
 class ServerConfig(BaseModel):

@@ -10,7 +10,7 @@ mode: jetson
 
 detector:
   backend: tensorrt
-  model_engine: yolov8n.engine
+  model_engine: yolov8n.engine   # dynamic batch 1-2 engine (also kept as yolov8n_b2.engine); note the compose VISION_MODEL_ENGINE env overrides this
   confidence: 0.35
   imgsz: 640
   # Anti-flicker stabilizer, tuned on a 60s capture of live aft/forward tracks
@@ -27,6 +27,12 @@ detector:
   # Damps a dashed/coasted box so it doesn't drift fast off the object; lower
   # this toward 0 if the predicted box still races ahead.
   stabilize_coast_velocity_factor: 0.4
+  # Batch both cameras into one inference. Tried on this Jetson but didn't pay
+  # off: the two camera threads rarely align within the rendezvous window (each
+  # does variable post-processing after detect), so avg batch ~1.1, and the
+  # dynamic engine built under memory pressure is slower per call. Left off; the
+  # code path remains for a future synchronized-loop + properly-built engine.
+  batch_cameras: false
 
 cameras:
   - name: forward            # bow dome, DS-2DE2A404IW-DE3 (2MP), 192.168.220.21
@@ -41,6 +47,7 @@ cameras:
     undistort: true
     undistort_k1: -0.35
     undistort_rotation_deg: -4.5
+    undistort_before_detect: true   # EXPERIMENT: feed corrected frame to detector
   - name: aft                # stern dome, DS-2DE3304W-DE (3MP), 192.168.220.20
     url: null                # set via VISION_CAMERA_AFT_URL
     hfov_deg: 96.0           # wide-end estimate; refine against AIS
@@ -53,6 +60,7 @@ cameras:
     undistort: true
     undistort_k1: -0.35
     undistort_rotation_deg: 1.0
+    undistort_before_detect: true   # EXPERIMENT: feed corrected frame to detector
 
 server:
   target_fps: 12.0
