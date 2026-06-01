@@ -41,6 +41,24 @@ def _format_timestamp(ts: str) -> str:
     return f"{date} {clock} UTC".strip()
 
 
+def _dashed_rect(image: np.ndarray, p0: tuple, p1: tuple, colour: tuple,
+                 thickness: int = 2, dash: int = 10) -> None:
+    """Axis-aligned dashed rectangle — marks a coasted (predicted) box."""
+    x0, y0 = p0
+    x1, y1 = p1
+    for (ax, ay, bx, by) in ((x0, y0, x1, y0), (x1, y0, x1, y1),
+                             (x1, y1, x0, y1), (x0, y1, x0, y0)):
+        length = int(max(abs(bx - ax), abs(by - ay)))
+        if length == 0:
+            continue
+        for s in range(0, length, dash * 2):
+            t0, t1 = s / length, min((s + dash) / length, 1.0)
+            cv2.line(image,
+                     (int(ax + (bx - ax) * t0), int(ay + (by - ay) * t0)),
+                     (int(ax + (bx - ax) * t1), int(ay + (by - ay) * t1)),
+                     colour, thickness, cv2.LINE_AA)
+
+
 def _severity_colour(t: Target) -> tuple:
     if t.is_person_in_water:
         return _RED
@@ -58,14 +76,21 @@ def annotate(image: np.ndarray, event: DetectionEvent) -> np.ndarray:
     for t in event.targets:
         colour = _severity_colour(t)
         x, y, w, h = int(t.bbox.x), int(t.bbox.y), int(t.bbox.w), int(t.bbox.h)
-        cv2.rectangle(img, (x, y), (x + w, y + h), colour, 2)
         brg = f"{t.geometry.relative_bearing_deg:+.0f}deg"
         rng = f"{t.geometry.range_m:.0f}m" if t.geometry.range_m is not None else "?"
         tid = f"#{t.track_id}" if t.track_id is not None else ""
         label = f"{t.label}{tid} {brg} {rng}"
         if t.is_person_in_water:
             label = "MOB! " + label
-        _draw_label(img, label, (x, max(y - 6, 12)), colour)
+        if t.coasting:
+            # Predicted (not detected this frame): dashed + dimmed colour so the
+            # box/info persist without claiming a fresh detection.
+            dim = tuple(int(c * 0.6) for c in colour)
+            _dashed_rect(img, (x, y), (x + w, y + h), dim)
+            _draw_label(img, label + " ~", (x, max(y - 6, 12)), dim)
+        else:
+            cv2.rectangle(img, (x, y), (x + w, y + h), colour, 2)
+            _draw_label(img, label, (x, max(y - 6, 12)), colour)
 
     hud = f"{event.camera}  {event.inference.backend.value}  {event.inference.latency_ms:.0f}ms  n={len(event.targets)}"
     _draw_label(img, hud, (10, 24), (255, 255, 255), scale=0.6)

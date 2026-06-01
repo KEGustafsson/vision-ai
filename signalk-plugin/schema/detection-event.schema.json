@@ -210,6 +210,11 @@
           "default": 0,
           "title": "Age Frames",
           "type": "integer"
+        },
+        "coasting": {
+          "default": false,
+          "title": "Coasting",
+          "type": "boolean"
         }
       },
       "required": [

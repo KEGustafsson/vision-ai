@@ -23,6 +23,7 @@ class RawTrack:
     vx: float = 0.0   # centroid px/frame
     vy: float = 0.0
     age_frames: int = 0
+    coasting: bool = False  # re-emitted by the stabilizer without a fresh detection
 
     @property
     def cx(self) -> float:

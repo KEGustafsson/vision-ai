@@ -18,6 +18,7 @@ from .camera import create_source
 from .config import CameraConfig, Settings
 from .detector import create_detector
 from .detector.classmap import is_person_in_water
+from .detector.stabilizer import TrackStabilizer
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
 from .schemas import (
     BBox, Backend, CalibrationStatus, DetectionEvent, FrameSize, Geometry,
@@ -85,6 +86,15 @@ class CameraWorker(threading.Thread):
         self._source = None
         # Lazily built once the frame size is known; only when undistort is on.
         self._undistorter: Undistorter | None = None
+        # Per-camera flicker damping: keeps a detected track alive (coasted)
+        # across short dropouts instead of blinking it off. State is per camera.
+        d = settings.detector
+        self._stabilizer = TrackStabilizer(
+            confirm_frames=d.stabilize_confirm_frames,
+            max_coast_frames=d.stabilize_max_coast_frames,
+            hysteresis_ratio=d.stabilize_hysteresis_ratio,
+            ema_alpha=d.stabilize_ema_alpha,
+        ) if d.stabilize else None
         # Runtime-adjustable via /control.
         self.confidence = settings.detector.confidence
         # Canonical labels to surface; None => all. Seeded from config, then
@@ -168,6 +178,11 @@ class CameraWorker(threading.Thread):
 
                     tracks = self._detector.detect_and_track(
                         frame, self._cam.name, max_det=self._settings.detector.max_det)
+                    if self._stabilizer is not None:
+                        # Coast/hysteresis/debounce. conf_on tracks the runtime
+                        # publish threshold so /control confidence still applies.
+                        tracks = self._stabilizer.update(
+                            tracks, frame.seq, self.confidence)
                     latency_ms = (time.perf_counter() - t0) * 1000.0
                     event = self._build_event(frame, tracks, backend, latency_ms)
 
@@ -233,7 +248,9 @@ class CameraWorker(threading.Thread):
         max_area_frac = self._settings.detector.max_area_frac
         frame_area = float(w * h) or 1.0
         for tr in tracks:
-            if tr.confidence < self.confidence:
+            # The stabilizer already applied the confidence gate (with
+            # hysteresis); only filter here when it's disabled.
+            if self._stabilizer is None and tr.confidence < self.confidence:
                 continue
             # Only surface the operator-selected object types (set via the
             # SignalK plugin). None => all. Filtering here also keeps the
@@ -267,6 +284,7 @@ class CameraWorker(threading.Thread):
                 ),
                 pixel_velocity=PixelVelocity(vx=tr.vx, vy=tr.vy),
                 age_frames=tr.age_frames,
+                coasting=tr.coasting,
             ))
         # Drop detections nested inside a larger detection's box (deck clutter,
         # duplicate nested boxes) before ranking/capping.

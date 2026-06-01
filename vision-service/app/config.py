@@ -85,6 +85,19 @@ class DetectorConfig(BaseModel):
     # operator can pick object types from the admin UI. Filtering here keeps
     # both the event stream and the annotated overlay limited to the selection.
     classes: Optional[List[str]] = None
+    # Track stabilizer: damp per-frame detection flicker by giving each track a
+    # short lifecycle (confidence hysteresis + coasting across dropouts +
+    # appearance debounce). Applies to BOTH the event and the overlay.
+    stabilize: bool = True
+    # Frames a new track must be seen before it is shown (debounce false pops).
+    stabilize_confirm_frames: int = 3
+    # Frames a confirmed-but-undetected track is coasted before being dropped.
+    # ~max_coast_frames / target_fps seconds of persistence across dropouts.
+    stabilize_max_coast_frames: int = 8
+    # Off-threshold = confidence * this ratio; below it a shown track turns off.
+    stabilize_hysteresis_ratio: float = 0.6
+    # EMA smoothing factor for per-track confidence (higher = more reactive).
+    stabilize_ema_alpha: float = 0.4
 
 
 class ServerConfig(BaseModel):

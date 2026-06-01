@@ -13,22 +13,42 @@ detector:
   model_engine: yolov8n.engine
   confidence: 0.35
   imgsz: 640
+  # Anti-flicker stabilizer, tuned on a 60s capture of live aft/forward tracks
+  # (offline replay of the real stabilizer over recorded detections). max_coast
+  # is frames of persistence at ~12fps (20 ~= 1.7s): higher = fewer flicker gaps
+  # (raw aft had 229) but more phantom-box "tail" after a target leaves, which
+  # also feeds CPA. Lower it if stale boxes linger. See memory above.
+  stabilize: true
+  stabilize_confirm_frames: 3
+  stabilize_max_coast_frames: 20
+  stabilize_hysteresis_ratio: 0.5
+  stabilize_ema_alpha: 0.3
 
 cameras:
   - name: forward            # bow dome, DS-2DE2A404IW-DE3 (2MP), 192.168.220.21
     url: null                # set via VISION_CAMERA_FORWARD_URL
     hfov_deg: 96.0           # wide-end estimate; refine against AIS
     height_m: 2.5            # TODO[skipper]: measure lens height above waterline
-    horizon_y: null          # TODO[skipper]: pixel row of horizon once aimed level
+    horizon_y: 350           # TODO[skipper]: pixel row of horizon once aimed level
     bearing_offset_deg: 0.0  # +ve = starboard; adjust for PTZ pan vs bow
     ptz: true                # ONVIF host/creds taken from VISION_CAMERA_FORWARD_URL
+    # Display-only lens correction (cosmetic; not used for bearings/range).
+    # Eyeballed estimate — replace with checkerboard calibration when available.
+    undistort: true
+    undistort_k1: -0.35
+    undistort_rotation_deg: -4.5
   - name: aft                # stern dome, DS-2DE3304W-DE (3MP), 192.168.220.20
     url: null                # set via VISION_CAMERA_AFT_URL
     hfov_deg: 96.0           # wide-end estimate; refine against AIS
-    height_m: 2.5            # TODO[skipper]: measure lens height above waterline
-    horizon_y: null          # TODO[skipper]: pixel row of horizon once aimed level
+    height_m: 4.5            # TODO[skipper]: measure lens height above waterline
+    horizon_y: 220           # TODO[skipper]: pixel row of horizon once aimed level
     bearing_offset_deg: 180.0
     ptz: true                # ONVIF host/creds taken from VISION_CAMERA_AFT_URL
+    # Display-only lens correction (cosmetic; not used for bearings/range).
+    # Eyeballed estimate — replace with checkerboard calibration when available.
+    undistort: true
+    undistort_k1: -0.35
+    undistort_rotation_deg: 1.0
 
 server:
   target_fps: 12.0

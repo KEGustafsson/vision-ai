@@ -85,6 +85,10 @@ class Target(BaseModel):
     pixel_velocity: PixelVelocity = Field(default_factory=PixelVelocity)
     first_seen: Optional[str] = None
     age_frames: int = 0
+    # True when this target was not detected in the current frame and is being
+    # "coasted" from its last detection + velocity by the track stabilizer, so
+    # the box/info persists smoothly across short detector dropouts.
+    coasting: bool = False
 
 
 class FrameSize(BaseModel):
