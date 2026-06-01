@@ -177,6 +177,13 @@ class CameraWorker(threading.Thread):
                         continue
                     stalled_since = None
 
+                    # EXPERIMENTAL: correct the frame before detection so the
+                    # detector + geometry see the straightened image. Otherwise
+                    # correction is display-only (see _for_display).
+                    if self._cam.undistort and self._cam.undistort_before_detect:
+                        h, w = frame.image.shape[:2]
+                        frame.image = self._undistorter_for(w, h).image(frame.image)
+
                     tracks = self._detector.detect_and_track(
                         frame, self._cam.name, max_det=self._settings.detector.max_det)
                     if self._stabilizer is not None:
@@ -212,16 +219,24 @@ class CameraWorker(threading.Thread):
         finally:
             self.close_source()
 
-    def _for_display(self, image, event: DetectionEvent):
-        """Return (display_image, display_event) with optional cosmetic lens
-        correction applied to both, so the overlay still lands correctly. When
-        the camera has no undistort config this is a cheap pass-through."""
-        if not self._cam.undistort:
-            return image, event
-        h, w = image.shape[:2]
+    def _undistorter_for(self, w, h) -> Undistorter:
+        """Lazily build + cache this camera's undistorter for the frame size."""
         u = self._undistorter
         if u is None or u.size != (w, h):
             u = self._undistorter = Undistorter(self._cam, w, h)
+            self._log.info("camera %s undistort backend: %s (before_detect=%s)",
+                           self._cam.name, u.backend, self._cam.undistort_before_detect)
+        return u
+
+    def _for_display(self, image, event: DetectionEvent):
+        """Return (display_image, display_event) with optional cosmetic lens
+        correction applied to both, so the overlay still lands correctly. When
+        the camera has no undistort config — or it was already corrected before
+        detection — this is a cheap pass-through."""
+        if not self._cam.undistort or self._cam.undistort_before_detect:
+            return image, event
+        h, w = image.shape[:2]
+        u = self._undistorter_for(w, h)
         disp = u.image(image)
         ev = event.model_copy(deep=True)
         if ev.horizon_y is not None:
