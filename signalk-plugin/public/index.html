@@ -43,7 +43,19 @@
       </section>
 
       <section class="targets">
-        <h2>Targets <span id="targetCount" class="badge">0</span></h2>
+        <div class="targets-head">
+          <h2>Targets <span id="targetCount" class="badge">0</span></h2>
+          <label class="target-show" for="targetShow">
+            <span>Show</span>
+            <select id="targetShow">
+              <option value="5">5</option>
+              <option value="10">10</option>
+              <option value="20">20</option>
+              <option value="50">50</option>
+              <option value="all" selected>All</option>
+            </select>
+          </label>
+        </div>
         <table>
           <thead>
             <tr>

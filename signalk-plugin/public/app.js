@@ -11,6 +11,12 @@ let systemActiveCamera = null;
 let ptzCameras = [];
 let detectionEnabled = null; // unknown until first poll
 let maxTargets = null;
+// How many rows the list renders, independent of the container's maxTargets.
+// 'all' (Infinity) shows every reported target. Persisted across reloads.
+let displayLimit = (() => {
+  const saved = localStorage.getItem('targetShow');
+  return saved && saved !== 'all' && Number(saved) > 0 ? Number(saved) : Infinity;
+})();
 const PTZ_SPEED = 0.6; // normalised ONVIF velocity for held buttons
 
 const rad2deg = (r) => (r * 180) / Math.PI;
@@ -226,13 +232,16 @@ function renderOwnShip(own) {
   el.textContent = `${own.position.latitude.toFixed(5)}, ${own.position.longitude.toFixed(5)} · HDG ${hdg} · SOG ${sog}`;
 }
 
+let lastTargets = [];
 function renderTargets(targets) {
+  lastTargets = targets;
   document.getElementById('targetCount').textContent = targets.length;
   const tbody = document.getElementById('targetRows');
   tbody.innerHTML = '';
   targets
     .slice()
     .sort((a, b) => threatRank(b) - threatRank(a))
+    .slice(0, displayLimit)
     .forEach((t) => {
       const tr = document.createElement('tr');
       tr.className = `threat-${t.threatLevel}${t.is_person_in_water ? ' mob' : ''}`;
@@ -290,6 +299,14 @@ document.getElementById('stream').addEventListener('error', onStreamError);
 document.getElementById('detToggle').addEventListener('click', toggleDetection);
 document.getElementById('targetLimit').addEventListener('change', (e) => {
   setTargetLimit(Number(e.target.value));
+});
+const targetShow = document.getElementById('targetShow');
+targetShow.value = displayLimit === Infinity ? 'all' : String(displayLimit);
+targetShow.addEventListener('change', (e) => {
+  const v = e.target.value;
+  displayLimit = v === 'all' ? Infinity : Number(v);
+  localStorage.setItem('targetShow', v);
+  renderTargets(lastTargets); // re-render now instead of waiting for the next poll
 });
 wirePtzPad();
 loop();

@@ -96,7 +96,21 @@ main { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; padding: 14px; 
 .ptz-zin { grid-area: zin; } .ptz-zout { grid-area: zout; }
 
 .targets { background: var(--panel); border-radius: 10px; padding: 12px 14px; }
-.targets h2 { font-size: 15px; margin: 0 0 10px; }
+.targets-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; margin: 0 0 10px;
+}
+.targets h2 { font-size: 15px; margin: 0; }
+.target-show {
+  display: flex; align-items: center; gap: 6px;
+  color: var(--muted); font-size: 13px; font-weight: 600;
+}
+.target-show select {
+  height: 28px; min-width: 60px;
+  color: var(--fg); background: #0e1528;
+  border: 1px solid #2a3550; border-radius: 6px;
+  padding: 2px 8px;
+}
 .badge { background: #2a3550; border-radius: 10px; padding: 1px 8px; font-size: 12px; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; color: var(--muted); font-weight: 600; padding: 4px 6px; }
