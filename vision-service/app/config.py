@@ -32,6 +32,16 @@ class CameraConfig(BaseModel):
     onvif_port: int = 80
     onvif_user: Optional[str] = None
     onvif_password: Optional[str] = None
+    # Display-only lens correction: straightens barrel distortion and levels a
+    # tilted mount in the annotated MJPEG/snapshot ONLY. The detection event
+    # (bearings/range/CPA) is still computed from the raw frame, so these are
+    # cosmetic and do not need to be metrically calibrated. Replace with values
+    # from a real checkerboard calibration when available.
+    undistort: bool = False            # enable display correction for this camera
+    undistort_k1: float = 0.0          # radial barrel coeff (negative corrects barrel)
+    undistort_f_factor: float = 0.75   # assumed focal length as a fraction of width
+    undistort_alpha: float = 0.0       # 0 crop to valid pixels, 1 keep all (black edges)
+    undistort_rotation_deg: float = 0.0  # CCW image-plane rotation to level the horizon
 
 
 class GeometryConfig(BaseModel):

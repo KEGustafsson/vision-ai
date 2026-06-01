@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timezone
 
 from .api.overlay import annotate, encode_jpeg
+from .api.undistort import Undistorter
 from .camera import create_source
 from .config import CameraConfig, Settings
 from .detector import create_detector
@@ -82,6 +83,8 @@ class CameraWorker(threading.Thread):
         self._enabled = threading.Event()
         self._enabled.set()
         self._source = None
+        # Lazily built once the frame size is known; only when undistort is on.
+        self._undistorter: Undistorter | None = None
         # Runtime-adjustable via /control.
         self.confidence = settings.detector.confidence
         # Canonical labels to surface; None => all. Seeded from config, then
@@ -170,7 +173,11 @@ class CameraWorker(threading.Thread):
 
                     payload = event.model_dump(mode="json")
                     self._events.publish(payload)
-                    jpeg = encode_jpeg(annotate(frame.image, event),
+                    # Display-only lens correction: undistort the shown frame and
+                    # remap the overlay to match. The published event above keeps
+                    # the raw-frame geometry, so bearings/range are unaffected.
+                    disp_img, disp_event = self._for_display(frame.image, event)
+                    jpeg = encode_jpeg(annotate(disp_img, disp_event),
                                        self._settings.server.jpeg_quality)
                     # set() is a no-op while the store is paused (detection off),
                     # so a frame encoded just before a disable cannot resurface.
@@ -188,6 +195,25 @@ class CameraWorker(threading.Thread):
                     time.sleep(period - dt)
         finally:
             self.close_source()
+
+    def _for_display(self, image, event: DetectionEvent):
+        """Return (display_image, display_event) with optional cosmetic lens
+        correction applied to both, so the overlay still lands correctly. When
+        the camera has no undistort config this is a cheap pass-through."""
+        if not self._cam.undistort:
+            return image, event
+        h, w = image.shape[:2]
+        u = self._undistorter
+        if u is None or u.size != (w, h):
+            u = self._undistorter = Undistorter(self._cam, w, h)
+        disp = u.image(image)
+        ev = event.model_copy(deep=True)
+        if ev.horizon_y is not None:
+            ev.horizon_y = u.horizon_y(ev.horizon_y, w)
+        for t in ev.targets:
+            bx, by, bw, bh = u.bbox(t.bbox.x, t.bbox.y, t.bbox.w, t.bbox.h)
+            t.bbox.x, t.bbox.y, t.bbox.w, t.bbox.h = bx, by, bw, bh
+        return disp, ev
 
     def _resolve_horizon(self, frame) -> float | None:
         if self._cam.horizon_y is not None:
