@@ -64,8 +64,10 @@ export = function (app: ServerApp): Plugin {
       void syncContainer();
     },
     setMaxTargets(value: number) {
+      // Only the container's per-frame detection cap; the plugin's target list
+      // keeps every tracked target (recently-seen but not currently-active ones
+      // included) so the captain view can show them all.
       maxTargets = value;
-      pruneTargetLimit();
       void syncContainer();
     },
     client: () => client,
@@ -91,30 +93,12 @@ export = function (app: ServerApp): Plugin {
       targets.set(t.key, t);
     }
     pruneLabelSelection();
-    pruneTargetLimit();
   }
 
   function pruneLabelSelection(): void {
     if (cfg.detectClasses.length === 0) return;
     for (const [key, t] of targets) {
       if (!cfg.detectClasses.includes(t.label)) targets.delete(key);
-    }
-  }
-
-  function pruneTargetLimit(): void {
-    if (targets.size <= maxTargets) return;
-    const keep = new Set(
-      [...targets.values()]
-        .sort((a, b) => {
-          const bySeen = b.lastSeen - a.lastSeen;
-          if (bySeen !== 0) return bySeen;
-          return b.confidence - a.confidence;
-        })
-        .slice(0, maxTargets)
-        .map((t) => t.key)
-    );
-    for (const key of targets.keys()) {
-      if (!keep.has(key)) targets.delete(key);
     }
   }
 
@@ -129,7 +113,6 @@ export = function (app: ServerApp): Plugin {
       if (now - t.lastSeen > timeoutMs) targets.delete(key);
     }
     pruneLabelSelection();
-    pruneTargetLimit();
     const all = [...targets.values()];
 
     let darkKeys = new Set<string>();
