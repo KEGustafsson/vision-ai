@@ -35,12 +35,16 @@ def create_detector(settings: Settings) -> Detector:
         device = "cpu" if backend == "torch-cpu" else "0"
         return YoloTorchDetector(_resolve(det.model_pt), device=device,
                                  confidence=floor, imgsz=det.imgsz,
-                                 tracker_cfg=det.tracker, backend_name=backend)
+                                 tracker_cfg=det.tracker, backend_name=backend,
+                                 batch_cameras=det.batch_cameras,
+                                 batch_wait_ms=det.batch_wait_ms)
 
     if backend == "tensorrt":
         from .yolo_trt import YoloTrtDetector
         return YoloTrtDetector(_resolve(det.model_engine), confidence=floor,
-                               imgsz=det.imgsz, tracker_cfg=det.tracker)
+                               imgsz=det.imgsz, tracker_cfg=det.tracker,
+                               batch_cameras=det.batch_cameras,
+                               batch_wait_ms=det.batch_wait_ms)
 
     raise ValueError(f"unknown detector backend: {backend}")
 
