@@ -98,6 +98,10 @@ class DetectorConfig(BaseModel):
     stabilize_hysteresis_ratio: float = 0.6
     # EMA smoothing factor for per-track confidence (higher = more reactive).
     stabilize_ema_alpha: float = 0.4
+    # Fraction of pixel velocity applied while coasting (0 = freeze the box at
+    # its last spot, 1 = full extrapolation). Damps a noisy velocity so a
+    # coasted (dashed) box doesn't drift fast off the object across dropouts.
+    stabilize_coast_velocity_factor: float = 0.4
 
 
 class ServerConfig(BaseModel):

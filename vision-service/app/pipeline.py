@@ -94,6 +94,7 @@ class CameraWorker(threading.Thread):
             max_coast_frames=d.stabilize_max_coast_frames,
             hysteresis_ratio=d.stabilize_hysteresis_ratio,
             ema_alpha=d.stabilize_ema_alpha,
+            coast_velocity_factor=d.stabilize_coast_velocity_factor,
         ) if d.stabilize else None
         # Runtime-adjustable via /control.
         self.confidence = settings.detector.confidence

@@ -37,11 +37,17 @@ class _State:
 
 class TrackStabilizer:
     def __init__(self, confirm_frames: int = 3, max_coast_frames: int = 8,
-                 hysteresis_ratio: float = 0.6, ema_alpha: float = 0.4):
+                 hysteresis_ratio: float = 0.6, ema_alpha: float = 0.4,
+                 coast_velocity_factor: float = 0.4):
         self.confirm_frames = max(1, confirm_frames)
         self.max_coast_frames = max(0, max_coast_frames)
         self.hysteresis_ratio = min(max(hysteresis_ratio, 0.0), 1.0)
         self.alpha = min(max(ema_alpha, 0.0), 1.0)
+        # How much of the track's pixel velocity to apply while coasting.
+        # 0 = freeze the box at its last position; 1 = full extrapolation. A
+        # damped value keeps a coasted box near the object instead of letting a
+        # noisy velocity estimate fling it away over several missed frames.
+        self.coast_velocity_factor = max(0.0, coast_velocity_factor)
         self._st: dict[int, _State] = {}
 
     def update(self, tracks: list[RawTrack], seq: int, conf_on: float) -> list[RawTrack]:
@@ -87,10 +93,11 @@ class TrackStabilizer:
                 del self._st[tid]
                 continue
             base = s.track
+            damp = self.coast_velocity_factor * missed
             out.append(replace(
                 base,
-                x=base.x + base.vx * missed,
-                y=base.y + base.vy * missed,
+                x=base.x + base.vx * damp,
+                y=base.y + base.vy * damp,
                 confidence=s.conf,
                 coasting=True,
             ))

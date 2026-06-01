@@ -21,10 +21,13 @@ class VelocityTracker:
         hist = self._hist[track_id]
         vx = vy = 0.0
         if hist:
-            pseq, pcx, pcy = hist[-1]
-            dseq = max(seq - pseq, 1)
-            vx = (cx - pcx) / dseq
-            vy = (cy - pcy) / dseq
+            # Average velocity across the whole history window (oldest -> now),
+            # not just the last step: a single jittery frame no longer produces a
+            # large spurious velocity that would fling a coasted box off-target.
+            oseq, ocx, ocy = hist[0]
+            dseq = max(seq - oseq, 1)
+            vx = (cx - ocx) / dseq
+            vy = (cy - ocy) / dseq
         hist.append((seq, cx, cy))
         age = seq - self._first_seq[track_id]
         return vx, vy, age

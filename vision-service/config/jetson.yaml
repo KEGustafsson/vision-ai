@@ -23,6 +23,10 @@ detector:
   stabilize_max_coast_frames: 20
   stabilize_hysteresis_ratio: 0.5
   stabilize_ema_alpha: 0.3
+  # Fraction of velocity used while coasting (0 = freeze box, 1 = full predict).
+  # Damps a dashed/coasted box so it doesn't drift fast off the object; lower
+  # this toward 0 if the predicted box still races ahead.
+  stabilize_coast_velocity_factor: 0.4
 
 cameras:
   - name: forward            # bow dome, DS-2DE2A404IW-DE3 (2MP), 192.168.220.21
