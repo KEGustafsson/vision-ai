@@ -4,6 +4,14 @@ A **"visual radar"** for boats: two cameras (forward + aft) feeding a YOLOv8
 detector on an **NVIDIA Jetson Orin Nano Super**, turned into georeferenced,
 AIS-fused, navigation-aware situational awareness inside **[SignalK](https://signalk.org)**.
 
+Example: 2x Cams (bow, aft), 10fps each, DeepStream
+
+WebUI
+![image](./docs/Marine_Vision-AI.png)
+
+nVidia jtop process views:
+![image](./docs/nVidia_Nano_jtop.png)
+
 The system doesn't just draw boxes on a video feed. It treats each camera as a
 bearing/range sensor and, using the boat's own position and heading from
 SignalK, produces:
