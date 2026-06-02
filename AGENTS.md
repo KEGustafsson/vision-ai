@@ -16,7 +16,7 @@ before touching code.
 
 The system is **two processes connected by one JSON contract**.
 
-```
+```text
 cameras ──RTSP──► vision-service (Python)      ──WS/MJPEG/REST──►  signalk-plugin (TypeScript)  ──► SignalK server
                   GPU · pixels · geometry                          nav-relative math · fusion · alerts
                   emits DetectionEvent                             owns live SignalK state
