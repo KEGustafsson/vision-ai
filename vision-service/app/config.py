@@ -51,6 +51,12 @@ class CameraConfig(BaseModel):
     # Run the undistort resample on the GPU (torch grid_sample) when CUDA is
     # available; falls back to CPU (cv2.remap) automatically if not.
     undistort_gpu: bool = True
+    # DeepStream only: when undistort is on, correction runs on the GPU via the
+    # nvdewarper element (zero-copy, in-NVMM, before inference). By default a
+    # starter dewarper config is generated from undistort_k1/_f_factor/_rotation.
+    # Point this at a hand-tuned nvdewarper config file to override the generated
+    # one once you've calibrated on the hardware.
+    dewarper_config: Optional[str] = None
 
 
 class GeometryConfig(BaseModel):
@@ -70,6 +76,21 @@ class DetectorConfig(BaseModel):
     # lower the effective confidence; the worker filters at `confidence`.
     track_floor: float = 0.1
     imgsz: int = 640
+    # DeepStream only: the nvstreammux output resolution, which is also the
+    # display/MJPEG resolution and the coordinate space of every reported bbox
+    # and `horizon_y`. nvinfer rescales this to `imgsz` internally on the GPU,
+    # so detection still runs at imgsz while display + geometry stay native.
+    # Set to the camera's native stream resolution (these domes stream 1280x960)
+    # so horizon_y/range calibration is in real pixels.
+    mux_width: int = 1280
+    mux_height: int = 960
+    # DeepStream nvstreammux batched-push-timeout (ms): how long the muxer waits to
+    # assemble a full batch before pushing what it has. Keep it SHORT — prompt
+    # pushes let the two cameras pipeline independently and reach the full input
+    # frame rate; a long timeout forces both into one synchronous batch and throttles
+    # to the per-batch processing cost. Over-generation is prevented by the probe's
+    # PTS guard (drops muxer frame repeats), not by this value.
+    mux_batch_timeout_ms: int = 40
     # Maximum detections kept by YOLO/NMS and passed into tracking per frame.
     # Lower values reduce post-processing/tracker/event/overlay workload in busy scenes.
     max_det: int = 20

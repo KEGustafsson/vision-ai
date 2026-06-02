@@ -1,0 +1,19 @@
+# Runtime extras for the DeepStream image (Dockerfile.deepstream).
+#
+# The NVIDIA DeepStream base image already ships CUDA, TensorRT, the nv* GStreamer
+# plugins, the NvDCF tracker lib and the pyds wheel. cv2 (python3-opencv), PyGObject
+# (python3-gi) and the GStreamer rtp/h264 plugins come from apt in the Dockerfile.
+#
+# Unlike the TensorRT image, the DeepStream pipeline does NOT need torch/ultralytics
+# at runtime — nvinfer does inference. Those are only used in the build's export
+# stage to produce the YOLOv8n ONNX. So this list is just the web stack + numpy.
+fastapi>=0.110
+uvicorn[standard]>=0.29
+h11>=0.16.0           # avoid GHSA-vqfr-h8mv-ghfj (uvicorn pulls h11>=0.8)
+pydantic>=2.6,<3
+PyYAML>=6.0
+websockets>=12.0
+numpy
+# Self-contained cv2 (bundles its own ffmpeg) — avoids the DS base's libavcodec
+# mismatch that breaks apt's python3-opencv. Draw/encode only, no GStreamer needed.
+opencv-python-headless

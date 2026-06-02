@@ -1,0 +1,88 @@
+# DeepStream GPU pipeline mode
+#
+# Prerequisites (Jetson Orin Nano, JetPack 6, DeepStream 7.x):
+#   sudo apt-get install deepstream-7.1
+#   pip install /opt/nvidia/deepstream/deepstream/lib/pyds-*.whl
+#
+# Build the custom YOLOv8 nvinfer parser once:
+#   git clone https://github.com/marcoslucianops/DeepStream-Yolo /tmp/ds-yolo
+#   CUDA_VER=$(nvcc --version | grep -oP 'V\K[0-9]+\.[0-9]+') \
+#     make -C /tmp/ds-yolo/nvdsinfer_custom_impl_Yolo
+#   cp /tmp/ds-yolo/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so \
+#     vision-service/deepstream/
+#
+# Export a raw YOLOv8n ONNX (no end-to-end NMS — required by deepstream-yolo):
+#   python -c "from ultralytics import YOLO; YOLO('models/yolov8n.pt').export(
+#       format='onnx', simplify=True, opset=17, imgsz=640)"
+#   # nvinfer will auto-build yolov8n_ds.engine on first run; or pre-build with
+#   # trtexec: trtexec --onnx=models/yolov8n.onnx --fp16 \
+#   #           --saveEngine=models/yolov8n_ds.engine --minShapes=images:1x3x640x640 \
+#   #           --optShapes=images:2x3x640x640 --maxShapes=images:2x3x640x640
+
+mode: deepstream
+
+detector:
+  backend: deepstream
+  # Raw-export engine (see comments above) — NOT the Ultralytics end-to-end engine
+  model_engine: yolov8n_ds.engine
+  model_pt: yolov8n.pt
+  confidence: 0.35
+  track_floor: 0.10
+  imgsz: 640
+  # Native camera/display/geometry resolution. nvstreammux outputs this size and
+  # nvinfer rescales it to imgsz on the GPU for inference. Detection bboxes and
+  # horizon_y below are in THIS coordinate space (these domes stream 1280x960).
+  mux_width: 1280
+  mux_height: 960
+  # Short muxer timeout = prompt pushes + better per-camera pipelining (full input
+  # rate). The probe's PTS guard drops any frame repeats, so this can't push output
+  # above the camera rate. Raise only if you see duplicate-frame churn in the logs.
+  mux_batch_timeout_ms: 40
+  max_det: 20
+  # Stabilizer is still applied in Python on top of nvtracker output
+  stabilize: true
+  stabilize_confirm_frames: 3
+  stabilize_max_coast_frames: 8
+  stabilize_hysteresis_ratio: 0.6
+  stabilize_ema_alpha: 0.4
+  stabilize_coast_velocity_factor: 0.4
+  max_area_frac: 0.4
+  own_hull_min_range_m: 8.0
+  contained_frac: 0.8
+
+cameras:
+  - name: forward
+    # Override with: VISION_CAMERA_FORWARD_URL=rtsp://user:pass@host/stream
+    url: null
+    hfov_deg: 96.0
+    height_m: 2.5
+    horizon_y: 350
+    bearing_offset_deg: 0.0
+    ptz: true
+    undistort: true
+    undistort_k1: -0.35
+    undistort_rotation_deg: -4.5    # level the bow dome's tilted mount (nvdewarper roll)
+
+  - name: aft
+    # Override with: VISION_CAMERA_AFT_URL=rtsp://user:pass@host/stream
+    url: null
+    hfov_deg: 96.0
+    height_m: 4.5
+    horizon_y: 220
+    bearing_offset_deg: 180.0
+    ptz: true
+    undistort: true
+    undistort_k1: -0.35
+    undistort_rotation_deg: 1.0     # level the stern dome's tilted mount (nvdewarper roll)
+
+server:
+  target_fps: 12.0
+  jpeg_quality: 80
+  event_buffer: 200
+
+geometry:
+  auto_horizon: false
+  known_widths_m:
+    person: 0.5
+    buoy: 0.8
+    vessel: 4.0

@@ -34,7 +34,8 @@
         "tensorrt",
         "torch-cuda",
         "torch-cpu",
-        "mock"
+        "mock",
+        "deepstream"
       ],
       "title": "Backend",
       "type": "string"
