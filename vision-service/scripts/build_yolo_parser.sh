@@ -23,9 +23,18 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "Cloning $REPO @ $REF ..."
-git clone --depth 1 --branch "$REF" "$REPO" "$WORK/ds-yolo" 2>/dev/null \
-    || git clone --depth 1 "$REPO" "$WORK/ds-yolo"  # fallback: some refs aren't branchable
-(cd "$WORK/ds-yolo" && git fetch --depth 1 origin "$REF" && git checkout FETCH_HEAD) 2>/dev/null || true
+# Full clone (not shallow): lets us check out any REF — branch, tag, or a short SHA
+# like the default 68769f3, which a shallow `fetch <short-sha>` cannot resolve on
+# GitHub. checkout failures abort via `set -e` (no `|| true`).
+git clone "$REPO" "$WORK/ds-yolo"
+git -C "$WORK/ds-yolo" checkout --quiet "$REF"
+# Fail loudly if we did not land exactly on $REF: building the parser from an
+# unpinned commit must not be allowed to slip through silently.
+if [ "$(git -C "$WORK/ds-yolo" rev-parse HEAD)" \
+     != "$(git -C "$WORK/ds-yolo" rev-parse --verify "${REF}^{commit}")" ]; then
+    echo "ERROR: HEAD is not the pinned ref '$REF' after checkout" >&2
+    exit 1
+fi
 
 echo "Building parser (CUDA_VER=$CUDA_VER) ..."
 PATH="/usr/local/cuda/bin:$PATH" CUDA_VER="$CUDA_VER" \
