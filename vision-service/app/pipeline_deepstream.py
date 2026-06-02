@@ -58,6 +58,7 @@ Prerequisites
 from __future__ import annotations
 
 import logging
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, field
@@ -66,7 +67,6 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .api.overlay import annotate, encode_jpeg
-from .api.undistort import Undistorter
 from .config import CameraConfig, Settings
 from .detector.base import RawTrack
 from .detector.classmap import is_person_in_water, label_for
@@ -80,6 +80,8 @@ from .schemas import (
 )
 from .util import EventBuffer, LatestFrame
 
+_STALL_TIMEOUT_S = 5.0  # mirror pipeline.py: flag a camera with no frames this long
+_GST_CLOCK_TIME_NONE = 0xFFFF_FFFF_FFFF_FFFF  # GStreamer "invalid timestamp" sentinel
 _DEEPSTREAM_DIR = Path(__file__).resolve().parent.parent / "deepstream"
 _TRACKER_LIB = "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"
 _TRACKER_CFG_STOCK = Path(
@@ -130,6 +132,10 @@ class _CameraProxy:
     """Stand-in for CameraWorker; exposes .error for /health and /control."""
     name: str
     error: Optional[str] = None
+    # Wall-clock of the last frame this camera produced; the watchdog flags a
+    # wedged RTSP feed as an error after STALL_TIMEOUT_S (one dead camera in a
+    # multi-cam batch otherwise goes unnoticed because the pipeline stays alive).
+    last_frame_at: float = field(default_factory=time.time)
 
 
 # ── Per-camera mutable inference state (accessed only from GLib probe thread) ──
@@ -141,16 +147,13 @@ class _StreamState:
     settings: Settings
     stabilizer: Optional[TrackStabilizer]
     vel: VelocityTracker = field(default_factory=VelocityTracker)
-    _undistorter: Optional[Undistorter] = field(default=None, repr=False)
     seq: int = 0
     confidence: float = 0.35
     allowed_labels: Optional[frozenset] = None
-
-    def undistorter_for(self, w: int, h: int) -> Undistorter:
-        u = self._undistorter
-        if u is None or u.size != (w, h):
-            u = self._undistorter = Undistorter(self.cam, w, h)
-        return u
+    # Last processed buffer PTS — used to drop muxer frame repeats so output never
+    # exceeds the camera's real frame rate. dup_skipped counts those drops.
+    last_pts: int = -1
+    dup_skipped: int = 0
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
@@ -189,6 +192,9 @@ class DeepStreamPipeline:
         self._gst = None
         self._loop = None
         self._loop_thread: Optional[threading.Thread] = None
+
+        # Holds generated nvdewarper config files; cleaned up on stop().
+        self._dewarp_tmp: Optional[tempfile.TemporaryDirectory] = None
 
         # Runtime-adjustable via /control; guarded by _lock because they are
         # written from FastAPI/uvicorn threads and read from the GLib probe thread.
@@ -238,6 +244,13 @@ class DeepStreamPipeline:
             )
 
         self._loop = GLib.MainLoop()
+        # Stall watchdog: fires in the GLib loop thread (same thread as the probe
+        # that writes last_frame_at, so no extra locking). Reset each camera's
+        # clock to "now" first so the RTSP preroll grace period starts here.
+        now = time.time()
+        for proxy in self.workers.values():
+            proxy.last_frame_at = now
+        GLib.timeout_add_seconds(2, self._watchdog)
         self._loop_thread = threading.Thread(
             target=self._loop.run, daemon=True, name="glib-main")
         self._loop_thread.start()
@@ -259,6 +272,9 @@ class DeepStreamPipeline:
                 pass
         if self._loop_thread is not None:
             self._loop_thread.join(timeout=3.0)
+        if self._dewarp_tmp is not None:
+            self._dewarp_tmp.cleanup()
+            self._dewarp_tmp = None
         self._log.info("DeepStream pipeline stopped")
 
     def set_confidence(self, value: float) -> None:
@@ -305,6 +321,79 @@ class DeepStreamPipeline:
     def camera_errors(self) -> Dict[str, str]:
         return {name: p.error for name, p in self.workers.items() if p.error}
 
+    def _watchdog(self) -> bool:
+        """Flag any camera that has produced no frames for STALL_TIMEOUT_S.
+
+        Runs on the GLib loop timer. Returns True to stay scheduled; stops once
+        the loop is torn down (GLib drops the source when the loop is gone).
+        """
+        if self._loop is None or not self._loop.is_running():
+            return False
+        now = time.time()
+        for proxy in self.workers.values():
+            stalled = now - proxy.last_frame_at
+            if stalled > _STALL_TIMEOUT_S:
+                # Don't clobber a hard GStreamer error already recorded on the bus.
+                if not proxy.error or proxy.error.startswith("no frames"):
+                    proxy.error = (f"no frames for {int(stalled)}s "
+                                   "(camera/RTSP stalled)")
+        return True
+
+    def _dewarper_config_for(self, cam: CameraConfig, w: int, h: int) -> Optional[str]:
+        """Return a path to an nvdewarper config for this camera, or None.
+
+        If the camera sets an explicit ``dewarper_config`` we use it verbatim.
+        Otherwise we synthesise a single-surface *perspective* (projection-type=3)
+        config from the same knobs the CPU Undistorter uses — focal length as a
+        fraction of width, a single radial term ``k1``, and an image-plane roll to
+        level the horizon. nvdewarper applies this on the GPU in NVMM before the
+        mux, so inference and geometry run on the corrected frame.
+
+        NOTE: the key names mirror NVIDIA's ``config_dewarper_perspective.txt``
+        sample. The coefficients are the existing *eyeballed* values — verify and
+        re-tune on the Jetson against a checkerboard; nvdewarper's distortion model
+        is not guaranteed bit-identical to OpenCV's. Returns None when undistort is
+        off so the caller leaves the camera branch uncorrected.
+        """
+        if not cam.undistort:
+            return None
+        if cam.dewarper_config:
+            p = Path(cam.dewarper_config)
+            if p.exists():
+                return str(p)
+            self._log.warning(
+                "camera %s: dewarper_config %s not found; generating one",
+                cam.name, cam.dewarper_config)
+
+        if self._dewarp_tmp is None:
+            self._dewarp_tmp = tempfile.TemporaryDirectory(prefix="vision-dewarp-")
+
+        focal = cam.undistort_f_factor * w
+        cfg = (
+            "# Auto-generated nvdewarper perspective config — re-tune on hardware.\n"
+            "# Keys follow NVIDIA's config_dewarper_perspective.txt; nvdewarper warns\n"
+            "# (non-fatally) on unrecognised keys, so keep this to known-valid ones.\n"
+            "[property]\n"
+            f"output-width={w}\n"
+            f"output-height={h}\n"
+            "num-batch-buffers=1\n"
+            "\n"
+            "[surface0]\n"
+            "projection-type=3\n"          # 3 = PerspectivePerspective
+            "surface-index=0\n"
+            f"width={w}\n"
+            f"height={h}\n"
+            # Optical center is assumed at the image centre by nvdewarper.
+            f"focal-length={focal:.3f}\n"
+            # Single radial term (k1); negative corrects barrel — matches Undistorter.
+            f"distortion={cam.undistort_k1:.5f};0.0;0.0;0.0;0.0\n"
+            # CCW image-plane rotation to level a tilted mount.
+            f"roll={cam.undistort_rotation_deg:.3f}\n"
+        )
+        path = Path(self._dewarp_tmp.name) / f"dewarper_{cam.name}.txt"
+        path.write_text(cfg)
+        return str(path)
+
     # ── GStreamer pipeline construction ───────────────────────────────────────
 
     def _build_pipeline(self, Gst):
@@ -312,7 +401,12 @@ class DeepStreamPipeline:
         pipeline = Gst.Pipeline.new("vision-ai-ds")
         cams = self.settings.cameras
         n = len(cams)
-        W = H = self.settings.detector.imgsz
+        # nvstreammux output = display + geometry resolution (native camera res).
+        # nvinfer rescales this to imgsz internally on the GPU for inference, and
+        # DeepStream maps detection coords back into this WxH space, so bboxes and
+        # horizon_y stay in native pixels. (Inference still happens at imgsz.)
+        W = self.settings.detector.mux_width
+        H = self.settings.detector.mux_height
 
         pgie_cfg = str(_DEEPSTREAM_DIR / "pgie_yolov8n.txt")
         tracker_cfg = _tracker_cfg_path()
@@ -331,11 +425,14 @@ class DeepStreamPipeline:
 
         # nvstreammux: batches all camera feeds into a single NVMM buffer.
         # batched-push-timeout (µs): how long to wait for a full batch before
-        # pushing a partial one — keeps latency bounded when cameras are slightly
-        # out of phase.
+        # pushing a partial one. Kept LONGER than the camera frame interval so the
+        # muxer waits for real frames rather than timing out early and repeating
+        # the last frame to fill the batch (which would push output above the input
+        # rate). The probe also drops any residual PTS repeat as a hard guard.
+        push_timeout_us = max(self.settings.detector.mux_batch_timeout_ms, 1) * 1000
         mux = make("nvstreammux", "mux",
                    batch_size=n, width=W, height=H,
-                   batched_push_timeout=40_000,  # 40 ms
+                   batched_push_timeout=push_timeout_us,
                    live_source=1,
                    enable_padding=1)  # letterbox: preserve aspect ratio with black bars
 
@@ -352,13 +449,34 @@ class DeepStreamPipeline:
             parser = make("h264parse", f"parse{i}")
             decoder = make("nvv4l2decoder", f"dec{i}")
 
-            # nvvideoconvert keeps the frame in NVMM; caps force NV12 to give
-            # nvstreammux a predictable input format.
+            # GPU lens correction (optional, in NVMM): nvdewarper straightens the
+            # frame before the mux, so inference + geometry see the corrected image
+            # (same as undistort_before_detect). It needs RGBA in/out; without it we
+            # stay on the cheaper NV12 path. If the element can't be created we fall
+            # back to no-dewarp here; note a *bad config* instead surfaces later as a
+            # bus error at PLAYING (nvdewarper validates the config at state change).
+            dewarp = None
+            dewarp_cfg = self._dewarper_config_for(cam, W, H)
+            if dewarp_cfg:
+                try:
+                    dewarp = make("nvdewarper", f"dewarp{i}",
+                                  config_file=dewarp_cfg,
+                                  source_id=i,
+                                  num_batch_buffers=1)
+                    self._log.info("camera %s: GPU dewarp via nvdewarper (%s)",
+                                   cam.name, dewarp_cfg)
+                except Exception as exc:
+                    dewarp = None
+                    self._log.warning(
+                        "camera %s: nvdewarper unavailable (%s); running uncorrected",
+                        cam.name, exc)
+
+            fmt = "RGBA" if dewarp is not None else "NV12"
             conv = make("nvvideoconvert", f"conv{i}")
             caps = make("capsfilter", f"caps{i}")
             caps.set_property(
                 "caps",
-                Gst.Caps.from_string("video/x-raw(memory:NVMM),format=NV12"),
+                Gst.Caps.from_string(f"video/x-raw(memory:NVMM),format={fmt}"),
             )
             # Queue between converter and mux: decouples camera timing so one
             # slow camera does not stall the other.
@@ -366,11 +484,10 @@ class DeepStreamPipeline:
             que.set_property("max-size-buffers", 4)
             que.set_property("leaky", 2)  # GST_QUEUE_LEAK_DOWNSTREAM — drop oldest
 
-            # Static links: depay → parse → decode → conv → caps → queue
-            for src_el, dst_el in [
-                (depay, parser), (parser, decoder),
-                (decoder, conv), (conv, caps), (caps, que),
-            ]:
+            # Static links: depay → parse → decode → conv → caps [→ dewarp] → queue
+            chain = [(depay, parser), (parser, decoder), (decoder, conv), (conv, caps)]
+            chain += [(caps, dewarp), (dewarp, que)] if dewarp is not None else [(caps, que)]
+            for src_el, dst_el in chain:
                 if not src_el.link(dst_el):
                     raise RuntimeError(
                         f"Failed to link {src_el.get_name()} → {dst_el.get_name()}"
@@ -399,10 +516,14 @@ class DeepStreamPipeline:
 
         # nvtracker: NvDCF GPU tracker. Assigns stable object_id (track ID) to
         # each detection across frames. Runs entirely on the GPU.
+        # Tracker works at its own internal resolution (GPU cost scales with it);
+        # keep it decoupled from the larger native display res. 640x384 matches
+        # the inference scale and keeps NvDCF cheap. Coords are still reported in
+        # the streammux WxH space, so this does not affect bbox geometry.
         tracker = make("nvtracker", "tracker",
                        ll_lib_file=_TRACKER_LIB,
                        ll_config_file=tracker_cfg,
-                       tracker_width=W,
+                       tracker_width=self.settings.detector.imgsz,
                        tracker_height=384,  # power-of-2 height for GPU efficiency
                        display_tracking_id=1)
 
@@ -537,8 +658,30 @@ class DeepStreamPipeline:
                     break
                 continue
 
+            # Respect the input frame rate as the ceiling: if the muxer handed us a
+            # frame whose PTS is not newer than the last one we processed for this
+            # camera, it is a repeat (the camera produced nothing new) — skip it so
+            # we never emit more events/MJPEG frames than the camera actually sent.
+            pts = frame_meta.buf_pts
+            if pts != _GST_CLOCK_TIME_NONE and pts <= state.last_pts:
+                state.dup_skipped += 1
+                if state.dup_skipped % 200 == 1:
+                    self._log.debug("camera %s: dropped %d muxer frame repeat(s)",
+                                    cam_name, state.dup_skipped)
+                try:
+                    l_frame = l_frame.next
+                except StopIteration:
+                    break
+                continue
+            if pts != _GST_CLOCK_TIME_NONE:
+                state.last_pts = pts
+
             state.seq += 1
-            W = H = self.settings.detector.imgsz
+            # Detection coords + display surface are in the streammux (native)
+            # resolution, NOT imgsz — see _build_pipeline. Geometry (bearing,
+            # range, horizon_y) and the bbox overlay all key off this WxH.
+            W = self.settings.detector.mux_width
+            H = self.settings.detector.mux_height
 
             # ── Extract raw detections from NvDsObjectMeta ─────────────────
             # NvDsObjectMeta contains the bbox, class_id, confidence, and
@@ -635,7 +778,10 @@ class DeepStreamPipeline:
                     self.frames.set(cam_name, jpeg)
 
             if cam_name in self.workers:
-                self.workers[cam_name].error = None
+                proxy = self.workers[cam_name]
+                proxy.last_frame_at = time.time()
+                if proxy.error and proxy.error.startswith("no frames"):
+                    proxy.error = None  # recovered from a stall
 
             try:
                 l_frame = l_frame.next

@@ -29,6 +29,15 @@ detector:
   confidence: 0.35
   track_floor: 0.10
   imgsz: 640
+  # Native camera/display/geometry resolution. nvstreammux outputs this size and
+  # nvinfer rescales it to imgsz on the GPU for inference. Detection bboxes and
+  # horizon_y below are in THIS coordinate space (these domes stream 1280x960).
+  mux_width: 1280
+  mux_height: 960
+  # Short muxer timeout = prompt pushes + better per-camera pipelining (full input
+  # rate). The probe's PTS guard drops any frame repeats, so this can't push output
+  # above the camera rate. Raise only if you see duplicate-frame churn in the logs.
+  mux_batch_timeout_ms: 40
   max_det: 20
   # Stabilizer is still applied in Python on top of nvtracker output
   stabilize: true
@@ -52,6 +61,7 @@ cameras:
     ptz: true
     undistort: true
     undistort_k1: -0.35
+    undistort_rotation_deg: -4.5    # level the bow dome's tilted mount (nvdewarper roll)
 
   - name: aft
     # Override with: VISION_CAMERA_AFT_URL=rtsp://user:pass@host/stream
@@ -63,6 +73,7 @@ cameras:
     ptz: true
     undistort: true
     undistort_k1: -0.35
+    undistort_rotation_deg: 1.0     # level the stern dome's tilted mount (nvdewarper roll)
 
 server:
   target_fps: 12.0
