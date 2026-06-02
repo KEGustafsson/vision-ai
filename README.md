@@ -54,7 +54,7 @@ drift.
 
 | Component | Path | Stack |
 |-----------|------|-------|
-| Vision service | [`vision-service/`](vision-service/) | Python, FastAPI, Ultralytics YOLOv8, OpenCV, TensorRT (Jetson) |
+| Vision service | [`vision-service/`](vision-service/) | Python, FastAPI, Ultralytics YOLOv8, OpenCV, TensorRT or DeepStream (Jetson) |
 | SignalK plugin | [`signalk-plugin/`](signalk-plugin/) | TypeScript, ws, ajv |
 
 ## Quick start (no GPU, no cameras)
@@ -85,6 +85,20 @@ up with Docker:
 docker compose -f docker-compose.yml -f docker-compose.mock.yml up
 # SignalK:  http://localhost:3000     Captain view: http://localhost:3000/signalk-vision-ai/
 ```
+
+## GPU backends (Jetson)
+
+On the Jetson the detector runs on the GPU via one of two interchangeable
+backends, selected by `VISION_MODE` (both emit the same `DetectionEvent`):
+
+- **`jetson`** — Ultralytics YOLOv8 on **TensorRT**; decode in a GStreamer
+  pipeline, inference + ByteTrack in Python (`docker-compose.jetson.yml`).
+- **`deepstream`** — a fully GPU-resident **NVIDIA DeepStream** pipeline:
+  zero-copy decode → inference → tracking in NVMM (nvv4l2decoder → nvstreammux →
+  nvinfer → nvtracker), with optional GPU lens correction (nvdewarper)
+  (`docker-compose.deepstream.yml`).
+
+See [Jetson setup & deployment](docs/jetson-setup.md).
 
 ## Documentation
 

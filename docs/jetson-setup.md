@@ -52,6 +52,47 @@ SignalK's authentication. Point the plugin's `containerUrl` at it.
 the SignalK server as a service (its standard systemd unit / Docker restart
 policy) and enable the plugin in the SignalK admin UI.
 
+## 6. DeepStream GPU pipeline (alternative backend)
+
+`VISION_MODE=deepstream` runs a fully GPU-resident pipeline instead of the
+Python/TensorRT one: frames stay in NVMM from decode through inference and
+tracking — `nvv4l2decoder → [nvdewarper] → nvstreammux → nvinfer (TRT) →
+nvtracker (NvDCF)` — and only the displayed frame is copied to the CPU (after
+inference) for MJPEG annotation. It exposes the same API and `DetectionEvent`
+contract as the default backend. Built from `Dockerfile.deepstream`; needs
+JetPack 6 + **DeepStream 7.x** on the host.
+
+```bash
+# 1. Build the deepstream-yolo nvinfer parser ON THE HOST (the DS samples image
+#    has no nvcc). Needs host nvcc + the DS 7.1 SDK at the same versions.
+vision-service/scripts/build_yolo_parser.sh
+#    → vision-service/deepstream/libnvdsinfer_custom_impl_Yolo.so
+
+# 2. Export a raw (no end-to-end NMS) YOLOv8n ONNX — the build's export stage
+#    does this automatically; see config/deepstream.yaml for the manual command.
+
+# 3. Run (nvinfer auto-builds the TRT engine into the bind-mounted models/ on
+#    first start; the engine is then baked/persisted).
+export VISION_CAMERA_FORWARD_URL="rtsp://user:pass@192.168.1.10:554/stream"
+export VISION_CAMERA_AFT_URL="rtsp://user:pass@192.168.1.11:554/stream"
+docker compose -f docker-compose.yml -f docker-compose.deepstream.yml up -d
+```
+
+Tuning lives in `config/deepstream.yaml` (bind-mounted, takes effect on restart):
+
+- **`detector.mux_width` / `mux_height`** — nvstreammux output = display +
+  geometry resolution (native camera res, default `1280x960`). nvinfer rescales
+  this to `imgsz` internally on the GPU, so detection still runs at `imgsz` while
+  bboxes and `horizon_y` stay in native pixels. Set these to your stream size.
+- **GPU lens correction** — when a camera sets `undistort: true`, an `nvdewarper`
+  stage straightens barrel (`undistort_k1`) + rotation (`undistort_rotation_deg`)
+  in NVMM before inference. A starter config is generated from those knobs;
+  override with `camera.dewarper_config` once tuned on the hardware.
+- **`detector.mux_batch_timeout_ms`** — nvstreammux batch timeout (default 40 ms).
+  Kept short so both cameras pipeline at full input rate; a per-camera PTS guard
+  in the probe drops any muxer frame repeats so output never exceeds the camera's
+  real frame rate.
+
 ## Troubleshooting
 
 - **OpenCV has no GStreamer** → use the Ultralytics Jetson base image; do not
@@ -61,3 +102,12 @@ policy) and enable the plugin in the SignalK admin UI.
 - **Low FPS** → confirm Super mode (`nvpmodel`/`jetson_clocks`), use the
   `.engine` (not `.pt`), keep `imgsz: 640`, and let context control limit the
   inactive camera.
+- **DeepStream: `nvbufsurface: Unable to allocate HW buffer` (error 12)** →
+  NVMM is fragmented/saturated (`tegrastats` shows a tiny `lfb`). Stop other NVMM
+  tenants (e.g. GStreamer overlay containers) to defragment, start vision so it
+  allocates its pools, then restart the others — the running pipeline survives
+  them returning. Same condition can stall the first-run TRT engine build.
+- **DeepStream: empty target list / video** in the Captain view after switching
+  backend → the SignalK plugin drops events failing schema validation; ensure its
+  installed `schema/detection-event.schema.json` includes `deepstream` in the
+  `Backend` enum and restart the plugin.

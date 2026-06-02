@@ -31,6 +31,32 @@ camera → FrameSource.read() → Detector.detect_and_track() → RawTrack[]
        → EventBuffer (→ WebSocket)   and   annotate() → LatestFrame (→ MJPEG)
 ```
 
+### Inference backends
+
+The frame-source + detector half of that flow has interchangeable backends,
+chosen by `VISION_MODE`/`detector.backend`; all of them emit the identical
+`DetectionEvent`, so the plugin is backend-agnostic:
+
+- **`mock`** — synthetic frames + deterministic detector (laptop dev/demo).
+- **`torch-cpu` / `torch-cuda`** — Ultralytics YOLOv8 in PyTorch.
+- **`jetson` (TensorRT)** — YOLOv8 `.engine` via Ultralytics; GStreamer HW decode,
+  inference + ByteTrack in Python.
+- **`deepstream`** — a fully GPU-resident NVIDIA DeepStream pipeline
+  (`pipeline_deepstream.py`). Frames stay in NVMM end to end:
+
+  ```text
+  rtspsrc → nvv4l2decoder → [nvdewarper] → nvstreammux → nvinfer (TRT)
+          → nvtracker (NvDCF) → pad probe → annotate → LatestFrame
+  ```
+
+  Both cameras are batched by `nvstreammux`; inference + GPU tracking run on the
+  batch in one pass. `nvstreammux` outputs the native camera resolution (display
+  + geometry coords) and `nvinfer` rescales to `imgsz` internally on the GPU.
+  Lens correction (barrel + rotation) is applied on the GPU by `nvdewarper`
+  before inference. Only the displayed frame is copied to the CPU, after
+  inference, for MJPEG annotation. A per-camera PTS guard in the probe drops
+  `nvstreammux` frame repeats so output never exceeds the camera's input rate.
+
 On the plugin side, each `DetectionEvent` is:
 
 ```text

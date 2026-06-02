@@ -22,9 +22,9 @@ that schema, so the two sides cannot silently drift.
   "camera": "forward",                 // "forward" | "aft"
   "timestamp": "2026-05-29T12:00:00.123Z",
   "frame_seq": 48213,
-  "frame_size": { "w": 1280, "h": 720 },
+  "frame_size": { "w": 1280, "h": 720 },  // processed-frame px (bbox/horizon_y space)
   "horizon_y": 324,                    // px row of the horizon; null if uncalibrated
-  "inference": { "backend": "mock", "latency_ms": 4.2 },
+  "inference": { "backend": "mock", "latency_ms": 4.2 },  // see backend values below
   "calibration_status": "ok",          // ok | uncalibrated | auto
   "targets": [
     {
@@ -50,6 +50,12 @@ that schema, so the two sides cannot silently drift.
 
 ## Field notes
 
+- **`inference.backend`** is one of `mock`, `torch-cpu`, `torch-cuda`, `tensorrt`,
+  or `deepstream` (the GPU NVMM pipeline). All emit this same schema.
+- **`frame_size`** is the resolution everything else (bbox, `horizon_y`) is
+  expressed in — the processed frame, not necessarily the raw sensor. For the
+  `deepstream` backend this is `nvstreammux`'s output (`detector.mux_width` ×
+  `mux_height`), and inference runs at `imgsz` independently of it.
 - **`relative_bearing_deg`** already includes the camera's mounting offset
   (forward = 0°, aft = 180°), so the plugin only adds own heading.
 - **`range_method`** lets the plugin treat `horizon` ranges (more reliable) and
