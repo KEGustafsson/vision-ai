@@ -128,6 +128,13 @@ Guidance:
 - The agent's result is advisory; **you remain responsible** for verifying
   claims against the actual code before acting on them.
 
+Throughout this guide, *"ask the user/maintainer"* means pause and surface the
+decision to a human before proceeding. Agents with a structured prompt
+mechanism (e.g. Claude's `AskUserQuestion`) should use it; otherwise stop and
+ask in whatever channel the workflow provides (a PR comment, chat, or commit
+message). The principle is the same regardless of tooling: don't guess on
+something that is the maintainer's call.
+
 Available skills worth invoking at the right moment: `/code-review` and
 `/review` (review the diff / a PR), `/security-review`, `/simplify` (quality
 cleanup of changed code), `/verify` and `/run` (drive the app to confirm a
@@ -191,7 +198,12 @@ When you change anything that crosses the process boundary:
    ```bash
    cd vision-service && python scripts/export_schema.py
    ```
-   This writes `signalk-plugin/schema/detection-event.schema.json`.
+   This writes `signalk-plugin/schema/detection-event.schema.json`. Confirm it
+   is in sync (this is exactly what CI runs after regenerating — a non-empty
+   diff fails the build):
+   ```bash
+   git diff --exit-code signalk-plugin/schema/detection-event.schema.json
+   ```
 3. Update the TS side that consumes it (`signalk-plugin/src/types.ts` and any
    ingest/enrich logic).
 4. Update **`docs/event-schema.md`** to match.
@@ -255,8 +267,15 @@ Whether reviewing your own diff before commit or a PR, work through these.
   camera switch)?
 - Are units explicit and consistent? **SignalK is SI** — radians for
   angles/bearings, metres for range, m/s for speed, Kelvin where applicable,
-  epoch/ISO for time. Bearing conventions (relative vs true, 0–2π) are a classic
+  epoch/ISO for time. Runtime math must use SI (radians/metres); **degrees are
+  allowed only at the edges** — config, UI, and docs — and must be converted at
+  the boundary. Bearing conventions (relative vs true, 0–2π) are a classic
   bug source — check them in `geo.ts` / `cpa.ts` / geometry.
+- **Time/freshness:** detections, nav, and AIS all carry timestamps that drive
+  CPA/TCPA and alerting. Does the change reject or expire **stale** data
+  (old detections, stale own-ship fix/heading, lapsed AIS) rather than fusing it
+  as current? Stale-but-trusted data is a safety bug — a missed expiry can place
+  a target where it no longer is. Check clock assumptions and max-age handling.
 
 **Contract integrity**
 - If the boundary changed, is the schema regenerated, committed, and are
@@ -293,8 +312,10 @@ rather than guessing (see §9).
 - Push with `git push -u origin <branch>`; retry only on **network** errors
   with exponential backoff (2s, 4s, 8s, 16s), up to 4 times.
 - **Do not open a PR unless the user explicitly asks.**
-- Use the GitHub MCP tools (`mcp__github__*`) for all GitHub interaction — no
-  `gh` CLI here. Scope is limited to the configured repository.
+- In agent environments where GitHub MCP tools (`mcp__github__*`) are available,
+  prefer them over shelling out to the `gh` CLI for GitHub interaction (some
+  environments have no `gh` at all), and respect the configured repository
+  scope. Humans and other agents should use whatever GitHub access they have.
 - Don't put internal model identifiers or this guidance's meta-instructions in
   commit messages, PR text, or code comments.
 
