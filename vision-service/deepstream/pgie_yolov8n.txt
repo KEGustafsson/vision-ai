@@ -27,22 +27,30 @@
 #   cp nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so \
 #       /path/to/vision-ai/vision-service/deepstream/
 
+# NOTE: the keys below mirror the official deepstream-yolo YOLOv8 sample
+# (config_infer_primary_yoloV8.txt) so they stay in lockstep with the parser
+# (.so) and the ONNX that Dockerfile.deepstream builds from the SAME repo.
 [property]
 gpu-id=0
+
+# 0=RGB (YOLOv8 expects RGB, channels-first)
+model-color-format=0
 
 # 1/255 — match Ultralytics normalisation
 net-scale-factor=0.0039215697906911373
 
-# Path relative to this config file's directory
-model-engine-file=../models/yolov8n_ds.engine
-
-# If the .engine file does not exist, nvinfer will build it from the ONNX.
-# Uncomment and point to the exported ONNX if you want auto-build:
-# onnx-file=yolov8n_raw.onnx
+# ONNX (baked in this dir) → nvinfer auto-builds the TRT engine on first run and
+# writes it to ../models (bind-mounted, so the engine persists across recreates).
+# Both paths are relative to THIS config file's directory.
+onnx-file=yolov8n_ds.onnx
+# Prebuilt engine baked into this dir (deepstream-yolo names it <onnx>_b<N>_gpu0_fp16
+# when nvinfer builds from the ONNX). Deserialised on startup — no ~7.5-min rebuild.
+# Delete it (and rebuild the image) to force a fresh build, e.g. after a TRT/HW change.
+model-engine-file=yolov8n_ds.onnx_b2_gpu0_fp16.engine
 
 labelfile-path=labels_coco.txt
 
-# Match number of cameras in deepstream.yaml
+# Match the number of cameras in deepstream.yaml (nvstreammux batch).
 batch-size=2
 
 # Unique ID used by nvtracker to correlate inference with stream metadata
@@ -57,31 +65,27 @@ num-detected-classes=80
 # Run inference on every frame (interval=0); set to 1 to infer every 2nd frame
 interval=0
 
-# Zero mean subtraction (YOLOv8 uses only scale, no per-channel means)
-gie-std-means=0;0;0;0
-
-# CHW format, 640x640 input
-input-dims=3;640;640;0
-
 # 0=detector  1=classifier  2=segmentation
 network-type=0
 
-# cluster-mode=4 uses NMS internally — correct for raw YOLOv8 output (no built-in NMS)
-cluster-mode=4
+# cluster-mode=2 = NMS, the mode the deepstream-yolo YOLOv8 parser is written for.
+cluster-mode=2
 
-# deepstream-yolo parser for YOLOv8 detection output format
-parse-bbox-func-name=NvDsInferParseCustomYoloV8
+# deepstream-yolo parser entrypoint. This symbol name must match the built
+# libnvdsinfer_custom_impl_Yolo.so (current marcoslucianops repo exports
+# NvDsInferParseYolo; older revisions used NvDsInferParseCustomYoloV8).
+parse-bbox-func-name=NvDsInferParseYolo
 custom-lib-path=libnvdsinfer_custom_impl_Yolo.so
 
-# Output tensor name from the ONNX export (check with: polygraphy inspect model yolov8n.onnx)
-output-blob-names=output0
+# input-dims / output-blob-names are taken from the ONNX — do not pin them here.
 
-# Preserve aspect ratio by letterboxing — prevents horizontal FoV distortion
+# Preserve aspect ratio by letterboxing — prevents horizontal FoV distortion.
 maintain-aspect-ratio=1
 symmetric-padding=1
 
 [class-attrs-all]
-# Minimum confidence for nvinfer to pass a bbox to nvtracker.
-# Keep low here; the pipeline's stabilizer and confidence gate filter downstream.
+# Minimum confidence for nvinfer to pass a bbox to nvtracker. Keep low here;
+# the pipeline's stabilizer and confidence gate filter downstream.
 pre-cluster-threshold=0.1
 nms-iou-threshold=0.45
+topk=300

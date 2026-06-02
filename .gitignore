@@ -15,6 +15,10 @@ dist/
 vision-service/models/*.pt
 vision-service/models/*.engine
 vision-service/models/*.onnx
+# DeepStream TensorRT engine: large, hardware/TRT-specific, auto-built by nvinfer
+# on first run (and baked into the image at build time). The parser .so in this
+# dir IS committed — it's a required build input (regenerate via build_yolo_parser.sh).
+vision-service/deepstream/*.engine
 vision-service/samples/*.mp4
 vision-service/samples/*.mkv
 

@@ -406,24 +406,39 @@ class DeepStreamPipeline:
                        tracker_height=384,  # power-of-2 height for GPU efficiency
                        display_tracking_id=1)
 
-        # fakesink: swallows frames after tracking; we consume everything via
-        # the probe on the tracker's src pad.
+        # Display conversion: the probe extracts pixels with
+        # pyds.get_nvds_buf_surface(), which requires an RGBA surface. The
+        # tracker emits NV12, so insert nvvideoconvert → RGBA (kept in NVMM;
+        # get_nvds_buf_surface maps it to the CPU on Jetson). Without this stage
+        # the surface read fails and the MJPEG/snapshot frames come out blank.
+        dispconv = make("nvvideoconvert", "dispconv")
+        dispcaps = make("capsfilter", "dispcaps")
+        dispcaps.set_property(
+            "caps",
+            Gst.Caps.from_string("video/x-raw(memory:NVMM),format=RGBA"),
+        )
+
+        # fakesink: swallows frames after conversion; we consume everything via
+        # the probe on the converter's src pad.
         sink = make("fakesink", "fsink")
         sink.set_property("async", False)
         sink.set_property("sync", False)
 
-        # Main inference chain: mux → pgie → tracker → sink
-        for src_el, dst_el in [(mux, pgie), (pgie, tracker), (tracker, sink)]:
+        # Main chain: mux → pgie → tracker → dispconv → dispcaps(RGBA) → sink
+        for src_el, dst_el in [
+            (mux, pgie), (pgie, tracker),
+            (tracker, dispconv), (dispconv, dispcaps), (dispcaps, sink),
+        ]:
             if not src_el.link(dst_el):
                 raise RuntimeError(
                     f"Failed to link {src_el.get_name()} → {dst_el.get_name()}"
                 )
 
-        # Probe on nvtracker src pad: fires after tracking, before fakesink.
-        # This is where we read NvDsObjectMeta and optionally extract frame pixels
+        # Probe on the RGBA capsfilter src pad: fires after tracking + conversion.
+        # This is where we read NvDsObjectMeta and extract the RGBA frame pixels
         # for MJPEG annotation.
-        tracker_src = tracker.get_static_pad("src")
-        tracker_src.add_probe(
+        probe_pad = dispcaps.get_static_pad("src")
+        probe_pad.add_probe(
             Gst.PadProbeType.BUFFER,
             self._probe_callback,
             None,
@@ -585,6 +600,15 @@ class DeepStreamPipeline:
                 disp_img = frame_rgba[:, :, :3][:, :, ::-1].copy()
             except Exception as exc:
                 self._log.debug("display frame extraction failed (%s): %s", cam_name, exc)
+            finally:
+                # Release the surface mapping (Jetson leaks NvBufSurface maps across
+                # frames otherwise); no-op if this pyds build lacks the symbol.
+                _unmap = getattr(pyds, "unmap_nvds_buf_surface", None)
+                if _unmap is not None:
+                    try:
+                        _unmap(hash(gst_buf), frame_meta.batch_id)
+                    except Exception:
+                        pass
 
             # ── Stabilizer (Python, per-camera) ────────────────────────────
             # NvDCF already provides track IDs; the Python stabilizer adds
