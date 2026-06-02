@@ -23,9 +23,14 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "Cloning $REPO @ $REF ..."
-git clone --depth 1 --branch "$REF" "$REPO" "$WORK/ds-yolo" 2>/dev/null \
-    || git clone --depth 1 "$REPO" "$WORK/ds-yolo"  # fallback: some refs aren't branchable
-(cd "$WORK/ds-yolo" && git fetch --depth 1 origin "$REF" && git checkout FETCH_HEAD) 2>/dev/null || true
+git clone --depth 1 --branch "$REF" "$REPO" "$WORK/ds-yolo" 2>/dev/null || {
+    echo "Branch/tag clone failed; trying shallow clone + fetch ..."
+    git clone --depth 1 "$REPO" "$WORK/ds-yolo"
+    (cd "$WORK/ds-yolo" && git fetch --depth 1 origin "$REF" && git checkout FETCH_HEAD) || {
+        echo "ERROR: Could not checkout pinned ref '$REF'" >&2
+        exit 1
+    }
+}
 
 echo "Building parser (CUDA_VER=$CUDA_VER) ..."
 PATH="/usr/local/cuda/bin:$PATH" CUDA_VER="$CUDA_VER" \
