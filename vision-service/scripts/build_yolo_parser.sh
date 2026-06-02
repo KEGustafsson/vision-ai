@@ -14,13 +14,18 @@
 set -euo pipefail
 
 REPO="${DS_YOLO_REPO:-https://github.com/marcoslucianops/DeepStream-Yolo}"
+# Pin to a known-good commit; override with DS_YOLO_REF=<tag-or-sha> to upgrade.
+REF="${DS_YOLO_REF:-68769f3}"
+EXPECTED_SYMBOL="${EXPECTED_SYMBOL:-NvDsInferParseYolo}"
 CUDA_VER="${CUDA_VER:-$(/usr/local/cuda/bin/nvcc --version | grep -oP 'V\K[0-9]+\.[0-9]+')}"
 DEST="$(cd "$(dirname "$0")/.." && pwd)/deepstream"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
-echo "Cloning $REPO ..."
-git clone --depth 1 "$REPO" "$WORK/ds-yolo"
+echo "Cloning $REPO @ $REF ..."
+git clone --depth 1 --branch "$REF" "$REPO" "$WORK/ds-yolo" 2>/dev/null \
+    || git clone --depth 1 "$REPO" "$WORK/ds-yolo"  # fallback: some refs aren't branchable
+(cd "$WORK/ds-yolo" && git fetch --depth 1 origin "$REF" && git checkout FETCH_HEAD) 2>/dev/null || true
 
 echo "Building parser (CUDA_VER=$CUDA_VER) ..."
 PATH="/usr/local/cuda/bin:$PATH" CUDA_VER="$CUDA_VER" \
@@ -28,5 +33,11 @@ PATH="/usr/local/cuda/bin:$PATH" CUDA_VER="$CUDA_VER" \
 
 cp "$WORK/ds-yolo/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so" "$DEST/"
 echo "Installed -> $DEST/libnvdsinfer_custom_impl_Yolo.so"
-echo "Exported parser symbols (set parse-bbox-func-name in pgie_yolov8n.txt to match):"
-nm -D "$DEST/libnvdsinfer_custom_impl_Yolo.so" | grep -E ' T .*NvDsInferParse' || true
+
+nm -D "$DEST/libnvdsinfer_custom_impl_Yolo.so" \
+    | grep -qE " T .*${EXPECTED_SYMBOL}$" || {
+    echo "ERROR: expected parser symbol '${EXPECTED_SYMBOL}' not found in .so" >&2
+    echo "Check DS_YOLO_REF or update parse-bbox-func-name in pgie_yolov8n.txt" >&2
+    exit 1
+}
+echo "Parser symbol '${EXPECTED_SYMBOL}' verified."

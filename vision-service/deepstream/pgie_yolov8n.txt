@@ -14,7 +14,7 @@
 #   "
 #   # Then build TRT engine from the ONNX (DeepStream does this on first run
 #   # if model-engine-file does not exist, using the engine-create-func):
-#   cp models/yolov8n.onnx deepstream/yolov8n_raw.onnx
+#   cp models/yolov8n.onnx deepstream/yolov8n_ds.onnx
 #   # OR use trtexec manually and set model-engine-file accordingly.
 #
 # CUSTOM PARSER (deepstream-yolo)

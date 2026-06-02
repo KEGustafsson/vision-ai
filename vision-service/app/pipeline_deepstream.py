@@ -337,7 +337,7 @@ class DeepStreamPipeline:
                    batch_size=n, width=W, height=H,
                    batched_push_timeout=40_000,  # 40 ms
                    live_source=1,
-                   enable_padding=0)  # letterbox, not black-pad
+                   enable_padding=1)  # letterbox: preserve aspect ratio with black bars
 
         for i, cam in enumerate(cams):
             if not cam.url:
