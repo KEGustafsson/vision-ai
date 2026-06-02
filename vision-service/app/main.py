@@ -16,6 +16,14 @@ from .ptz import PtzManager
 from .util import setup_logging
 
 
+def _create_pipeline(settings: Settings, log):
+    """Select Pipeline or DeepStreamPipeline based on the configured backend."""
+    if settings.detector.backend == "deepstream":
+        from .pipeline_deepstream import DeepStreamPipeline
+        return DeepStreamPipeline(settings, log)
+    return Pipeline(settings, log)
+
+
 def create_app(settings: Settings | None = None) -> FastAPI:
     log = setup_logging()
     settings = settings or load_settings()
@@ -39,7 +47,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         allow_methods=["*"], allow_headers=["*"],
     )
 
-    pipeline = Pipeline(settings, log)
+    pipeline = _create_pipeline(settings, log)
     app.state.pipeline = pipeline
     app.state.ptz = PtzManager(settings)
 

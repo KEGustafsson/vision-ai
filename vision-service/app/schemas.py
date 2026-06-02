@@ -30,6 +30,7 @@ class Backend(str, Enum):
     torch_cuda = "torch-cuda"
     torch_cpu = "torch-cpu"
     mock = "mock"
+    deepstream = "deepstream"  # NVIDIA DeepStream: nvinfer + nvtracker GPU pipeline
 
 
 class RangeMethod(str, Enum):

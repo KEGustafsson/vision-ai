@@ -1,0 +1,56 @@
+################################################################################
+# NvMultiObjectTracker (NvDCF) configuration for vision-ai DeepStream pipeline.
+#
+# Performance-tuned for 2 cameras at 12 FPS on Jetson Orin Nano.
+# Reference: /opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/
+#            config_tracker_NvDCF_perf.yml
+#
+# If this file is not recognised by your DeepStream version, substitute the
+# path to the stock performance preset:
+#   ll-config-file=/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/config_tracker_NvDCF_perf.yml
+################################################################################
+%YAML:1.0
+
+BaseConfig:
+  # Minimum detector confidence to consider a bbox for tracking.
+  # Mirrors pgie pre-cluster-threshold so nothing is lost at handoff.
+  minDetectorConfidence: 0.1
+
+TargetManagement:
+  # Enable bbox unclipping when a target is partially outside the frame.
+  enableBBoxUnClipping: 1
+  # IOU threshold: if a new detection overlaps an existing target more than
+  # this, it won't create a duplicate target.
+  minIouDiff4NewTarget: 0.5
+  # Drop a target whose tracker confidence falls below this.
+  minTrackerConfidence: 0.2
+  # A new target must appear this many frames before it is confirmed.
+  # Aligned with stabilizer.stabilize_confirm_frames (default 3).
+  probationAge: 3
+  # Shadow-track age: how many frames to keep a lost target alive.
+  # Aligned with stabilizer.stabilize_max_coast_frames (default 8).
+  maxShadowTrackingAge: 10
+  # Stop tracking a target at this age if it never matched a detector bbox.
+  earlyTerminationAge: 1
+
+TrajectoryManagement:
+  useUncoveredAreaDetection: 0
+
+DCF:
+  # Max simultaneous tracked targets per camera stream.
+  maxTargetsPerStream: 20
+  # Filter learning rate (lower = smoother but slower to adapt).
+  filterLr: 0.15
+  filterChannelSize: 1
+  gaussianSigma: 1.0
+  # Feature map size level: 1=smallest/fastest (good for 12 FPS on Orin Nano).
+  featureImgSizeLevel: 1
+  UpdateWithGoodDetectionOnly: 0
+  # Search region padding: larger = can track faster-moving objects.
+  SearchRegionPaddingScale: 1
+  minDetectorConfidence: 0.1
+  minTrackerConfidence: 0.2
+  # Colour names feature improves discrimination between similar targets.
+  useColorNames: 1
+  useHog: 0
+  useHighPrecisionFeature: 0
