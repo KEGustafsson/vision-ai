@@ -37,6 +37,9 @@ geometry:
     person: 0.5
     buoy: 0.8
     vessel: 4.0
+    kayak: 1.5
+    debris: 0.5
+    log: 0.3
 
 server:
   host: 0.0.0.0

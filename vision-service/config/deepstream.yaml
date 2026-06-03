@@ -49,6 +49,17 @@ detector:
   max_area_frac: 0.4
   own_hull_min_range_m: 8.0
   contained_frac: 0.8
+  # Which detection model to run. Exactly ONE model is active at a time — the
+  # two are never run together. Switch this value and restart to change models:
+  #   coco          -> COCO YOLOv8n, 80 classes (person/vessel/buoy/...),
+  #                    uses deepstream/pgie_yolov8n.txt + yolov8n_ds.onnx
+  #   forward-watch -> forward-watch marine model, 6 classes
+  #                    (ship/boat/debris/buoy/kayak/log),
+  #                    uses deepstream/pgie_forward_watch.txt + forward-watch.onnx
+  # For forward-watch, download the ONNX from
+  #   https://github.com/SkipperDon/signalk-forward-watch/blob/main/models/forward-watch.onnx
+  # and place it at vision-service/deepstream/forward-watch.onnx
+  model: coco
 
 cameras:
   - name: forward

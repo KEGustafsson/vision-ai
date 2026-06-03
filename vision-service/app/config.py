@@ -138,6 +138,13 @@ class DetectorConfig(BaseModel):
     batch_cameras: bool = False
     # How long a camera waits to rendezvous with the other before inferring solo.
     batch_wait_ms: int = 20
+    # DeepStream only: which detection model to run. Exactly ONE model runs at a
+    # time (never both). Selects both the nvinfer config and the class map:
+    #   "coco"          -> COCO YOLOv8n, 80 classes (person/vessel/buoy/...)
+    #   "forward-watch" -> forward-watch marine model, 6 classes
+    #                      (ship/boat/debris/buoy/kayak/log)
+    # See app/detector/classmap.py (MODEL_PGIE_CONFIG) for the registry.
+    model: str = "coco"
 
 
 class ServerConfig(BaseModel):
@@ -197,6 +204,9 @@ def _apply_env(raw: dict) -> dict:
         det["model_pt"] = env["VISION_MODEL_PT"]
     if "VISION_MODEL_ENGINE" in env:
         det["model_engine"] = env["VISION_MODEL_ENGINE"]
+    # DeepStream model selector (coco | forward-watch); see DetectorConfig.model.
+    if "VISION_DETECTOR_MODEL" in env:
+        det["model"] = env["VISION_DETECTOR_MODEL"]
     # Per-camera URL overrides
     cams = {c["name"]: c for c in raw.get("cameras", [])}
     if "VISION_CAMERA_FORWARD_URL" in env and "forward" in cams:

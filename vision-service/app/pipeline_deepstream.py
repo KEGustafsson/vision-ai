@@ -69,7 +69,9 @@ from typing import Dict, List, Optional
 from .api.overlay import annotate, encode_jpeg
 from .config import CameraConfig, Settings
 from .detector.base import RawTrack
-from .detector.classmap import is_person_in_water, label_for
+from .detector.classmap import (
+    MODEL_PGIE_CONFIG, is_person_in_water, label_for_model,
+)
 from .detector.stabilizer import TrackStabilizer
 from .detector.tracker import VelocityTracker
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
@@ -255,8 +257,8 @@ class DeepStreamPipeline:
             target=self._loop.run, daemon=True, name="glib-main")
         self._loop_thread.start()
         self._log.info(
-            "DeepStream pipeline PLAYING: %d camera(s) → nvinfer → nvtracker",
-            len(self.settings.cameras),
+            "DeepStream pipeline PLAYING: %d camera(s) → nvinfer(%s) → nvtracker",
+            len(self.settings.cameras), self.settings.detector.model,
         )
 
     def stop(self) -> None:
@@ -408,7 +410,19 @@ class DeepStreamPipeline:
         W = self.settings.detector.mux_width
         H = self.settings.detector.mux_height
 
-        pgie_cfg = str(_DEEPSTREAM_DIR / "pgie_yolov8n.txt")
+        # Exactly one detection model runs at a time, selected by detector.model.
+        model = self.settings.detector.model
+        cfg_name = MODEL_PGIE_CONFIG.get(model)
+        if cfg_name is None:
+            raise ValueError(
+                f"detector.model={model!r} is not supported. "
+                f"Choose one of: {sorted(MODEL_PGIE_CONFIG)}."
+            )
+        pgie_cfg = str(_DEEPSTREAM_DIR / cfg_name)
+        if not Path(pgie_cfg).exists():
+            raise FileNotFoundError(
+                f"nvinfer config for model {model!r} not found at {pgie_cfg}."
+            )
         tracker_cfg = _tracker_cfg_path()
 
         def make(factory: str, name: str, **props):
@@ -510,9 +524,11 @@ class DeepStreamPipeline:
 
         # nvinfer: TensorRT inference. Reads the batched NVMM buffer directly —
         # no host-side copy. Uses custom deepstream-yolo parser for YOLOv8 output.
+        # The config (and thus the model) is selected by detector.model above.
         pgie = make("nvinfer", "pgie",
                     config_file_path=pgie_cfg,
                     batch_size=n)
+        self._log.info("nvinfer model=%s config=%s", model, cfg_name)
 
         # nvtracker: NvDCF GPU tracker. Assigns stable object_id (track ID) to
         # each detection across frames. Runs entirely on the GPU.
@@ -629,6 +645,9 @@ class DeepStreamPipeline:
         # Sentinel for untracked objects (pyds.UNTRACKED_OBJECT_ID on DS 7.x)
         untracked = getattr(pyds, "UNTRACKED_OBJECT_ID", 0xFFFF_FFFF_FFFF_FFFF)
 
+        # Active model selects the class map (only one model runs at a time).
+        model = self.settings.detector.model
+
         with self._lock:
             conf_thresh = self._confidence
             allowed = self._allowed_labels
@@ -702,7 +721,7 @@ class DeepStreamPipeline:
                 conf = float(obj.confidence)
                 tid_raw = int(obj.object_id)
                 tid = None if tid_raw == untracked else tid_raw
-                lbl = label_for(cls_id)
+                lbl, cls_id = label_for_model(model, cls_id)
                 vx = vy = 0.0
                 age = 0
 

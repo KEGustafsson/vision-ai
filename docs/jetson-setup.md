@@ -93,6 +93,29 @@ Tuning lives in `config/deepstream.yaml` (bind-mounted, takes effect on restart)
   in the probe drops any muxer frame repeats so output never exceeds the camera's
   real frame rate.
 
+## Detection model selection
+
+Exactly **one** detection model runs at a time — the two are never active
+together. Pick it with `detector.model` in `config/deepstream.yaml` (or the
+`VISION_DETECTOR_MODEL` env var) and restart:
+
+| `detector.model` | nvinfer config | classes |
+|---|---|---|
+| `coco` (default) | `deepstream/pgie_yolov8n.txt` | 80 COCO (person, vessel, buoy, …) |
+| `forward-watch` | `deepstream/pgie_forward_watch.txt` | 6 marine (ship, boat, debris, buoy, kayak, log) |
+
+The two models share the same YOLOv8n architecture, 640×640 input, and the same
+deepstream-yolo custom parser — only the ONNX, label file, and
+`num-detected-classes` differ, so switching is purely a config change.
+
+`coco` keeps person/man-overboard detection; `forward-watch` drops it but adds
+debris/kayak/log. The `forward-watch.onnx` is **not** vendored — fetch it before
+building the image so `COPY deepstream` bakes it in:
+
+```bash
+python3 scripts/download_forward_watch.py     # → deepstream/forward-watch.onnx
+```
+
 ## Troubleshooting
 
 - **OpenCV has no GStreamer** → use the Ultralytics Jetson base image; do not
