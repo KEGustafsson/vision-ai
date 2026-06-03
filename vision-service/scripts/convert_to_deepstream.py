@@ -229,7 +229,7 @@ def convert(in_path: Path, out_path: Path, force: bool = False,
     return n, nc
 
 
-def validate(in_path: Path, out_path: Path) -> None:
+def validate(in_path: Path, out_path: Path, imgsz: int = 640) -> None:
     import numpy as np
     import onnxruntime as ort
 
@@ -241,7 +241,7 @@ def validate(in_path: Path, out_path: Path) -> None:
     inp = src.get_inputs()[0]
     # Dynamic export can leave batch AND spatial dims symbolic. Use batch=1 and a
     # real 640 for any dynamic spatial dim (feeding 1 breaks the model's reshapes).
-    shape = [d if isinstance(d, int) and d > 0 else (1 if i == 0 else 640)
+    shape = [d if isinstance(d, int) and d > 0 else (1 if i == 0 else imgsz)
              for i, d in enumerate(inp.shape)]
     x = (np.random.rand(*shape).astype(np.float32))
 
@@ -297,7 +297,7 @@ def main() -> None:
     n, nc = convert(args.input, tmp, force=args.force, imgsz=args.imgsz)
     print(f"  rewrote head: {n} anchors, {nc} classes -> output [batch, {n}, 6]")
     if args.validate:
-        validate(args.input, tmp)
+        validate(args.input, tmp, imgsz=args.imgsz)
     if args.inplace:
         tmp.replace(out)
     print(f"saved {out}")

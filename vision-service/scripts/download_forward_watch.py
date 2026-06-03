@@ -74,7 +74,14 @@ def main() -> None:
 
     tmp = out.with_suffix(".onnx.tmp")
     print("\nconverting to DeepStream-Yolo layout (parser needs [N,6])")
-    n, nc = conv.convert(out, tmp, force=False)
+    try:
+        n, nc = conv.convert(out, tmp, force=False)
+    except ImportError as e:
+        raise SystemExit(
+            f"\nConversion failed — missing dependency ({e}).\n"
+            f"Install it (pip install onnx onnxruntime) and run:\n  {convert_cmd}\n"
+            "The raw file as-is will produce ZERO detections."
+        )
     print(f"  rewrote head: {n} anchors, {nc} classes -> output [batch, {n}, 6]")
     try:
         conv.validate(out, tmp)

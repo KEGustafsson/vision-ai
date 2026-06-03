@@ -65,7 +65,7 @@ detector:
   #   python3 scripts/download_forward_watch.py   # downloads AND converts
   # For marine-surveillance, train on-box (Roboflow only exports the dataset):
   #   python3 training/train_marine_surveillance.py --api-key <KEY> ...
-  model: marine-surveillance
+  model: coco
 
 cameras:
   - name: forward

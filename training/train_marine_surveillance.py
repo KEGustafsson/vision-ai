@@ -13,7 +13,7 @@ inside an Ultralytics Jetson container (it bundles the right aarch64 torch):
     ultralytics/ultralytics:latest-jetson-jetpack6 \
     bash -lc "pip install -q roboflow onnx onnxslim onnxruntime && \
       python3 training/train_marine_surveillance.py \
-        --api-key \$ROBOFLOW_KEY --workspace WS --project PROJ --version N"
+        --api-key \\$ROBOFLOW_KEY --workspace WS --project PROJ --version N"
 
 ⚠ The Orin is RAM-tight. Stop the GPU co-tenants first (vision-service +
 gstreamer_in/out_overlay) so training does not OOM or stall the live pipeline,
@@ -193,7 +193,7 @@ def main() -> None:
     if nc != len(EXPECTED_NAMES):
         raise SystemExit(f"exported model has {nc} classes, expected {len(EXPECTED_NAMES)}")
     try:
-        conv.validate(stock, args.out)
+        conv.validate(stock, args.out, imgsz=args.imgsz)
     except ImportError:
         print("  (onnxruntime missing — skipped numeric cross-check)")
 
