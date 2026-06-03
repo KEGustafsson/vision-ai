@@ -88,7 +88,6 @@ _TRACKER_CFG_STOCK = Path(
     "/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app"
     "/config_tracker_NvDCF_perf.yml"
 )
-_DEWARP_FAIL_MARKER = Path("/tmp/vision-dewarp-failed")
 
 
 def _now_iso() -> str:
@@ -197,12 +196,6 @@ class DeepStreamPipeline:
         # Holds generated nvdewarper config files; cleaned up on stop().
         self._dewarp_tmp: Optional[tempfile.TemporaryDirectory] = None
 
-        # Per-camera: True if nvdewarper is active in the GStreamer graph.
-        # Cameras with undistort=True but no active dewarper get software
-        # undistortion on the display frame (post-inference fallback).
-        self._dewarp_active: Dict[str, bool] = {}
-        self._undistorters: Dict[str, object] = {}
-
         # Runtime-adjustable via /control; guarded by _lock because they are
         # written from FastAPI/uvicorn threads and read from the GLib probe thread.
         self._lock = threading.Lock()
@@ -222,15 +215,6 @@ class DeepStreamPipeline:
 
         Gst.init(None)
 
-        if _DEWARP_FAIL_MARKER.exists():
-            self._log.warning(
-                "Previous nvdewarper crash detected (%s). "
-                "Disabling GPU dewarp — falling back to software undistortion.",
-                _DEWARP_FAIL_MARKER)
-            _DEWARP_FAIL_MARKER.unlink(missing_ok=True)
-            for cam in self.settings.cameras:
-                cam.gpu_dewarp = False
-
         d = self.settings.detector
         for i, cam in enumerate(self.settings.cameras):
             self._src_idx_to_name[i] = cam.name
@@ -247,16 +231,6 @@ class DeepStreamPipeline:
             )
 
         self._gst = self._build_pipeline(Gst)
-
-        W = d.mux_width
-        H = d.mux_height
-        for cam in self.settings.cameras:
-            if cam.undistort and not self._dewarp_active.get(cam.name, False):
-                from .api.undistort import Undistorter
-                self._undistorters[cam.name] = Undistorter(cam, W, H)
-                self._log.info(
-                    "camera %s: software undistortion fallback (display-only)",
-                    cam.name)
 
         bus = self._gst.get_bus()
         bus.add_signal_watch()
@@ -381,7 +355,7 @@ class DeepStreamPipeline:
         is not guaranteed bit-identical to OpenCV's. Returns None when undistort is
         off so the caller leaves the camera branch uncorrected.
         """
-        if not cam.undistort or not cam.gpu_dewarp:
+        if not cam.undistort:
             return None
         if cam.dewarper_config:
             p = Path(cam.dewarper_config)
@@ -496,7 +470,6 @@ class DeepStreamPipeline:
                     self._log.warning(
                         "camera %s: nvdewarper unavailable (%s); running uncorrected",
                         cam.name, exc)
-            self._dewarp_active[cam.name] = dewarp is not None
 
             fmt = "RGBA" if dewarp is not None else "NV12"
             conv = make("nvvideoconvert", f"conv{i}")
@@ -780,15 +753,6 @@ class DeepStreamPipeline:
                     except Exception:
                         pass
 
-            # Software undistortion fallback: apply to the display frame when
-            # nvdewarper was not used for this camera.
-            undist = self._undistorters.get(cam_name)
-            if undist is not None and disp_img is not None:
-                try:
-                    disp_img = undist.image(disp_img)
-                except Exception as exc:
-                    self._log.debug("software undistort failed (%s): %s", cam_name, exc)
-
             # ── Stabilizer (Python, per-camera) ────────────────────────────
             # NvDCF already provides track IDs; the Python stabilizer adds
             # confidence hysteresis and coasting on top.
@@ -925,21 +889,6 @@ class DeepStreamPipeline:
                 "DeepStream GStreamer error: %s\n  debug: %s", err.message, debug)
             for proxy in self.workers.values():
                 proxy.error = f"GStreamer error: {err.message}"
-            combined = f"{err.message} {debug or ''}"
-            if any(self._dewarp_active.values()) and (
-                "nvdewarper" in combined.lower()
-                or "cuda" in combined.lower()
-                or "error 700" in combined
-            ):
-                try:
-                    _DEWARP_FAIL_MARKER.write_text(combined[:500])
-                    self._log.error(
-                        "nvdewarper/CUDA crash detected — wrote %s. "
-                        "On restart, GPU dewarp will be disabled and software "
-                        "undistortion used instead.",
-                        _DEWARP_FAIL_MARKER)
-                except OSError:
-                    pass
             if self._loop:
                 self._loop.quit()
         elif t == Gst.MessageType.WARNING:
