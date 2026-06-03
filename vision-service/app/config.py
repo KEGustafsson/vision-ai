@@ -140,9 +140,13 @@ class DetectorConfig(BaseModel):
     batch_wait_ms: int = 20
     # DeepStream only: which detection model to run. Exactly ONE model runs at a
     # time (never both). Selects both the nvinfer config and the class map:
-    #   "coco"          -> COCO YOLOv8n, 80 classes (person/vessel/buoy/...)
-    #   "forward-watch" -> forward-watch marine model, 6 classes
-    #                      (ship/boat/debris/buoy/kayak/log)
+    #   "coco"                -> COCO YOLOv8n, 80 classes (person/vessel/buoy/...)
+    #   "forward-watch"       -> forward-watch marine model, 6 classes
+    #                            (ship/boat/debris/buoy/kayak/log)
+    #   "marine-surveillance" -> Roboflow Marine Surveillance YOLOv8s, 7 classes
+    #                            (boat/buoy/kayak/sailboat/speedboat/vessel/warship);
+    #                            NO person -> no man-overboard. Train on-box via
+    #                            training/train_marine_surveillance.py.
     # See app/detector/classmap.py (MODEL_PGIE_CONFIG) for the registry.
     model: str = "coco"
 

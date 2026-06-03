@@ -40,6 +40,11 @@ geometry:
     kayak: 1.5
     debris: 0.5
     log: 0.3
+    # marine-surveillance model (typical beam widths, used for range estimation)
+    boat: 3.0
+    sailboat: 3.5
+    speedboat: 2.5
+    warship: 18.0
 
 server:
   host: 0.0.0.0
