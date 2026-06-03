@@ -26,6 +26,7 @@ export interface PluginConfig {
   detectClasses: string[]; // object types to surface (person | vessel | buoy); empty => all
   // Thresholds
   minConfidence: number;
+  minTargetRangeM: number; // drop any detection closer than this (own-hull / very-near clutter); 0 => off
   maxTargets: number; // maximum detections/tracks kept per frame in the container
   minRangeConfidence: number; // gate georeferencing
   ownAisMinRangeM: number; // ignore AIS contacts this close to own-ship
@@ -55,6 +56,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
   enableContextControl: true,
   detectClasses: ['person', 'vessel', 'buoy'],
   minConfidence: 0.4,
+  minTargetRangeM: 8,
   maxTargets: 20,
   minRangeConfidence: 0.3,
   ownAisMinRangeM: 25,
@@ -175,6 +177,13 @@ export function schema(): object {
         minimum: 1,
         maximum: 300,
       },
+      minTargetRangeM: {
+        type: 'number',
+        title: 'Ignore detections closer than (m)',
+        description: 'Drops any detected object whose estimated range is below this — own-hull artifacts and very-near clutter that swamp the frame and create phantom alerts. Targets with no range estimate are kept. Set 0 to disable.',
+        default: 8,
+        minimum: 0,
+      },
       minRangeConfidence: { type: 'number', title: 'Minimum range confidence to georeference', default: 0.3, minimum: 0, maximum: 1 },
       ownAisMinRangeM: {
         type: 'number',
@@ -215,6 +224,7 @@ export function uiSchema(): object {
       'enableAisBlips',
       'detectClasses',
       'minConfidence',
+      'minTargetRangeM',
       'maxTargets',
       'ownAisMinRangeM',
       '*',

@@ -88,6 +88,14 @@ export = function (app: ServerApp): Plugin {
     for (const raw of ev.targets) {
       if (raw.confidence < cfg.minConfidence) continue;
       if (cfg.detectClasses.length > 0 && !cfg.detectClasses.includes(raw.label)) continue;
+      // Drop very-near detections (own-hull artifacts / clutter) for every label.
+      // Keep targets with no range estimate — we can only filter what we can measure.
+      if (
+        cfg.minTargetRangeM > 0 &&
+        raw.geometry.range_m !== null &&
+        raw.geometry.range_m < cfg.minTargetRangeM
+      )
+        continue;
       if (raw.track_id === null) continue;
       const t = enrichTarget(raw, ev.camera, own, cfg, now);
       targets.set(t.key, t);

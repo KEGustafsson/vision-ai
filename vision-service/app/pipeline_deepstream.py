@@ -57,7 +57,6 @@ Prerequisites
 
 from __future__ import annotations
 
-import logging
 import tempfile
 import threading
 import time
@@ -70,15 +69,25 @@ from .api.overlay import annotate, encode_jpeg
 from .config import CameraConfig, Settings
 from .detector.base import RawTrack
 from .detector.classmap import (
-    MODEL_PGIE_CONFIG, is_person_in_water, label_for_model,
+    MODEL_PGIE_CONFIG,
+    is_person_in_water,
+    label_for_model,
 )
 from .detector.stabilizer import TrackStabilizer
 from .detector.tracker import VelocityTracker
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
 from .pipeline import _drop_contained_targets  # shared geometry filter, same package
 from .schemas import (
-    Backend, BBox, CalibrationStatus, DetectionEvent, FrameSize,
-    Geometry, Inference, PixelVelocity, RangeMethod, Target,
+    Backend,
+    BBox,
+    CalibrationStatus,
+    DetectionEvent,
+    FrameSize,
+    Geometry,
+    Inference,
+    PixelVelocity,
+    RangeMethod,
+    Target,
 )
 from .util import EventBuffer, LatestFrame
 
@@ -101,8 +110,8 @@ def _check_imports() -> None:
     try:
         import gi
         gi.require_version("Gst", "1.0")
-        from gi.repository import Gst  # noqa: F401
         import pyds  # noqa: F401  # type: ignore[import]
+        from gi.repository import Gst  # noqa: F401
     except Exception as exc:
         raise ImportError(
             "DeepStream Python bindings (pyds) not available.\n"
@@ -213,7 +222,7 @@ class DeepStreamPipeline:
         _check_imports()
         import gi
         gi.require_version("Gst", "1.0")
-        from gi.repository import Gst, GLib
+        from gi.repository import GLib, Gst
 
         Gst.init(None)
 
@@ -839,7 +848,6 @@ class DeepStreamPipeline:
 
         frame_area = float(W * H) or 1.0
         max_area = self.settings.detector.max_area_frac
-        own_hull_min = self.settings.detector.own_hull_min_range_m
 
         targets: List[Target] = []
         for tr in tracks:
@@ -855,9 +863,9 @@ class DeepStreamPipeline:
             rng, method, rconf = estimate_range(
                 tr, cam, self.settings.geometry, W, H, horizon_y)
 
-            if tr.label == "vessel" and rng is not None and 0 < rng < own_hull_min:
-                continue
-
+            # Minimum-range filtering (own-hull / very-near clutter) moved to the
+            # SignalK plugin (detector.minTargetRangeM): applies to every label and
+            # is operator-tunable at runtime.
             piw = is_person_in_water(tr.label, tr.y + tr.h, horizon_y)
             targets.append(Target(
                 track_id=tr.track_id,

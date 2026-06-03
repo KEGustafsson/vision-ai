@@ -21,8 +21,16 @@ from .detector.classmap import is_person_in_water
 from .detector.stabilizer import TrackStabilizer
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
 from .schemas import (
-    BBox, Backend, CalibrationStatus, DetectionEvent, FrameSize, Geometry,
-    Inference, PixelVelocity, RangeMethod, Target,
+    Backend,
+    BBox,
+    CalibrationStatus,
+    DetectionEvent,
+    FrameSize,
+    Geometry,
+    Inference,
+    PixelVelocity,
+    RangeMethod,
+    Target,
 )
 from .util import EventBuffer, LatestFrame
 
@@ -280,9 +288,9 @@ class CameraWorker(threading.Thread):
             brg = estimate_bearing(tr, self._cam, w)
             rng, method, rconf = estimate_range(
                 tr, self._cam, self._settings.geometry, w, h, horizon_y)
-            own_hull_min = self._settings.detector.own_hull_min_range_m
-            if tr.label == "vessel" and rng is not None and 0 < rng < own_hull_min:
-                continue
+            # Minimum-range filtering (own-hull / very-near clutter) is applied
+            # downstream in the SignalK plugin (detector.minTargetRangeM), so it
+            # covers every label and is operator-tunable at runtime.
             # Use the waterline (bbox bottom) consistently with range estimation.
             piw = is_person_in_water(tr.label, tr.y + tr.h, horizon_y)
             targets.append(Target(

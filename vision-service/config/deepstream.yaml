@@ -47,7 +47,6 @@ detector:
   stabilize_ema_alpha: 0.4
   stabilize_coast_velocity_factor: 0.4
   max_area_frac: 0.4
-  own_hull_min_range_m: 8.0
   contained_frac: 0.8
   # Which detection model to run. Exactly ONE model is active at a time — they
   # are never run together. Switch this value and restart to change models:
