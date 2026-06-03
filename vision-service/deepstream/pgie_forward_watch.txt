@@ -5,21 +5,30 @@
 #
 # MODEL SOURCE
 # ============
-# Download the ONNX from:
+# Fetch + convert in one step (recommended):
+#   python3 scripts/download_forward_watch.py     # downloads AND converts
+# The published ONNX
 #   https://github.com/SkipperDon/signalk-forward-watch/blob/main/models/forward-watch.onnx
-# and place it in this directory as forward-watch.onnx.
+# is a STOCK Ultralytics export (output [1, 4+nc, 8400]). The custom parser below
+# CANNOT read that layout — fed as-is it yields ZERO detections. It must be
+# rewritten to the DeepStream-Yolo layout ([1, 8400, 6] = x1,y1,x2,y2,score,class)
+# via scripts/convert_to_deepstream.py (the download script does this for you).
+# Place the converted file in this directory as forward-watch.onnx.
 #
 # This model detects 6 marine-specific classes:
 #   0=ship  1=boat  2=debris  3=buoy  4=kayak  5=log
 #
-# It uses the same YOLOv8n architecture and 640x640 input as the COCO model,
-# so the same deepstream-yolo custom parser works unchanged — only the label
-# file and num-detected-classes differ (6 vs 80).
+# Same YOLOv8n architecture and 640x640 input as the COCO model; once converted,
+# the same deepstream-yolo custom parser works unchanged — only the label file
+# and num-detected-classes differ (6 vs 80).
 #
 # CUSTOM PARSER
 # =============
 # Uses the same libnvdsinfer_custom_impl_Yolo.so as the COCO model — build it
-# once on the Jetson (see pgie_yolov8n.txt for the steps).
+# once on the Jetson (see pgie_yolov8n.txt for the steps). The COCO ONNX is made
+# parser-ready at build time by DeepStream-Yolo's export_yoloV8.py; the
+# forward-watch ONNX is made parser-ready by scripts/convert_to_deepstream.py
+# (both produce the identical [N,6] head this parser decodes).
 
 [property]
 gpu-id=0
