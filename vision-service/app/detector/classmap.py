@@ -27,6 +27,12 @@ MODEL_PGIE_CONFIG = {
     MODEL_FORWARD_WATCH: "pgie_forward_watch.txt",
 }
 
+# Canonical labels each model can produce (deduplicated, sorted).
+MODEL_LABELS = {
+    MODEL_COCO: sorted({"person", "vessel", "buoy"}),
+    MODEL_FORWARD_WATCH: sorted({"vessel", "buoy", "debris", "kayak", "log"}),
+}
+
 # Minimal COCO id -> name table for the classes we care to surface.
 _COCO = {
     0: "person",

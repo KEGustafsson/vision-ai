@@ -1,5 +1,16 @@
 // Thin REST client for controlling the vision container.
 
+export interface HealthInfo {
+  status: string;
+  mode: string;
+  backend: string;
+  cameras: string[];
+  model: string;
+  model_labels: string[];
+  detection_enabled: boolean;
+  labels: string[] | null;
+}
+
 export interface ControlBody {
   active_camera?: string;
   confidence?: number;
@@ -23,10 +34,10 @@ export class ContainerClient {
     return `${this.baseUrl.replace(/\/$/, '')}${path}`;
   }
 
-  async health(): Promise<any> {
+  async health(): Promise<HealthInfo> {
     const r = await fetch(this.url('/health'));
     if (!r.ok) throw new Error(`health ${r.status}`);
-    return r.json();
+    return (await r.json()) as HealthInfo;
   }
 
   async cameras(): Promise<string[]> {

@@ -166,3 +166,7 @@ class HealthResponse(BaseModel):
     max_targets: int = 20
     # Active canonical labels surfaced by the workers; null means all labels.
     labels: Optional[List[str]] = None
+    # Active detection model name (e.g. "coco", "forward-watch").
+    model: str = "coco"
+    # Canonical labels this model can produce (e.g. ["buoy","person","vessel"]).
+    model_labels: List[str] = Field(default_factory=list)

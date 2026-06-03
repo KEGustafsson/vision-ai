@@ -6,6 +6,7 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from ..detector.classmap import MODEL_LABELS
 from ..schemas import Backend, ControlRequest, HealthResponse, PtzRequest
 from .overlay import encode_jpeg
 
@@ -25,6 +26,7 @@ def health(request: Request) -> HealthResponse:
     p = _pipeline(request)
     backend = Backend(p.settings.detector.backend)
     errors = p.camera_errors()
+    model = p.settings.detector.model
     return HealthResponse(
         status="degraded" if errors else "ok",
         mode=p.settings.mode,
@@ -36,6 +38,8 @@ def health(request: Request) -> HealthResponse:
         detection_enabled=p.enabled,
         max_targets=p.max_targets(),
         labels=p.labels(),
+        model=model,
+        model_labels=MODEL_LABELS.get(model, []),
     )
 
 

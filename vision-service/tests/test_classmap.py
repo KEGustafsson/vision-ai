@@ -1,5 +1,5 @@
 from app.detector.classmap import (
-    MODEL_COCO, MODEL_FORWARD_WATCH, MODEL_PGIE_CONFIG,
+    MODEL_COCO, MODEL_FORWARD_WATCH, MODEL_LABELS, MODEL_PGIE_CONFIG,
     is_person_in_water, label_for, label_for_model,
 )
 
@@ -36,6 +36,16 @@ def test_label_for_resolves_wire_ids_from_both_models():
     assert label_for(8) == "vessel"      # COCO id on the wire
     assert label_for(83) == "debris"     # forward-watch synthetic id
     assert label_for(85) == "kayak"
+
+
+def test_model_labels_match_producible_labels():
+    for model, expected in MODEL_LABELS.items():
+        assert model in MODEL_PGIE_CONFIG, f"model {model} not in PGIE config registry"
+        assert sorted(expected) == expected, f"MODEL_LABELS[{model}] must be sorted"
+    assert "person" in MODEL_LABELS[MODEL_COCO]
+    assert "person" not in MODEL_LABELS[MODEL_FORWARD_WATCH]
+    assert "debris" in MODEL_LABELS[MODEL_FORWARD_WATCH]
+    assert "debris" not in MODEL_LABELS[MODEL_COCO]
 
 
 def test_person_in_water_rule_unchanged():
