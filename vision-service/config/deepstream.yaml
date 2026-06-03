@@ -62,6 +62,7 @@ cameras:
     undistort: true
     undistort_k1: -0.35
     undistort_rotation_deg: -4.5    # level the bow dome's tilted mount (nvdewarper roll)
+    # gpu_dewarp: true              # set false to skip nvdewarper, use software undistort
 
   - name: aft
     # Override with: VISION_CAMERA_AFT_URL=rtsp://user:pass@host/stream
@@ -74,6 +75,7 @@ cameras:
     undistort: true
     undistort_k1: -0.35
     undistort_rotation_deg: 1.0     # level the stern dome's tilted mount (nvdewarper roll)
+    # gpu_dewarp: true              # set false to skip nvdewarper, use software undistort
 
 server:
   target_fps: 12.0

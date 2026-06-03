@@ -57,6 +57,9 @@ class CameraConfig(BaseModel):
     # Point this at a hand-tuned nvdewarper config file to override the generated
     # one once you've calibrated on the hardware.
     dewarper_config: Optional[str] = None
+    # Set to false to skip nvdewarper and use software undistortion (display-only)
+    # instead. Useful when nvdewarper triggers CUDA errors on certain hardware.
+    gpu_dewarp: bool = True
 
 
 class GeometryConfig(BaseModel):
