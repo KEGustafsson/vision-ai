@@ -18,6 +18,7 @@ services:
       dockerfile: Dockerfile.deepstream
     image: vision-ai:deepstream
     container_name: vision-service-deepstream
+    restart: unless-stopped
     runtime: nvidia
     environment:
       VISION_MODE: deepstream
