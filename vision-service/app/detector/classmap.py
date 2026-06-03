@@ -27,12 +27,6 @@ MODEL_PGIE_CONFIG = {
     MODEL_FORWARD_WATCH: "pgie_forward_watch.txt",
 }
 
-# Canonical labels each model can produce (deduplicated, sorted).
-MODEL_LABELS = {
-    MODEL_COCO: sorted({"person", "vessel", "buoy"}),
-    MODEL_FORWARD_WATCH: sorted({"vessel", "buoy", "debris", "kayak", "log"}),
-}
-
 # Minimal COCO id -> name table for the classes we care to surface.
 _COCO = {
     0: "person",
@@ -67,6 +61,12 @@ _FW_CLS_REMAP = {
     5: 86,   # log
 }
 
+# Canonical labels each model can produce — derived from the label tables above.
+MODEL_LABELS = {
+    MODEL_COCO: sorted(set(_MARINE.values())),
+    MODEL_FORWARD_WATCH: sorted(set(_FW_LABEL.values())),
+}
+
 # Inverse of _FW_CLS_REMAP, for label_for() lookups off the synthetic id.
 _FW_CLS_REMAP_INV = {v: k for k, v in _FW_CLS_REMAP.items()}
 
@@ -94,7 +94,7 @@ def label_for_model(model: str, raw_cls: int) -> Tuple[str, int]:
     """
     if model == MODEL_FORWARD_WATCH:
         label = _FW_LABEL.get(raw_cls, f"class_{raw_cls}")
-        eff = _FW_CLS_REMAP.get(raw_cls, 80 + raw_cls)
+        eff = _FW_CLS_REMAP.get(raw_cls, 81 + raw_cls)
         return label, eff
     # Default: COCO path.
     label = _MARINE.get(raw_cls, _COCO.get(raw_cls, f"class_{raw_cls}"))

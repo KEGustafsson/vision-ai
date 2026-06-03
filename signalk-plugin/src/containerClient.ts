@@ -5,8 +5,8 @@ export interface HealthInfo {
   mode: string;
   backend: string;
   cameras: string[];
-  model: string;
-  model_labels: string[];
+  model?: string;
+  model_labels?: string[];
   detection_enabled: boolean;
   labels: string[] | null;
 }

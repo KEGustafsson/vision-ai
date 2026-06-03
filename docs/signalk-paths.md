@@ -47,6 +47,7 @@ published as `null` so consumers can drop the blip.
 | `notifications.mob` | `emergency` | Person-in-water, persisted, with lat/lon in the message |
 | `notifications.vision.darkTarget.<key>` | `alert` | In-range vessel with no AIS correlation |
 | `notifications.vision.collision.<key>` | `warn` / `alarm` | TCPA/CPA thresholds (alarm = high threat) |
+| `notifications.vision.labelMismatch` | `warn` | Selected labels not producible by the active model |
 
 Notifications are cleared (`value: null`) automatically when the condition
 resolves or the track ages out; MOB has a 60 s hold to ride out brief dropouts.

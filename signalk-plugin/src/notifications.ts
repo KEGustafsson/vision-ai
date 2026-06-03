@@ -154,6 +154,14 @@ export class NotificationManager {
     }
   }
 
+  setLabelMismatch(message: string): void {
+    this.send('notifications.vision.labelMismatch', 'warn', message, ['visual']);
+  }
+
+  clearLabelMismatch(): void {
+    this.clear('notifications.vision.labelMismatch');
+  }
+
   clearAll(): void {
     for (const path of [...this.active]) this.clear(path);
     this.mobCounters.clear();

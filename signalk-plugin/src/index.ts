@@ -204,12 +204,8 @@ export = function (app: ServerApp): Plugin {
     }
   }
 
-  // Track the last label-mismatch notification so we clear it when resolved.
-  const LABEL_WARN_PATH = 'notifications.vision.labelMismatch';
-  let labelWarnActive = false;
-
   async function checkModelLabels(): Promise<void> {
-    if (!client) return;
+    if (!client || !notifier) return;
     let info: HealthInfo;
     try {
       info = await client.health();
@@ -217,10 +213,16 @@ export = function (app: ServerApp): Plugin {
       return; // container unreachable — will be retried on next sync cycle
     }
     const modelLabels = info.model_labels;
-    if (!modelLabels || modelLabels.length === 0) return; // old container, skip
+    if (!modelLabels || modelLabels.length === 0) {
+      notifier.clearLabelMismatch();
+      return; // old container, skip
+    }
 
     const selected = cfg.detectClasses;
-    if (selected.length === 0) return; // "all" — always valid
+    if (selected.length === 0) {
+      notifier.clearLabelMismatch();
+      return; // "all" — always valid
+    }
 
     const invalid = selected.filter((l) => !modelLabels.includes(l));
     if (invalid.length > 0) {
@@ -228,26 +230,10 @@ export = function (app: ServerApp): Plugin {
         `Detection model "${info.model}" cannot produce: ${invalid.join(', ')}. ` +
         `It supports: ${modelLabels.join(', ')}. ` +
         'Uncheck invalid labels in the plugin settings or switch the container model.';
-      app.handleMessage(pluginId, {
-        context: 'vessels.self',
-        updates: [{
-          source: { label: 'vision-ai' },
-          timestamp: new Date().toISOString(),
-          values: [{ path: LABEL_WARN_PATH, value: { state: 'warn', method: ['visual'], message: msg } }],
-        }],
-      });
-      labelWarnActive = true;
+      notifier.setLabelMismatch(msg);
       app.error(`vision-ai: ${msg}`);
-    } else if (labelWarnActive) {
-      app.handleMessage(pluginId, {
-        context: 'vessels.self',
-        updates: [{
-          source: { label: 'vision-ai' },
-          timestamp: new Date().toISOString(),
-          values: [{ path: LABEL_WARN_PATH, value: null }],
-        }],
-      });
-      labelWarnActive = false;
+    } else {
+      notifier.clearLabelMismatch();
     }
   }
 
@@ -295,17 +281,6 @@ export = function (app: ServerApp): Plugin {
       processTimer = syncTimer = null;
       if (stream) stream.stop();
       if (notifier) notifier.clearAll();
-      if (labelWarnActive) {
-        app.handleMessage(pluginId, {
-          context: 'vessels.self',
-          updates: [{
-            source: { label: 'vision-ai' },
-            timestamp: new Date().toISOString(),
-            values: [{ path: LABEL_WARN_PATH, value: null }],
-          }],
-        });
-        labelWarnActive = false;
-      }
       if (publisher) publisher.reset();
       if (cpa) cpa.reset();
       targets.clear();
