@@ -204,6 +204,8 @@ export = function (app: ServerApp): Plugin {
     }
   }
 
+  let lastMismatchSig: string | null = null;
+
   async function checkModelLabels(): Promise<void> {
     if (!client || !notifier) return;
     let info: HealthInfo;
@@ -214,25 +216,35 @@ export = function (app: ServerApp): Plugin {
     }
     const modelLabels = info.model_labels;
     if (!modelLabels || modelLabels.length === 0) {
-      notifier.clearLabelMismatch();
+      if (lastMismatchSig !== null) {
+        lastMismatchSig = null;
+        notifier.clearLabelMismatch();
+      }
       return; // old container, skip
     }
 
     const selected = cfg.detectClasses;
     if (selected.length === 0) {
-      notifier.clearLabelMismatch();
+      if (lastMismatchSig !== null) {
+        lastMismatchSig = null;
+        notifier.clearLabelMismatch();
+      }
       return; // "all" — always valid
     }
 
     const invalid = selected.filter((l) => !modelLabels.includes(l));
     if (invalid.length > 0) {
+      const sig = invalid.join(',');
+      if (sig === lastMismatchSig) return;
+      lastMismatchSig = sig;
       const msg =
-        `Detection model "${info.model}" cannot produce: ${invalid.join(', ')}. ` +
+        `Detection model "${info.model ?? 'unknown'}" cannot produce: ${invalid.join(', ')}. ` +
         `It supports: ${modelLabels.join(', ')}. ` +
         'Uncheck invalid labels in the plugin settings or switch the container model.';
       notifier.setLabelMismatch(msg);
       app.error(`vision-ai: ${msg}`);
-    } else {
+    } else if (lastMismatchSig !== null) {
+      lastMismatchSig = null;
       notifier.clearLabelMismatch();
     }
   }
@@ -290,6 +302,7 @@ export = function (app: ServerApp): Plugin {
       modeHint = null;
       maxTargets = cfg.maxTargets;
       lastStatsAt = 0;
+      lastMismatchSig = null;
       stream = null;
     },
 
