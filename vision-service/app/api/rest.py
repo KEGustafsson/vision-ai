@@ -8,7 +8,6 @@ from fastapi import APIRouter, HTTPException, Request, Response
 
 from ..detector.classmap import MODEL_LABELS
 from ..schemas import Backend, ControlRequest, HealthResponse, PtzRequest
-from .overlay import encode_jpeg
 
 router = APIRouter()
 

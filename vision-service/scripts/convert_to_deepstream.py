@@ -37,7 +37,6 @@ NOTE: after replacing the ONNX you MUST delete any cached TRT engine
 from __future__ import annotations
 
 import argparse
-import sys
 from pathlib import Path
 
 import onnx

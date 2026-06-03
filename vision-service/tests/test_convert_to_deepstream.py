@@ -16,7 +16,6 @@ import pytest
 
 onnx = pytest.importorskip("onnx")
 pytest.importorskip("onnxruntime")
-import numpy as np  # noqa: E402
 from onnx import TensorProto, helper  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "scripts"

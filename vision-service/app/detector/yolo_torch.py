@@ -179,7 +179,7 @@ class YoloTorchDetector(Detector):
         does, so a new camera starts with its own tracker instead of inheriting
         whichever camera ran last."""
         from ultralytics.trackers.track import TRACKER_MAP
-        from ultralytics.utils import IterableSimpleNamespace, YAML
+        from ultralytics.utils import YAML, IterableSimpleNamespace
         from ultralytics.utils.checks import check_yaml
 
         cfg = IterableSimpleNamespace(**YAML.load(check_yaml(self._tracker_cfg)))

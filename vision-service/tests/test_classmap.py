@@ -1,6 +1,12 @@
 from app.detector.classmap import (
-    MODEL_COCO, MODEL_FORWARD_WATCH, MODEL_MARINE_SURVEILLANCE, MODEL_LABELS,
-    MODEL_PGIE_CONFIG, is_person_in_water, label_for, label_for_model,
+    MODEL_COCO,
+    MODEL_FORWARD_WATCH,
+    MODEL_LABELS,
+    MODEL_MARINE_SURVEILLANCE,
+    MODEL_PGIE_CONFIG,
+    is_person_in_water,
+    label_for,
+    label_for_model,
 )
 
 
