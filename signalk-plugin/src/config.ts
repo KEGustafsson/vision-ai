@@ -151,10 +151,12 @@ export function schema(): object {
         title: 'Object types to detect',
         description:
           'Which detections to surface, draw on the video, and alert on. ' +
-          'Person and Vessel work with the stock YOLO model; Buoy needs a ' +
-          'maritime-trained model. Note: man-overboard detection requires ' +
-          '"person" to be selected. Leave all unchecked to detect everything.',
-        items: { type: 'string', enum: ['person', 'vessel', 'buoy'] },
+          'Person / Vessel / Buoy work with the stock COCO model; Debris / ' +
+          'Kayak / Log require the forward-watch marine model (see ' +
+          'detector.model in deepstream.yaml). Note: man-overboard detection ' +
+          'requires "person" to be selected. Leave all unchecked to detect ' +
+          'everything.',
+        items: { type: 'string', enum: ['person', 'vessel', 'buoy', 'debris', 'kayak', 'log'] },
         uniqueItems: true,
         default: ['person', 'vessel', 'buoy'],
       },

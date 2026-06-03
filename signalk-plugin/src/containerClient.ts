@@ -5,7 +5,7 @@ export interface ControlBody {
   confidence?: number;
   max_targets?: number;
   mode_hint?: string;
-  labels?: string[]; // canonical object types to surface (person | vessel | buoy)
+  labels?: string[]; // canonical labels to surface (person | vessel | buoy | debris | kayak | log)
   enabled?: boolean; // master on/off: pause/resume detection in the container
 }
 
