@@ -103,6 +103,7 @@ together. Pick it with `detector.model` in `config/deepstream.yaml` (or the
 |---|---|---|
 | `coco` (default) | `deepstream/pgie_yolov8n.txt` | 80 COCO (person, vessel, buoy, …) |
 | `forward-watch` | `deepstream/pgie_forward_watch.txt` | 6 marine (ship, boat, debris, buoy, kayak, log) |
+| `marine-surveillance` | `deepstream/pgie_marine_surveillance.txt` | 7 marine (boat, buoy, kayak, sailboat, speedboat, vessel, warship) |
 
 The two models share the same YOLOv8n architecture, 640×640 input, and the same
 deepstream-yolo custom parser — only the ONNX, label file, and
@@ -113,8 +114,44 @@ debris/kayak/log. The `forward-watch.onnx` is **not** vendored — fetch it befo
 building the image so `COPY deepstream` bakes it in:
 
 ```bash
-python3 scripts/download_forward_watch.py     # → deepstream/forward-watch.onnx
+python3 scripts/download_forward_watch.py     # downloads AND converts → deepstream/forward-watch.onnx
 ```
+
+> **The published forward-watch ONNX is a stock Ultralytics export and will not
+> work with our parser as-is** — its output is `[1, 4+nc, 8400]`, but
+> `NvDsInferParseYolo` expects `[1, 8400, 6]` (`x1,y1,x2,y2,score,class`), so fed
+> raw it produces **zero detections**. The download script above automatically
+> rewrites it via `scripts/convert_to_deepstream.py` (needs
+> `pip install onnx onnxruntime`). To convert an ONNX you already have:
+> `python3 scripts/convert_to_deepstream.py forward-watch.onnx --inplace`. After
+> replacing the ONNX, delete any cached `*_gpu0_fp16.engine` so nvinfer rebuilds
+> it. COCO needs no conversion — its build-time `export_yoloV8.py` already emits
+> the parser layout.
+
+### marine-surveillance (train on-box)
+
+Roboflow only exports the *dataset*, so this model is trained on the Jetson and
+exported to a parser-ready ONNX by `training/train_marine_surveillance.py` (it does
+a stock export then runs `vision-service/scripts/convert_to_deepstream.py`). The
+dataset and runs land under `training/_train_marine_surveillance/`. Run it inside
+an Ultralytics Jetson container — mount the repo root (the script reaches into
+`vision-service/`) — with the GPU co-tenants stopped so it doesn't OOM:
+
+```bash
+docker stop vision-service-deepstream gstreamer_in_overlay gstreamer_out_overlay
+docker run --rm -it --runtime nvidia --network host \
+  -v $PWD:/work -w /work \
+  ultralytics/ultralytics:latest-jetson-jetpack6 \
+  bash -lc "pip install -q roboflow onnx onnxslim onnxruntime && \
+    python3 training/train_marine_surveillance.py \
+      --api-key \$ROBOFLOW_KEY --workspace WS --project PROJ --version N --batch 8"
+```
+
+It writes `vision-service/deepstream/marine-surveillance.onnx` and regenerates the label file.
+Then rebuild the image (bakes the ONNX), set `detector.model: marine-surveillance`,
+delete any stale `marine-surveillance.onnx_b*_gpu0_fp16.engine`, and recreate the
+container. **No person class → man-overboard detection is off while this model is
+active**; keep `coco` if MOB matters.
 
 ## Troubleshooting
 
