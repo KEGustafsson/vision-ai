@@ -152,11 +152,17 @@ export function schema(): object {
         description:
           'Which detections to surface, draw on the video, and alert on. ' +
           'Person / Vessel / Buoy work with the stock COCO model; Debris / ' +
-          'Kayak / Log require the forward-watch marine model (see ' +
-          'detector.model in deepstream.yaml). Note: man-overboard detection ' +
-          'requires "person" to be selected. Leave all unchecked to detect ' +
-          'everything.',
-        items: { type: 'string', enum: ['person', 'vessel', 'buoy', 'debris', 'kayak', 'log'] },
+          'Kayak / Log require the forward-watch model; Boat / Sailboat / ' +
+          'Speedboat / Warship require the marine-surveillance model (see ' +
+          'detector.model in deepstream.yaml). The plugin warns if you pick ' +
+          'labels the active model cannot produce. Note: man-overboard detection ' +
+          'requires "person", which only the COCO model has. Leave all unchecked ' +
+          'to detect everything.',
+        items: {
+          type: 'string',
+          enum: ['person', 'vessel', 'buoy', 'debris', 'kayak', 'log',
+                 'boat', 'sailboat', 'speedboat', 'warship'],
+        },
         uniqueItems: true,
         default: ['person', 'vessel', 'buoy'],
       },
