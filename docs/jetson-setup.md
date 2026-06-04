@@ -71,8 +71,8 @@ vision-service/scripts/build_yolo_parser.sh
 # 2. Export a raw (no end-to-end NMS) YOLOv8n ONNX — the build's export stage
 #    does this automatically; see config/deepstream.yaml for the manual command.
 
-# 3. Run (nvinfer auto-builds the TRT engine into the bind-mounted models/ on
-#    first start; the engine is then baked/persisted).
+# 3. Run (nvinfer auto-builds the TRT engine next to the ONNX in the bind-mounted
+#    deepstream/ on first start, so it persists across container recreates).
 export VISION_CAMERA_FORWARD_URL="rtsp://user:pass@192.168.1.10:554/stream"
 export VISION_CAMERA_AFT_URL="rtsp://user:pass@192.168.1.11:554/stream"
 docker compose -f docker-compose.yml -f docker-compose.deepstream.yml up -d
@@ -92,6 +92,14 @@ Tuning lives in `config/deepstream.yaml` (bind-mounted, takes effect on restart)
   Kept short so both cameras pipeline at full input rate; a per-camera PTS guard
   in the probe drops any muxer frame repeats so output never exceeds the camera's
   real frame rate.
+
+The deepstream compose bind-mounts `app/`, `config/`, `deepstream/`, and `models/`,
+so code, config, model ONNX/labels, and the built TRT engine all live on the host
+and survive recreates — a plain **restart** picks up app/config edits and an
+engine rebuild only happens when the ONNX actually changes. An image rebuild is
+only needed to bake changes for a clean redeploy. ⚠ The Orin is NVMM-tight: stop
+the GPU overlay co-tenants before recreating the container, or buffer-pool
+allocation can OOM (`failed to activate bufferpool`); restart them after.
 
 ## Detection model selection
 
@@ -148,10 +156,14 @@ docker run --rm -it --runtime nvidia --network host \
 ```
 
 It writes `vision-service/deepstream/marine-surveillance.onnx` and regenerates the label file.
-Then rebuild the image (bakes the ONNX), set `detector.model: marine-surveillance`,
-delete any stale `marine-surveillance.onnx_b*_gpu0_fp16.engine`, and recreate the
-container. **No person class → man-overboard detection is off while this model is
-active**; keep `coco` if MOB matters.
+Because `deepstream/` is bind-mounted (see the compose volumes), the new ONNX is
+already visible to the container — just set `detector.model: marine-surveillance`
+in `config/deepstream.yaml`, delete any stale
+`marine-surveillance.onnx_b*_gpu0_fp16.engine`, and **restart** the container (no
+image rebuild needed; nvinfer rebuilds the engine on first start). Rebuild the
+image only when you want it baked in for a clean redeploy. **No person class →
+man-overboard detection is off while this model is active**; keep `coco` if MOB
+matters.
 
 ## Troubleshooting
 

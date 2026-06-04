@@ -29,6 +29,7 @@ All options have sensible defaults (`src/config.ts`). Highlights:
 | `enableAisBlips` | **off** | Project targets as synthetic `vessels.*` blips |
 | `enableContextControl` | on | Steer active camera/confidence by SOG + time of day |
 | `minRangeConfidence` | 0.3 | Gate for georeferencing a target |
+| `minTargetRangeM` | 8 | Ignore detections closer than this (m). Pushed to the container, which filters at the source so too-close objects (own-hull / very-near clutter) leave **both** the target list and the annotated overlay. `person` is exempt (MOB); unknown-range kept; 0 disables. |
 | `darkTargetRangeM` | 800 | Alert range for non-AIS vessels |
 | `collisionTcpaS` / `collisionAlarmTcpaS` / `collisionCpaM` | 600 / 180 / 100 | CPA/TCPA thresholds |
 | `mobMinConfidence` / `mobPersistFrames` | 0.5 / 3 | MOB sensitivity |
