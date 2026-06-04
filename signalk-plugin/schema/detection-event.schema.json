@@ -165,8 +165,8 @@
             }
           ],
           "default": null,
-          "title": "Track Id",
-          "description": "Stable tracking id in the range 10-99 (recycled per camera), or null if untracked."
+          "description": "Stable tracking id in the range 10-99 (recycled per camera), or null if untracked.",
+          "title": "Track Id"
         },
         "label": {
           "title": "Label",
