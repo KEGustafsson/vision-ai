@@ -39,6 +39,26 @@ class VelocityTracker:
         # reused last, cycling through the whole range before any reuse.
         self._free: Deque[int] = deque(range(id_min, id_max + 1))
 
+    def set_id_range(self, id_min: int, id_max: int) -> None:
+        """Resize the recycled display-id pool to follow max-targets-per-frame so
+        EVERY emitted id stays within ``[id_min, id_max]``. Live tracks already in
+        range keep their id (no needless reshuffle); any live track whose id is
+        now out of range is remapped to a fresh in-range id immediately — so a
+        shrink can never leave a higher id on the wire (at the cost of a one-time
+        id change for those tracks). If more tracks are live than the range holds,
+        the allocator wraps within range (ids may then collide, but never exceed).
+        """
+        if id_min > id_max:
+            raise ValueError(f"id_min ({id_min}) must be <= id_max ({id_max})")
+        if (id_min, id_max) == (self._id_min, self._id_max):
+            return
+        self._id_min, self._id_max = id_min, id_max
+        in_range_held = {d for d in self._display.values() if id_min <= d <= id_max}
+        self._free = deque(i for i in range(id_min, id_max + 1) if i not in in_range_held)
+        for tid, disp in self._display.items():
+            if disp < id_min or disp > id_max:
+                self._display[tid] = self._alloc_display(tid)
+
     def _alloc_display(self, track_id: int) -> int:
         if self._free:
             return self._free.popleft()
