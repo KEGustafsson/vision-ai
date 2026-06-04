@@ -102,6 +102,14 @@ COPY deepstream ./deepstream
 # it persists across container recreations). See pgie_yolov8n.txt.
 COPY --from=export /export/yolov8n_ds.onnx ./deepstream/yolov8n_ds.onnx
 
+# Only ONE detection model runs at a time (detector.model in deepstream.yaml).
+# The COCO model (yolov8n_ds.onnx, above) is the default. To run the alternative
+# forward-watch marine model instead, fetch its ONNX into deepstream/ BEFORE the
+# build so the `COPY deepstream` above bakes it in:
+#   python3 scripts/download_forward_watch.py
+# then set `model: forward-watch` (or VISION_DETECTOR_MODEL=forward-watch).
+# The forward-watch nvinfer config + labels are already vendored in deepstream/.
+
 # models/ is bind-mounted in compose; create the mountpoint so a bare `docker run`
 # (no bind) still starts.
 RUN mkdir -p models

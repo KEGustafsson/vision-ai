@@ -1,5 +1,11 @@
 from app.schemas import (
-    BBox, Backend, DetectionEvent, FrameSize, Geometry, Inference, Target,
+    Backend,
+    BBox,
+    DetectionEvent,
+    FrameSize,
+    Geometry,
+    Inference,
+    Target,
 )
 
 

@@ -1,0 +1,7 @@
+boat
+buoy
+kayak
+sail-boat
+speed-boat
+vessel
+war-ship

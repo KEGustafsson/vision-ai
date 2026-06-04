@@ -5,7 +5,7 @@
 // notifications, and publishes the vision.* tree. Also serves a captain webapp
 // and proxies the annotated video stream (see router.ts).
 
-import { ContainerClient, ControlBody } from './containerClient';
+import { ContainerClient, ControlBody, HealthInfo } from './containerClient';
 import { CpaEstimator } from './cpa';
 import { EventStream } from './eventStream';
 import { PluginConfig, schema, uiSchema, withDefaults } from './config';
@@ -88,6 +88,9 @@ export = function (app: ServerApp): Plugin {
     for (const raw of ev.targets) {
       if (raw.confidence < cfg.minConfidence) continue;
       if (cfg.detectClasses.length > 0 && !cfg.detectClasses.includes(raw.label)) continue;
+      // NB: minimum-range filtering (minTargetRangeM) is done in the container
+      // (pushed via syncContainer), so events already exclude too-close objects
+      // from both the target list AND the annotated overlay.
       if (raw.track_id === null) continue;
       const t = enrichTarget(raw, ev.camera, own, cfg, now);
       targets.set(t.key, t);
@@ -177,6 +180,9 @@ export = function (app: ServerApp): Plugin {
       labels: cfg.detectClasses,
       enabled: detectionEnabled,
       max_targets: maxTargets,
+      // The container does the minimum-range filtering EARLY (events + overlay);
+      // this is the single source of truth, pushed so it survives a restart.
+      min_target_range_m: cfg.minTargetRangeM,
     };
     let nextCamera: string | null = null;
     let nextModeHint: string | null = null;
@@ -201,6 +207,51 @@ export = function (app: ServerApp): Plugin {
       }
     } catch (e) {
       app.debug(`vision-ai: container sync failed: ${e}`);
+    }
+  }
+
+  let lastMismatchSig: string | null = null;
+
+  async function checkModelLabels(): Promise<void> {
+    if (!client || !notifier) return;
+    let info: HealthInfo;
+    try {
+      info = await client.health();
+    } catch {
+      return; // container unreachable — will be retried on next sync cycle
+    }
+    const modelLabels = info.model_labels;
+    if (!modelLabels || modelLabels.length === 0) {
+      if (lastMismatchSig !== null) {
+        lastMismatchSig = null;
+        notifier.clearLabelMismatch();
+      }
+      return; // old container, skip
+    }
+
+    const selected = cfg.detectClasses;
+    if (selected.length === 0) {
+      if (lastMismatchSig !== null) {
+        lastMismatchSig = null;
+        notifier.clearLabelMismatch();
+      }
+      return; // "all" — always valid
+    }
+
+    const invalid = selected.filter((l) => !modelLabels.includes(l));
+    if (invalid.length > 0) {
+      const sig = `${info.model ?? 'unknown'}|${invalid.sort().join(',')}`;
+      if (sig === lastMismatchSig) return;
+      lastMismatchSig = sig;
+      const msg =
+        `Detection model "${info.model ?? 'unknown'}" cannot produce: ${invalid.join(', ')}. ` +
+        `It supports: ${modelLabels.join(', ')}. ` +
+        'Uncheck invalid labels in the plugin settings or switch the container model.';
+      notifier.setLabelMismatch(msg);
+      app.error(`vision-ai: ${msg}`);
+    } else if (lastMismatchSig !== null) {
+      lastMismatchSig = null;
+      notifier.clearLabelMismatch();
     }
   }
 
@@ -232,8 +283,13 @@ export = function (app: ServerApp): Plugin {
       processTimer = setInterval(processCycle, cfg.processIntervalMs);
       // Always sync (the object-type selection must reach the container even
       // when context control is off); push once now, then keep it in sync.
+      // The label check runs once on start and then every sync cycle.
       void syncContainer();
-      syncTimer = setInterval(() => void syncContainer(), 5000);
+      void checkModelLabels();
+      syncTimer = setInterval(() => {
+        void syncContainer();
+        void checkModelLabels();
+      }, 5000);
       app.debug(`vision-ai: started, container=${cfg.containerUrl}`);
     },
 
@@ -252,6 +308,7 @@ export = function (app: ServerApp): Plugin {
       modeHint = null;
       maxTargets = cfg.maxTargets;
       lastStatsAt = 0;
+      lastMismatchSig = null;
       stream = null;
     },
 

@@ -21,8 +21,16 @@ from .detector.classmap import is_person_in_water
 from .detector.stabilizer import TrackStabilizer
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
 from .schemas import (
-    BBox, Backend, CalibrationStatus, DetectionEvent, FrameSize, Geometry,
-    Inference, PixelVelocity, RangeMethod, Target,
+    Backend,
+    BBox,
+    CalibrationStatus,
+    DetectionEvent,
+    FrameSize,
+    Geometry,
+    Inference,
+    PixelVelocity,
+    RangeMethod,
+    Target,
 )
 from .util import EventBuffer, LatestFrame
 
@@ -98,6 +106,9 @@ class CameraWorker(threading.Thread):
         ) if d.stabilize else None
         # Runtime-adjustable via /control.
         self.confidence = settings.detector.confidence
+        # Drop detections closer than this (m); seeded from config, owned by the
+        # SignalK plugin (minTargetRangeM) which pushes it via /control. 0 => off.
+        self.min_target_range_m = settings.detector.min_target_range_m
         # Canonical labels to surface; None => all. Seeded from config, then
         # driven by the SignalK plugin's object-type selection via /control.
         self.allowed_labels: set | None = (
@@ -280,8 +291,12 @@ class CameraWorker(threading.Thread):
             brg = estimate_bearing(tr, self._cam, w)
             rng, method, rconf = estimate_range(
                 tr, self._cam, self._settings.geometry, w, h, horizon_y)
-            own_hull_min = self._settings.detector.own_hull_min_range_m
-            if tr.label == "vessel" and rng is not None and 0 < rng < own_hull_min:
+            # Minimum-range gate (own-hull / very-near clutter), applied EARLY so
+            # neither the event nor the overlay shows a too-close object. person is
+            # exempt (MOB must be seen up close); unknown range is kept. The value
+            # is owned by the SignalK plugin (detector.minTargetRangeM via /control).
+            if (self.min_target_range_m > 0 and tr.label != "person"
+                    and rng is not None and 0 < rng < self.min_target_range_m):
                 continue
             # Use the waterline (bbox bottom) consistently with range estimation.
             piw = is_person_in_water(tr.label, tr.y + tr.h, horizon_y)
@@ -364,6 +379,10 @@ class Pipeline:
     def set_confidence(self, value: float) -> None:
         for w in self.workers.values():
             w.confidence = value
+
+    def set_min_target_range(self, value: float) -> None:
+        for w in self.workers.values():
+            w.min_target_range_m = value
 
     def set_labels(self, labels: list | None) -> None:
         """Restrict surfaced detections to these canonical labels. An empty list

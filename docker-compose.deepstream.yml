@@ -28,9 +28,19 @@ services:
       # Site calibration (horizon_y, height_m, hfov, bearing offsets) lives in
       # config/deepstream.yaml; bind-mount so edits take effect on restart.
       - ./vision-service/config:/opt/vision-service/config
-      # nvinfer writes the built engine here (yolov8n_ds.engine) so it survives a
-      # recreate. The deepstream-yolo ONNX/parser stay BAKED in the image (in
-      # /opt/vision-service/deepstream), so this mount does not shadow them.
+      # Application code: bind-mount so Python edits (pipeline/detector/geometry)
+      # take effect on a plain `restart`, no image rebuild needed. The image still
+      # bakes a copy, so the container also runs standalone without this mount.
+      - ./vision-service/app:/opt/vision-service/app
+      # DeepStream assets: pgie configs, labels, the deepstream-yolo ONNX/parser
+      # .so, AND the TensorRT engine. nvinfer writes the built engine into THIS
+      # dir (model-engine-file is relative to the pgie config), so mounting it
+      # persists the engine across image rebuilds/recreates — avoiding a costly
+      # (RAM-tight) TRT rebuild. Host dir must hold every file the active model
+      # needs (the *.onnx are gitignored but present on the box).
+      - ./vision-service/deepstream:/opt/vision-service/deepstream
+      # TensorRT-backend engines for the jetson (non-deepstream) path; harmless
+      # here, kept so switching VISION_MODE doesn't lose the cached engine.
       - ./vision-service/models:/opt/vision-service/models
     # Bind to localhost on the boat network; the SignalK plugin proxies it.
     ports:

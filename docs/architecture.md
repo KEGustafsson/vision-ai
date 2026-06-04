@@ -23,11 +23,20 @@
 5. **Mock mode is first-class.** Mode is chosen by config/env and swaps only the
    frame source and inference backend. The whole stack runs on a laptop.
 
+6. **Operator filters are applied in the container, before the boundary.** Object-
+   type selection (`detectClasses`) and the minimum-range gate (`minTargetRangeM`)
+   are owned by the plugin's config but pushed to the container via `POST /control`
+   and enforced when the `DetectionEvent` is built — so the annotated overlay and
+   the event stream always agree (you never see an object on the video that is
+   absent from the target list). `person` is exempt from the range gate so a
+   close man-overboard is never filtered.
+
 ## Data flow
 
 ```text
 camera → FrameSource.read() → Detector.detect_and_track() → RawTrack[]
-       → geometry (bearing + range) → DetectionEvent
+       → geometry (bearing + range) → operator filters (classes, min range)
+       → DetectionEvent
        → EventBuffer (→ WebSocket)   and   annotate() → LatestFrame (→ MJPEG)
 ```
 

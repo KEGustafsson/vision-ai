@@ -7,11 +7,11 @@ mock mode can be exercised with the video-file source path.
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import cv2
 
-import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from app.camera.synthetic import SyntheticSource  # noqa: E402
 

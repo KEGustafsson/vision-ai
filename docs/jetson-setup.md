@@ -71,8 +71,8 @@ vision-service/scripts/build_yolo_parser.sh
 # 2. Export a raw (no end-to-end NMS) YOLOv8n ONNX — the build's export stage
 #    does this automatically; see config/deepstream.yaml for the manual command.
 
-# 3. Run (nvinfer auto-builds the TRT engine into the bind-mounted models/ on
-#    first start; the engine is then baked/persisted).
+# 3. Run (nvinfer auto-builds the TRT engine next to the ONNX in the bind-mounted
+#    deepstream/ on first start, so it persists across container recreates).
 export VISION_CAMERA_FORWARD_URL="rtsp://user:pass@192.168.1.10:554/stream"
 export VISION_CAMERA_AFT_URL="rtsp://user:pass@192.168.1.11:554/stream"
 docker compose -f docker-compose.yml -f docker-compose.deepstream.yml up -d
@@ -92,6 +92,78 @@ Tuning lives in `config/deepstream.yaml` (bind-mounted, takes effect on restart)
   Kept short so both cameras pipeline at full input rate; a per-camera PTS guard
   in the probe drops any muxer frame repeats so output never exceeds the camera's
   real frame rate.
+
+The deepstream compose bind-mounts `app/`, `config/`, `deepstream/`, and `models/`,
+so code, config, model ONNX/labels, and the built TRT engine all live on the host
+and survive recreates — a plain **restart** picks up app/config edits and an
+engine rebuild only happens when the ONNX actually changes. An image rebuild is
+only needed to bake changes for a clean redeploy. ⚠ The Orin is NVMM-tight: stop
+the GPU overlay co-tenants before recreating the container, or buffer-pool
+allocation can OOM (`failed to activate bufferpool`); restart them after.
+
+## Detection model selection
+
+Exactly **one** detection model runs at a time — the two are never active
+together. Pick it with `detector.model` in `config/deepstream.yaml` (or the
+`VISION_DETECTOR_MODEL` env var) and restart:
+
+| `detector.model` | nvinfer config | classes |
+|---|---|---|
+| `coco` (default) | `deepstream/pgie_yolov8n.txt` | 80 COCO (person, vessel, buoy, …) |
+| `forward-watch` | `deepstream/pgie_forward_watch.txt` | 6 marine (ship, boat, debris, buoy, kayak, log) |
+| `marine-surveillance` | `deepstream/pgie_marine_surveillance.txt` | 7 marine (boat, buoy, kayak, sailboat, speedboat, vessel, warship) |
+
+The two models share the same YOLOv8n architecture, 640×640 input, and the same
+deepstream-yolo custom parser — only the ONNX, label file, and
+`num-detected-classes` differ, so switching is purely a config change.
+
+`coco` keeps person/man-overboard detection; `forward-watch` drops it but adds
+debris/kayak/log. The `forward-watch.onnx` is **not** vendored — fetch it before
+building the image so `COPY deepstream` bakes it in:
+
+```bash
+python3 scripts/download_forward_watch.py     # downloads AND converts → deepstream/forward-watch.onnx
+```
+
+> **The published forward-watch ONNX is a stock Ultralytics export and will not
+> work with our parser as-is** — its output is `[1, 4+nc, 8400]`, but
+> `NvDsInferParseYolo` expects `[1, 8400, 6]` (`x1,y1,x2,y2,score,class`), so fed
+> raw it produces **zero detections**. The download script above automatically
+> rewrites it via `scripts/convert_to_deepstream.py` (needs
+> `pip install onnx onnxruntime`). To convert an ONNX you already have:
+> `python3 scripts/convert_to_deepstream.py forward-watch.onnx --inplace`. After
+> replacing the ONNX, delete any cached `*_gpu0_fp16.engine` so nvinfer rebuilds
+> it. COCO needs no conversion — its build-time `export_yoloV8.py` already emits
+> the parser layout.
+
+### marine-surveillance (train on-box)
+
+Roboflow only exports the *dataset*, so this model is trained on the Jetson and
+exported to a parser-ready ONNX by `training/train_marine_surveillance.py` (it does
+a stock export then runs `vision-service/scripts/convert_to_deepstream.py`). The
+dataset and runs land under `training/_train_marine_surveillance/`. Run it inside
+an Ultralytics Jetson container — mount the repo root (the script reaches into
+`vision-service/`) — with the GPU co-tenants stopped so it doesn't OOM:
+
+```bash
+docker stop vision-service-deepstream gstreamer_in_overlay gstreamer_out_overlay
+docker run --rm -it --runtime nvidia --network host \
+  -v $PWD:/work -w /work \
+  ultralytics/ultralytics:latest-jetson-jetpack6 \
+  bash -lc "pip install -q roboflow onnx onnxslim onnxruntime && \
+    python3 training/train_marine_surveillance.py \
+      --api-key \$ROBOFLOW_KEY --workspace WS --project PROJ --version N --batch 8"
+```
+
+It writes `vision-service/deepstream/marine-surveillance.onnx` and regenerates the label file.
+Because `deepstream/` is bind-mounted (see the compose volumes), the new ONNX is
+already visible to the container — just set `detector.model: marine-surveillance`
+in `config/deepstream.yaml`, delete any stale
+`marine-surveillance.onnx_b*_gpu0_fp16.engine`, and **restart** the container (no
+image rebuild needed; nvinfer rebuilds the engine on first start). Rebuild the
+image only when you want it baked in for a clean redeploy. **No person class →
+man-overboard detection is off while this model is active**; keep `coco` if MOB
+matters.
 
 ## Troubleshooting
 

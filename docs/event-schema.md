@@ -28,7 +28,7 @@ that schema, so the two sides cannot silently drift.
   "calibration_status": "ok",          // ok | uncalibrated | auto
   "targets": [
     {
-      "track_id": 17,                  // stable across frames; null if untracked
+      "track_id": 17,                  // stable across frames, 10..99; null if untracked
       "label": "vessel",               // canonical marine label
       "coco_class": 8,
       "confidence": 0.88,
@@ -61,6 +61,14 @@ that schema, so the two sides cannot silently drift.
 - **`range_method`** lets the plugin treat `horizon` ranges (more reliable) and
   `known_size` ranges (coarse) differently; `range_confidence` gates whether a
   target is georeferenced at all (`minRangeConfidence`).
+- **`track_id`** is a compact, human-readable id in the range **10–99**, stable
+  while an object is continuously tracked and `null` for untracked detections.
+  The backend trackers (ByteTrack / NvDCF) hand out ever-growing raw ids; the
+  container remaps each to a recycled 2-digit number (per camera stream) in
+  `app/detector/tracker.py`. Freed numbers rotate to the back of the pool, so an
+  id is reused only after the rest of the range has been cycled through. Note the
+  range is per camera, so `forward` and `aft` may both show e.g. `30` for
+  different objects.
 - **`is_person_in_water`** is decided in the container (person whose waterline is
   below the horizon) so MOB latency is one frame, not a round-trip.
 - Labels are canonical marine terms from `app/detector/classmap.py`

@@ -25,8 +25,6 @@ detector:
   # Drop detections whose bbox exceeds this fraction of the frame (own hull /
   # very-near structure mis-detected as a vessel). 1.0 disables the filter.
   max_area_frac: 0.4
-  # Drop vessel detections closer than this as own hull/superstructure. 0 disables.
-  own_hull_min_range_m: 8.0
   # Object types to surface (person | vessel | buoy). Omitted/empty => all.
   # The SignalK plugin overrides this at runtime from its admin UI.
   # classes: [person, vessel]
@@ -37,6 +35,14 @@ geometry:
     person: 0.5
     buoy: 0.8
     vessel: 4.0
+    kayak: 1.5
+    debris: 0.5
+    log: 0.3
+    # marine-surveillance model (typical beam widths, used for range estimation)
+    boat: 3.0
+    sailboat: 3.5
+    speedboat: 2.5
+    warship: 18.0
 
 server:
   host: 0.0.0.0

@@ -26,6 +26,7 @@ export interface PluginConfig {
   detectClasses: string[]; // object types to surface (person | vessel | buoy); empty => all
   // Thresholds
   minConfidence: number;
+  minTargetRangeM: number; // drop any detection closer than this (own-hull / very-near clutter); 0 => off
   maxTargets: number; // maximum detections/tracks kept per frame in the container
   minRangeConfidence: number; // gate georeferencing
   ownAisMinRangeM: number; // ignore AIS contacts this close to own-ship
@@ -55,6 +56,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
   enableContextControl: true,
   detectClasses: ['person', 'vessel', 'buoy'],
   minConfidence: 0.4,
+  minTargetRangeM: 8,
   maxTargets: 20,
   minRangeConfidence: 0.3,
   ownAisMinRangeM: 25,
@@ -151,10 +153,18 @@ export function schema(): object {
         title: 'Object types to detect',
         description:
           'Which detections to surface, draw on the video, and alert on. ' +
-          'Person and Vessel work with the stock YOLO model; Buoy needs a ' +
-          'maritime-trained model. Note: man-overboard detection requires ' +
-          '"person" to be selected. Leave all unchecked to detect everything.',
-        items: { type: 'string', enum: ['person', 'vessel', 'buoy'] },
+          'Person / Vessel / Buoy work with the stock COCO model; Debris / ' +
+          'Kayak / Log require the forward-watch model; Boat / Sailboat / ' +
+          'Speedboat / Warship require the marine-surveillance model (see ' +
+          'detector.model in deepstream.yaml). The plugin warns if you pick ' +
+          'labels the active model cannot produce. Note: man-overboard detection ' +
+          'requires "person", which only the COCO model has. Leave all unchecked ' +
+          'to detect everything.',
+        items: {
+          type: 'string',
+          enum: ['person', 'vessel', 'buoy', 'debris', 'kayak', 'log',
+                 'boat', 'sailboat', 'speedboat', 'warship'],
+        },
         uniqueItems: true,
         default: ['person', 'vessel', 'buoy'],
       },
@@ -166,6 +176,13 @@ export function schema(): object {
         default: 20,
         minimum: 1,
         maximum: 300,
+      },
+      minTargetRangeM: {
+        type: 'number',
+        title: 'Ignore detections closer than (m)',
+        description: 'Drops any detected object whose estimated range is below this — own-hull artifacts and very-near clutter that swamp the frame and create phantom alerts. Filtered in the vision container, so too-close objects are removed from BOTH the target list and the annotated video overlay. Person is exempt (man-overboard must be seen up close); detections with no range estimate are kept. Set 0 to disable.',
+        default: 8,
+        minimum: 0,
       },
       minRangeConfidence: { type: 'number', title: 'Minimum range confidence to georeference', default: 0.3, minimum: 0, maximum: 1 },
       ownAisMinRangeM: {
@@ -207,6 +224,7 @@ export function uiSchema(): object {
       'enableAisBlips',
       'detectClasses',
       'minConfidence',
+      'minTargetRangeM',
       'maxTargets',
       'ownAisMinRangeM',
       '*',

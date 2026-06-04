@@ -76,7 +76,11 @@ class PixelVelocity(BaseModel):
 
 
 class Target(BaseModel):
-    track_id: Optional[int] = None
+    track_id: Optional[int] = Field(
+        None,
+        description="Stable tracking id in the range 10-99 (recycled per camera), "
+                    "or null if untracked.",
+    )
     label: str
     coco_class: int
     confidence: float = Field(..., ge=0.0, le=1.0)
@@ -131,6 +135,10 @@ class ControlRequest(BaseModel):
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
     # Maximum detections to keep per frame before tracking/event generation.
     max_targets: Optional[int] = Field(None, ge=1, le=300)
+    # Drop detections closer than this many metres (own-hull / very-near clutter),
+    # before events + overlay. person is exempt; 0 disables. Owned by the SignalK
+    # plugin's minTargetRangeM setting.
+    min_target_range_m: Optional[float] = Field(None, ge=0.0)
     mode_hint: Optional[str] = None  # e.g. "underway" | "docking" | "anchored"
     # Canonical labels to surface (person | vessel | buoy). Empty list => all.
     labels: Optional[List[str]] = None
@@ -166,3 +174,7 @@ class HealthResponse(BaseModel):
     max_targets: int = 20
     # Active canonical labels surfaced by the workers; null means all labels.
     labels: Optional[List[str]] = None
+    # Active detection model name (e.g. "coco", "forward-watch").
+    model: str = "coco"
+    # Canonical labels this model can produce (e.g. ["buoy","person","vessel"]).
+    model_labels: List[str] = Field(default_factory=list)

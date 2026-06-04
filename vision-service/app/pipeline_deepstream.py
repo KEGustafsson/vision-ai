@@ -57,7 +57,6 @@ Prerequisites
 
 from __future__ import annotations
 
-import logging
 import tempfile
 import threading
 import time
@@ -69,14 +68,26 @@ from typing import Dict, List, Optional
 from .api.overlay import annotate, encode_jpeg
 from .config import CameraConfig, Settings
 from .detector.base import RawTrack
-from .detector.classmap import is_person_in_water, label_for
+from .detector.classmap import (
+    MODEL_PGIE_CONFIG,
+    is_person_in_water,
+    label_for_model,
+)
 from .detector.stabilizer import TrackStabilizer
 from .detector.tracker import VelocityTracker
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
 from .pipeline import _drop_contained_targets  # shared geometry filter, same package
 from .schemas import (
-    Backend, BBox, CalibrationStatus, DetectionEvent, FrameSize,
-    Geometry, Inference, PixelVelocity, RangeMethod, Target,
+    Backend,
+    BBox,
+    CalibrationStatus,
+    DetectionEvent,
+    FrameSize,
+    Geometry,
+    Inference,
+    PixelVelocity,
+    RangeMethod,
+    Target,
 )
 from .util import EventBuffer, LatestFrame
 
@@ -99,8 +110,8 @@ def _check_imports() -> None:
     try:
         import gi
         gi.require_version("Gst", "1.0")
-        from gi.repository import Gst  # noqa: F401
         import pyds  # noqa: F401  # type: ignore[import]
+        from gi.repository import Gst  # noqa: F401
     except Exception as exc:
         raise ImportError(
             "DeepStream Python bindings (pyds) not available.\n"
@@ -150,6 +161,7 @@ class _StreamState:
     seq: int = 0
     confidence: float = 0.35
     allowed_labels: Optional[frozenset] = None
+    min_target_range_m: float = 0.0
     # Last processed buffer PTS — used to drop muxer frame repeats so output never
     # exceeds the camera's real frame rate. dup_skipped counts those drops.
     last_pts: int = -1
@@ -203,6 +215,7 @@ class DeepStreamPipeline:
         self._allowed_labels: Optional[frozenset] = (
             frozenset(settings.detector.classes) if settings.detector.classes else None
         )
+        self._min_target_range_m: float = settings.detector.min_target_range_m
         self._max_det: int = settings.detector.max_det
 
     # ── Public Pipeline interface ─────────────────────────────────────────────
@@ -211,7 +224,7 @@ class DeepStreamPipeline:
         _check_imports()
         import gi
         gi.require_version("Gst", "1.0")
-        from gi.repository import Gst, GLib
+        from gi.repository import GLib, Gst
 
         Gst.init(None)
 
@@ -228,6 +241,7 @@ class DeepStreamPipeline:
             self._states[cam.name] = _StreamState(
                 cam=cam, settings=self.settings, stabilizer=stab,
                 confidence=self._confidence, allowed_labels=self._allowed_labels,
+                min_target_range_m=self._min_target_range_m,
             )
 
         self._gst = self._build_pipeline(Gst)
@@ -255,8 +269,8 @@ class DeepStreamPipeline:
             target=self._loop.run, daemon=True, name="glib-main")
         self._loop_thread.start()
         self._log.info(
-            "DeepStream pipeline PLAYING: %d camera(s) → nvinfer → nvtracker",
-            len(self.settings.cameras),
+            "DeepStream pipeline PLAYING: %d camera(s) → nvinfer(%s) → nvtracker",
+            len(self.settings.cameras), self.settings.detector.model,
         )
 
     def stop(self) -> None:
@@ -282,6 +296,12 @@ class DeepStreamPipeline:
             self._confidence = value
             for st in self._states.values():
                 st.confidence = value
+
+    def set_min_target_range(self, value: float) -> None:
+        with self._lock:
+            self._min_target_range_m = value
+            for st in self._states.values():
+                st.min_target_range_m = value
 
     def set_labels(self, labels: Optional[list]) -> None:
         fs = frozenset(labels) if labels else None
@@ -408,7 +428,19 @@ class DeepStreamPipeline:
         W = self.settings.detector.mux_width
         H = self.settings.detector.mux_height
 
-        pgie_cfg = str(_DEEPSTREAM_DIR / "pgie_yolov8n.txt")
+        # Exactly one detection model runs at a time, selected by detector.model.
+        model = self.settings.detector.model
+        cfg_name = MODEL_PGIE_CONFIG.get(model)
+        if cfg_name is None:
+            raise ValueError(
+                f"detector.model={model!r} is not supported. "
+                f"Choose one of: {sorted(MODEL_PGIE_CONFIG)}."
+            )
+        pgie_cfg = str(_DEEPSTREAM_DIR / cfg_name)
+        if not Path(pgie_cfg).exists():
+            raise FileNotFoundError(
+                f"nvinfer config for model {model!r} not found at {pgie_cfg}."
+            )
         tracker_cfg = _tracker_cfg_path()
 
         def make(factory: str, name: str, **props):
@@ -510,9 +542,11 @@ class DeepStreamPipeline:
 
         # nvinfer: TensorRT inference. Reads the batched NVMM buffer directly —
         # no host-side copy. Uses custom deepstream-yolo parser for YOLOv8 output.
+        # The config (and thus the model) is selected by detector.model above.
         pgie = make("nvinfer", "pgie",
                     config_file_path=pgie_cfg,
                     batch_size=n)
+        self._log.info("nvinfer model=%s config=%s", model, cfg_name)
 
         # nvtracker: NvDCF GPU tracker. Assigns stable object_id (track ID) to
         # each detection across frames. Runs entirely on the GPU.
@@ -629,6 +663,9 @@ class DeepStreamPipeline:
         # Sentinel for untracked objects (pyds.UNTRACKED_OBJECT_ID on DS 7.x)
         untracked = getattr(pyds, "UNTRACKED_OBJECT_ID", 0xFFFF_FFFF_FFFF_FFFF)
 
+        # Active model selects the class map (only one model runs at a time).
+        model = self.settings.detector.model
+
         with self._lock:
             conf_thresh = self._confidence
             allowed = self._allowed_labels
@@ -702,18 +739,20 @@ class DeepStreamPipeline:
                 conf = float(obj.confidence)
                 tid_raw = int(obj.object_id)
                 tid = None if tid_raw == untracked else tid_raw
-                lbl = label_for(cls_id)
+                lbl, cls_id = label_for_model(model, cls_id)
                 vx = vy = 0.0
                 age = 0
+                disp = tid
 
                 if tid is not None:
                     cx = r.left + r.width / 2.0
                     cy = r.top + r.height / 2.0
                     vx, vy, age = state.vel.update(tid, state.seq, cx, cy)
+                    disp = state.vel.display_id(tid)
                     active_ids.add(tid)
 
                 raw_tracks.append(RawTrack(
-                    track_id=tid,
+                    track_id=disp,
                     cls=cls_id,
                     label=lbl,
                     confidence=conf,
@@ -820,7 +859,6 @@ class DeepStreamPipeline:
 
         frame_area = float(W * H) or 1.0
         max_area = self.settings.detector.max_area_frac
-        own_hull_min = self.settings.detector.own_hull_min_range_m
 
         targets: List[Target] = []
         for tr in tracks:
@@ -836,7 +874,12 @@ class DeepStreamPipeline:
             rng, method, rconf = estimate_range(
                 tr, cam, self.settings.geometry, W, H, horizon_y)
 
-            if tr.label == "vessel" and rng is not None and 0 < rng < own_hull_min:
+            # Minimum-range gate (own-hull / very-near clutter), applied EARLY so
+            # neither the event nor the overlay shows a too-close object. person is
+            # exempt (MOB must be seen up close); unknown range is kept. The value
+            # is owned by the SignalK plugin (detector.minTargetRangeM via /control).
+            if (state.min_target_range_m > 0 and tr.label != "person"
+                    and rng is not None and 0 < rng < state.min_target_range_m):
                 continue
 
             piw = is_person_in_water(tr.label, tr.y + tr.h, horizon_y)

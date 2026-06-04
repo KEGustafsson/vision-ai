@@ -1,0 +1,6 @@
+ship
+boat
+debris
+buoy
+kayak
+log

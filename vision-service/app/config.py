@@ -101,15 +101,19 @@ class DetectorConfig(BaseModel):
     # producing false dark-target/collision alerts. Real contacts of interest
     # (distant vessels, buoys, persons) occupy a small fraction. 1.0 disables.
     max_area_frac: float = 0.4
-    # Treat very-near vessel detections as own hull/superstructure and suppress
-    # them before events/AIS fusion. Set 0 to disable.
-    own_hull_min_range_m: float = 8.0
     # Suppress a detection whose bbox lies largely inside a larger detection's
     # bbox (e.g. a buoy/person on a vessel's deck, or a duplicate nested box):
     # if intersection / inner-box-area exceeds this fraction, the inner
     # detection is dropped and the larger containing one is kept. A
     # person-in-water is never dropped (MOB safety). 1.0 disables.
     contained_frac: float = 0.8
+    # Drop any detection whose estimated range is below this many metres (own-hull
+    # artifacts / very-near clutter). Applied EARLY — before events and the
+    # annotated overlay — so neither surfaces a too-close object. person is exempt
+    # (man-overboard must still be seen up close); detections with no range
+    # estimate are kept. 0 disables. The SignalK plugin owns the operational value
+    # and pushes it at runtime via POST /control (detector.minTargetRangeM).
+    min_target_range_m: float = 0.0
     # Canonical labels to surface (person | vessel | buoy). None/empty => all.
     # The SignalK plugin overrides this at runtime via POST /control so the
     # operator can pick object types from the admin UI. Filtering here keeps
@@ -138,6 +142,17 @@ class DetectorConfig(BaseModel):
     batch_cameras: bool = False
     # How long a camera waits to rendezvous with the other before inferring solo.
     batch_wait_ms: int = 20
+    # DeepStream only: which detection model to run. Exactly ONE model runs at a
+    # time (never both). Selects both the nvinfer config and the class map:
+    #   "coco"                -> COCO YOLOv8n, 80 classes (person/vessel/buoy/...)
+    #   "forward-watch"       -> forward-watch marine model, 6 classes
+    #                            (ship/boat/debris/buoy/kayak/log)
+    #   "marine-surveillance" -> Roboflow Marine Surveillance YOLOv8s, 7 classes
+    #                            (boat/buoy/kayak/sailboat/speedboat/vessel/warship);
+    #                            NO person -> no man-overboard. Train on-box via
+    #                            training/train_marine_surveillance.py.
+    # See app/detector/classmap.py (MODEL_PGIE_CONFIG) for the registry.
+    model: str = "coco"
 
 
 class ServerConfig(BaseModel):
@@ -197,6 +212,9 @@ def _apply_env(raw: dict) -> dict:
         det["model_pt"] = env["VISION_MODEL_PT"]
     if "VISION_MODEL_ENGINE" in env:
         det["model_engine"] = env["VISION_MODEL_ENGINE"]
+    # DeepStream model selector (coco | forward-watch); see DetectorConfig.model.
+    if "VISION_DETECTOR_MODEL" in env:
+        det["model"] = env["VISION_DETECTOR_MODEL"]
     # Per-camera URL overrides
     cams = {c["name"]: c for c in raw.get("cameras", [])}
     if "VISION_CAMERA_FORWARD_URL" in env and "forward" in cams:

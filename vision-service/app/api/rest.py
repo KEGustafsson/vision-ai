@@ -6,8 +6,8 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
+from ..detector.classmap import MODEL_LABELS
 from ..schemas import Backend, ControlRequest, HealthResponse, PtzRequest
-from .overlay import encode_jpeg
 
 router = APIRouter()
 
@@ -25,6 +25,7 @@ def health(request: Request) -> HealthResponse:
     p = _pipeline(request)
     backend = Backend(p.settings.detector.backend)
     errors = p.camera_errors()
+    model = p.settings.detector.model
     return HealthResponse(
         status="degraded" if errors else "ok",
         mode=p.settings.mode,
@@ -36,6 +37,8 @@ def health(request: Request) -> HealthResponse:
         detection_enabled=p.enabled,
         max_targets=p.max_targets(),
         labels=p.labels(),
+        model=model,
+        model_labels=MODEL_LABELS.get(model, []),
     )
 
 
@@ -69,6 +72,9 @@ def control(request: Request, body: ControlRequest):
     if body.max_targets is not None:
         p.set_max_targets(body.max_targets)
         applied["max_targets"] = p.max_targets()
+    if body.min_target_range_m is not None:
+        p.set_min_target_range(body.min_target_range_m)
+        applied["min_target_range_m"] = body.min_target_range_m
     if body.active_camera is not None:
         if body.active_camera not in p.workers:
             raise HTTPException(status_code=404, detail=f"unknown camera {body.active_camera}")

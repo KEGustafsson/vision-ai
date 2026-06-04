@@ -19,7 +19,11 @@ export interface AisContact {
 const num = (v: any): number | null =>
   typeof v === 'number' && isFinite(v) ? v : null;
 
-const VESSEL_LABELS = new Set(['vessel', 'boat', 'ship', 'ferry', 'sail boat', 'speed boat']);
+const VESSEL_LABELS = new Set([
+  'vessel', 'boat', 'ship', 'ferry', 'sail boat', 'speed boat', 'kayak',
+  // marine-surveillance model canonical labels (no spaces/hyphens)
+  'sailboat', 'speedboat', 'warship',
+]);
 
 /** Extract AIS contacts (excluding self) that have a position. */
 export function collectAisContacts(
