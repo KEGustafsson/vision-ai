@@ -17,7 +17,8 @@ bearing/range sensor and, using the boat's own position and heading from
 SignalK, produces:
 
 - 🎯 **Visual radar targets** — every detection becomes a true-bearing + range
-  track, georeferenced to a lat/lon and published under `vision.targets.*`.
+  track, georeferenced to a lat/lon and published as a synthetic AIS vessel
+  (`vessels.*` chart blip) when enabled.
 - 🕶️ **Dark-target alerts** — visual targets are correlated against AIS; a
   vessel that is *seen but not transmitting AIS* is flagged as a collision
   hazard (`notifications.vision.darkTarget.*`).

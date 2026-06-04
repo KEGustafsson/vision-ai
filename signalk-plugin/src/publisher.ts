@@ -1,37 +1,28 @@
-// Build and emit SignalK deltas for the novel vision.* tree, plus optional
-// synthetic AIS blips. Sends metadata (units/zones) once per concrete path and
-// ages out stale tracks by publishing null.
+// Build and emit SignalK deltas: the vision.* telemetry tree (fusion + system
+// stats on own context) and synthetic AIS vessel blips — one vessels.* contact
+// per georeferenced target. A blip is never published without a real position,
+// and departed blips are fully retracted.
 
 import { PluginConfig } from './config';
 import { ServerApp } from './skapp';
 import { EnrichedTarget } from './types';
 
-interface Meta {
-  units?: string;
-  description: string;
-  displayName?: string;
-  zones?: Array<{ state: string; lower?: number; upper?: number }>;
-}
-
-// Every leaf published under vision.targets.<camera>.<trackId>; used both to
-// age out departed tracks and to fully retract state on reset().
-const TARGET_LEAVES = [
-  'label', 'confidence', 'bearingTrue', 'distance', 'position',
-  'cpa', 'tcpa', 'threatLevel', 'aisCorrelated', 'aisMmsi', 'rangeMethod',
-];
-
-const FIELD_META: Record<string, Meta> = {
-  bearingTrue: { units: 'rad', description: 'True bearing to visual target' },
-  distance: { units: 'm', description: 'Estimated range to visual target' },
-  confidence: { units: 'ratio', description: 'Detection confidence' },
-  cpa: { units: 'm', description: 'Closest point of approach' },
-  tcpa: { units: 's', description: 'Time to closest point of approach' },
-};
-
 export class Publisher {
   private metaSent = new Set<string>();
-  private publishedTracks = new Set<string>();
   private publishedBlips = new Set<string>();
+
+  // Every leaf a synthetic vessel can carry; used to fully retract a departed
+  // blip so none ever lingers without a real location. position + name identify
+  // the contact; the kinematics are published value-or-null each cycle so they
+  // never go stale on a live blip.
+  private static readonly BLIP_LEAVES = [
+    'navigation.position',
+    'name',
+    'navigation.speedOverGround',
+    'navigation.courseOverGroundTrue',
+    'navigation.cpa',
+    'navigation.tcpa',
+  ];
 
   constructor(
     private app: ServerApp,
@@ -54,70 +45,11 @@ export class Publisher {
     });
   }
 
-  private metaFor(path: string, field: string): { path: string; value: unknown } | null {
-    if (this.metaSent.has(path)) return null;
-    const m = FIELD_META[field];
-    if (!m) return null;
-    this.metaSent.add(path);
-    return { path, value: m };
-  }
-
   publishTargets(targets: EnrichedTarget[]): void {
-    if (!this.cfg.enableVisualRadar) return;
-    const values: Array<{ path: string; value: unknown }> = [];
-    const meta: Array<{ path: string; value: unknown }> = [];
-    const current = new Set<string>();
-
-    for (const t of targets) {
-      if (t.track_id === null) continue; // only persistent tracks go on the radar
-      const base = `vision.targets.${t.camera}.${t.track_id}`;
-      current.add(base);
-
-      const push = (leaf: string, value: unknown, field?: string) => {
-        const path = `${base}.${leaf}`;
-        values.push({ path, value });
-        if (field) {
-          const m = this.metaFor(path, field);
-          if (m) meta.push(m);
-        }
-      };
-
-      // Optional measurements: emit the value, or an explicit null if it has
-      // gone away while the track stays live — otherwise SignalK would keep
-      // showing the last known value indefinitely.
-      const pushOptional = (leaf: string, value: unknown, field?: string) => {
-        if (value === null || value === undefined) {
-          values.push({ path: `${base}.${leaf}`, value: null });
-        } else {
-          push(leaf, value, field);
-        }
-      };
-
-      push('label', t.label);
-      push('confidence', t.confidence, 'confidence');
-      push('rangeMethod', t.geometry.range_method);
-      push('aisCorrelated', t.aisCorrelated);
-      push('aisMmsi', t.aisMmsi);
-      push('threatLevel', t.threatLevel);
-      pushOptional('bearingTrue', t.bearingTrue, 'bearingTrue');
-      pushOptional('distance', t.geometry.range_m, 'distance');
-      pushOptional('position', t.position);
-      pushOptional('cpa', t.cpa, 'cpa');
-      pushOptional('tcpa', t.tcpa, 'tcpa');
-    }
-
-    // Age out tracks that disappeared.
-    for (const base of [...this.publishedTracks]) {
-      if (!current.has(base)) {
-        for (const leaf of TARGET_LEAVES) {
-          values.push({ path: `${base}.${leaf}`, value: null });
-        }
-      }
-    }
-    this.publishedTracks = current;
-
-    this.emit(values, meta);
-    if (this.cfg.enableAisBlips) this.publishBlips(targets);
+    // Single output: render each georeferenced target as a synthetic AIS vessel
+    // (chart blip). No vision.targets.* data tree — the captain webapp reads the
+    // plugin REST API, and collision/MOB run off the in-memory target set.
+    if (this.cfg.enableVisualRadar) this.publishBlips(targets);
   }
 
   publishFusionSummary(darkCount: number, aisCount: number): void {
@@ -165,64 +97,64 @@ export class Publisher {
     this.emit(values, meta);
   }
 
-  /** Optional: render high-confidence visual targets as synthetic AIS vessels. */
+  /** Render each georeferenced target as a synthetic AIS vessel so it draws as a
+   * chart blip. position + name identify it; SOG/COG let the chartplotter draw a
+   * vector and compute CPA natively; cpa/tcpa expose our own estimate too. A blip
+   * is NEVER created without a real position. */
   private publishBlips(targets: EnrichedTarget[]): void {
-    const ts = new Date().toISOString();
+    const now = Date.now();
+    const ts = new Date(now).toISOString();
     const current = new Set<string>();
-    for (const t of targets) {
-      if (!t.position || t.track_id === null) continue;
+    // Draw ONLY actively-detected vessels, so the chart matches the live video.
+    // A track retained longer for CPA/notification continuity (trackTimeoutS) is
+    // not drawn once it stops being seen; it's pruned within ~2 process cycles.
+    // The container coasts through brief flicker, so this won't blink contacts.
+    const activeMs = this.cfg.processIntervalMs * 2;
+    const eligible = targets
+      .filter((t) => t.position && t.track_id !== null && now - t.lastSeen <= activeMs)
+      // Cap the chart to maxTargets vessels, keeping the closest (most
+      // collision-relevant) so the count tracks the detection limit.
+      .sort((a, b) => (a.geometry.range_m ?? Infinity) - (b.geometry.range_m ?? Infinity))
+      .slice(0, this.cfg.maxTargets);
+    for (const t of eligible) {
       const uuid = `urn:mrn:signalk:uuid:vision-${t.camera}-${t.track_id}`;
       current.add(uuid);
-      this.app.handleMessage(this.pluginId, {
-        context: `vessels.${uuid}`,
-        updates: [
-          {
-            source: { label: 'vision-ai' },
-            timestamp: ts,
-            values: [
-              { path: 'navigation.position', value: t.position },
-              { path: 'name', value: `VIS-${t.label}-${t.track_id}` },
-            ],
-          },
-        ],
-      });
+      // Only ever write REAL values onto a synthetic vessel — never a null leaf.
+      // position + name are always present; each kinematic is included only once
+      // computed, so a live chart contact never carries null data.
+      const values: Array<{ path: string; value: unknown }> = [
+        { path: 'navigation.position', value: t.position },
+        { path: 'name', value: `VIS-${t.label}-${t.track_id}` },
+      ];
+      if (t.sog !== null) values.push({ path: 'navigation.speedOverGround', value: t.sog });
+      if (t.cog !== null) values.push({ path: 'navigation.courseOverGroundTrue', value: t.cog });
+      if (t.cpa !== null) values.push({ path: 'navigation.cpa', value: t.cpa });
+      if (t.tcpa !== null) values.push({ path: 'navigation.tcpa', value: t.tcpa });
+      this.emitVessel(uuid, ts, values);
     }
-    // Age out departed blips by nulling their position (best-effort removal).
+    // Age out departed blips: null every leaf so none lingers without a location.
     for (const uuid of this.publishedBlips) {
       if (current.has(uuid)) continue;
-      this.app.handleMessage(this.pluginId, {
-        context: `vessels.${uuid}`,
-        updates: [
-          {
-            source: { label: 'vision-ai' },
-            timestamp: ts,
-            values: [{ path: 'navigation.position', value: null }],
-          },
-        ],
-      });
+      this.emitVessel(uuid, ts, Publisher.BLIP_LEAVES.map((path) => ({ path, value: null })));
     }
     this.publishedBlips = current;
   }
 
-  /** Retract all previously published state, then clear bookkeeping. Called on
-   * plugin stop so stale vision.* leaves and synthetic blips don't linger. */
+  private emitVessel(uuid: string, ts: string, values: Array<{ path: string; value: unknown }>): void {
+    this.app.handleMessage(this.pluginId, {
+      context: `vessels.${uuid}`,
+      updates: [{ source: { label: 'vision-ai' }, timestamp: ts, values }],
+    });
+  }
+
+  /** Retract all synthetic blips, then clear bookkeeping. Called on plugin stop
+   * so no stale synthetic vessel lingers. */
   reset(): void {
     const ts = new Date().toISOString();
-    const values: Array<{ path: string; value: unknown }> = [];
-    for (const base of this.publishedTracks) {
-      for (const leaf of TARGET_LEAVES) values.push({ path: `${base}.${leaf}`, value: null });
-    }
-    this.emit(values);
     for (const uuid of this.publishedBlips) {
-      this.app.handleMessage(this.pluginId, {
-        context: `vessels.${uuid}`,
-        updates: [
-          { source: { label: 'vision-ai' }, timestamp: ts, values: [{ path: 'navigation.position', value: null }] },
-        ],
-      });
+      this.emitVessel(uuid, ts, Publisher.BLIP_LEAVES.map((path) => ({ path, value: null })));
     }
     this.metaSent.clear();
-    this.publishedTracks.clear();
     this.publishedBlips.clear();
   }
 }

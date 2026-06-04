@@ -75,7 +75,7 @@ collectAisContacts() enumerate vessels.* with positions
 fuse()               correlate visual vs AIS → aisCorrelated | darkTarget
 CpaEstimator.update() per-track ground velocity → CPA / TCPA → threatLevel
 NotificationManager  MOB / dark-target / collision (set & clear, hysteresis)
-Publisher            vision.targets.* + vision.fusion.* + vision.system.*
+Publisher            synthetic AIS vessels (vessels.*) + vision.fusion.* + vision.system.*
 ```
 
 ## Why "visual radar"?

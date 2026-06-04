@@ -44,6 +44,8 @@ export function enrichTarget(
     aisSog: null,
     cpa: null,
     tcpa: null,
+    sog: null,
+    cog: null,
     threatLevel: 'none',
     lastSeen: now,
   };

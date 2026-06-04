@@ -128,16 +128,17 @@ the plugin's WS consumer is receiving container events.
 **FAIL:** check the plugin's `containerUrl` points at `$NANO`; check reachability
 from the SignalK host to the container.
 
-### 3.2 vision.* tree & metadata
+### 3.2 synthetic vessels, vision.* tree & metadata
 ```bash
-curl -s "$SK/signalk/v1/api/vessels/self/vision/targets" | jq 'keys'
+# synthetic AIS vessels — needs "Publish targets as synthetic AIS vessels" on:
+curl -s "$SK/signalk/v1/api/vessels" | jq '[keys[]|select(test("vision-"))]'
 curl -s "$SK/signalk/v1/api/vessels/self/vision/fusion" | jq
 # metadata + zones on the fps path:
 curl -s "$SK/signalk/v1/api/vessels/self/vision/system/inferenceFps/meta" | jq
 ```
-**PASS:** `vision.targets.<camera>.<id>.*` populate while targets are in view;
-`vision.fusion.darkTargetCount`/`aisCorrelatedCount` present; `inferenceFps`
-carries `units:"Hz"` + zones.
+**PASS:** `vessels.urn:…:vision-<camera>-<id>` appear (with `navigation.position`
++ `VIS-…` name) while targets are in view; `vision.fusion.darkTargetCount`/
+`aisCorrelatedCount` present; `inferenceFps` carries `units:"Hz"` + zones.
 
 ### 3.3 Live delta stream
 ```bash
@@ -149,8 +150,9 @@ carries `units:"Hz"` + zones.
   | tee "$OUT/sk-deltas.log" | head -40
 ```
 (If `websocat` is unavailable I'll use a short Node/Python WS client instead.)
-**PASS:** live deltas for `vision.targets.*` arrive at roughly the processing
-cadence; values change as targets move.
+**PASS:** live `vision.fusion.*` / `vision.system.*` deltas arrive at roughly the
+processing cadence. Synthetic-vessel position updates arrive on their own
+`vessels.urn:…:vision-*` contexts (subscribe with `"context":"vessels.*"`).
 
 ### 3.4 Plugin REST proxy (same-origin, behind SignalK auth)
 ```bash
@@ -171,13 +173,15 @@ for p in navigation/position navigation/headingTrue navigation/speedOverGround n
   echo -n "$p = "; curl -s "$SK/signalk/v1/api/vessels/self/$p" | jq -c '.value'
 done
 ```
-**PASS:** position + heading at minimum. Without heading, `bearingTrue`/`position`
-on targets will be null and 4.2–4.4 can't run — fix the nav source first.
+**PASS:** position + heading at minimum. Without heading, the synthetic vessels'
+`navigation.position` will be null (not published) and 4.2–4.4 can't run — fix
+the nav source first.
 
 ### 4.2 True-bearing check **[NEEDS YOU]**
-Pick a target visible in the camera and by eye/compass. Compare its
-`vision.targets.<cam>.<id>.bearingTrue` (radians → ×57.2958 for degrees) to the
-hand-compass bearing. **PASS:** within a few degrees once calibrated.
+Pick a target visible in the camera and by eye/compass. Read its synthetic
+vessel's `navigation.position` (`vessels.urn:…:vision-<cam>-<id>`) and compare
+the bearing from own-ship to that fix against the hand-compass bearing.
+**PASS:** within a few degrees once calibrated.
 
 ### 4.3 AIS cross-check (best quantitative validation)
 When a **real AIS vessel** is within camera view, compare the vision estimate to

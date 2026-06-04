@@ -5,7 +5,7 @@
 // from SOG/COG. We solve the standard relative-motion CPA in a local ENU frame.
 
 import { PluginConfig } from './config';
-import { EARTH_RADIUS_M, deg2rad } from './geo';
+import { EARTH_RADIUS_M, deg2rad, normalizeRad } from './geo';
 import { EnrichedTarget, LatLon, OwnShip, ThreatLevel } from './types';
 
 interface Sample {
@@ -75,6 +75,11 @@ export class CpaEstimator {
         vtE = (cur.e - prevInCur.e) / dt;
         vtN = (cur.n - prevInCur.n) / dt;
       }
+
+      // Target ground kinematics, surfaced onto the target for the synthetic
+      // vessel blip (navigation.speedOverGround / courseOverGroundTrue).
+      tgt.sog = Math.hypot(vtE, vtN);
+      tgt.cog = normalizeRad(Math.atan2(vtE, vtN)); // clockwise from true north
 
       // Relative motion: target relative to own.
       const rE = cur.e;

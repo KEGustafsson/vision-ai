@@ -77,6 +77,8 @@ export interface EnrichedTarget extends RawTarget {
   aisSog: number | null; // m/s, from a correlated AIS contact
   cpa: number | null; // m
   tcpa: number | null; // s
+  sog: number | null; // m/s, target ground speed (estimated from track or AIS)
+  cog: number | null; // rad [0,2π), target ground course
   threatLevel: ThreatLevel;
   lastSeen: number; // epoch ms
 }
