@@ -76,7 +76,11 @@ class PixelVelocity(BaseModel):
 
 
 class Target(BaseModel):
-    track_id: Optional[int] = None
+    track_id: Optional[int] = Field(
+        None,
+        description="Stable tracking id in the range 10-99 (recycled per camera), "
+                    "or null if untracked.",
+    )
     label: str
     coco_class: int
     confidence: float = Field(..., ge=0.0, le=1.0)

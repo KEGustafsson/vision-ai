@@ -202,11 +202,13 @@ class YoloTorchDetector(Detector):
             label = label_for(cls)
             vx = vy = 0.0
             age = 0
+            disp = tid
             if tid is not None:
                 cx, cy = x1 + w / 2, y1 + h / 2
                 vx, vy, age = vel.update(tid, frame.seq, cx, cy)
+                disp = vel.display_id(tid)
                 active.add(tid)
-            out.append(RawTrack(track_id=tid, cls=cls, label=label, confidence=conf,
+            out.append(RawTrack(track_id=disp, cls=cls, label=label, confidence=conf,
                                 x=x1, y=y1, w=w, h=h, vx=vx, vy=vy, age_frames=age))
         vel.prune(active, frame.seq)
         return out

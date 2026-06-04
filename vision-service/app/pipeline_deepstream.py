@@ -742,15 +742,17 @@ class DeepStreamPipeline:
                 lbl, cls_id = label_for_model(model, cls_id)
                 vx = vy = 0.0
                 age = 0
+                disp = tid
 
                 if tid is not None:
                     cx = r.left + r.width / 2.0
                     cy = r.top + r.height / 2.0
                     vx, vy, age = state.vel.update(tid, state.seq, cx, cy)
+                    disp = state.vel.display_id(tid)
                     active_ids.add(tid)
 
                 raw_tracks.append(RawTrack(
-                    track_id=tid,
+                    track_id=disp,
                     cls=cls_id,
                     label=lbl,
                     confidence=conf,
