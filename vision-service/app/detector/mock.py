@@ -85,8 +85,9 @@ class MockDetector(Detector):
                 state["next_id"] += 1
             used.add(best_id)
             vx, vy, age = state["tracker"].update(best_id, seq, cx, cy)
+            disp = state["tracker"].display_id(best_id)
             new_prev[best_id] = (cx, cy)
-            tracks.append(RawTrack(track_id=best_id, cls=cls, label=label,
+            tracks.append(RawTrack(track_id=disp, cls=cls, label=label,
                                    confidence=conf, x=x, y=y, w=w, h=h,
                                    vx=vx, vy=vy, age_frames=age))
         state["prev"] = new_prev
