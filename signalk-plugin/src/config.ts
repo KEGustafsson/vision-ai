@@ -180,7 +180,7 @@ export function schema(): object {
       minTargetRangeM: {
         type: 'number',
         title: 'Ignore detections closer than (m)',
-        description: 'Drops any detected object whose estimated range is below this — own-hull artifacts and very-near clutter that swamp the frame and create phantom alerts. Targets with no range estimate are kept. Set 0 to disable.',
+        description: 'Drops any detected object whose estimated range is below this — own-hull artifacts and very-near clutter that swamp the frame and create phantom alerts. Filtered in the vision container, so too-close objects are removed from BOTH the target list and the annotated video overlay. Person is exempt (man-overboard must be seen up close); detections with no range estimate are kept. Set 0 to disable.',
         default: 8,
         minimum: 0,
       },

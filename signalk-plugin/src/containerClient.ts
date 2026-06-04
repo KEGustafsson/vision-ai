@@ -15,6 +15,7 @@ export interface ControlBody {
   active_camera?: string;
   confidence?: number;
   max_targets?: number;
+  min_target_range_m?: number; // drop detections closer than this (m) in the container; 0 => off
   mode_hint?: string;
   labels?: string[]; // canonical labels to surface (person | vessel | buoy | debris | kayak | log)
   enabled?: boolean; // master on/off: pause/resume detection in the container

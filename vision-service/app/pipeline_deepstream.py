@@ -161,6 +161,7 @@ class _StreamState:
     seq: int = 0
     confidence: float = 0.35
     allowed_labels: Optional[frozenset] = None
+    min_target_range_m: float = 0.0
     # Last processed buffer PTS — used to drop muxer frame repeats so output never
     # exceeds the camera's real frame rate. dup_skipped counts those drops.
     last_pts: int = -1
@@ -214,6 +215,7 @@ class DeepStreamPipeline:
         self._allowed_labels: Optional[frozenset] = (
             frozenset(settings.detector.classes) if settings.detector.classes else None
         )
+        self._min_target_range_m: float = settings.detector.min_target_range_m
         self._max_det: int = settings.detector.max_det
 
     # ── Public Pipeline interface ─────────────────────────────────────────────
@@ -239,6 +241,7 @@ class DeepStreamPipeline:
             self._states[cam.name] = _StreamState(
                 cam=cam, settings=self.settings, stabilizer=stab,
                 confidence=self._confidence, allowed_labels=self._allowed_labels,
+                min_target_range_m=self._min_target_range_m,
             )
 
         self._gst = self._build_pipeline(Gst)
@@ -293,6 +296,12 @@ class DeepStreamPipeline:
             self._confidence = value
             for st in self._states.values():
                 st.confidence = value
+
+    def set_min_target_range(self, value: float) -> None:
+        with self._lock:
+            self._min_target_range_m = value
+            for st in self._states.values():
+                st.min_target_range_m = value
 
     def set_labels(self, labels: Optional[list]) -> None:
         fs = frozenset(labels) if labels else None
@@ -863,9 +872,14 @@ class DeepStreamPipeline:
             rng, method, rconf = estimate_range(
                 tr, cam, self.settings.geometry, W, H, horizon_y)
 
-            # Minimum-range filtering (own-hull / very-near clutter) moved to the
-            # SignalK plugin (detector.minTargetRangeM): applies to every label and
-            # is operator-tunable at runtime.
+            # Minimum-range gate (own-hull / very-near clutter), applied EARLY so
+            # neither the event nor the overlay shows a too-close object. person is
+            # exempt (MOB must be seen up close); unknown range is kept. The value
+            # is owned by the SignalK plugin (detector.minTargetRangeM via /control).
+            if (state.min_target_range_m > 0 and tr.label != "person"
+                    and rng is not None and 0 < rng < state.min_target_range_m):
+                continue
+
             piw = is_person_in_water(tr.label, tr.y + tr.h, horizon_y)
             targets.append(Target(
                 track_id=tr.track_id,

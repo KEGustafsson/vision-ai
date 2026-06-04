@@ -88,13 +88,9 @@ export = function (app: ServerApp): Plugin {
     for (const raw of ev.targets) {
       if (raw.confidence < cfg.minConfidence) continue;
       if (cfg.detectClasses.length > 0 && !cfg.detectClasses.includes(raw.label)) continue;
-      if (
-        cfg.minTargetRangeM > 0 &&
-        raw.label !== 'person' &&
-        raw.geometry.range_m !== null &&
-        raw.geometry.range_m < cfg.minTargetRangeM
-      )
-        continue;
+      // NB: minimum-range filtering (minTargetRangeM) is done in the container
+      // (pushed via syncContainer), so events already exclude too-close objects
+      // from both the target list AND the annotated overlay.
       if (raw.track_id === null) continue;
       const t = enrichTarget(raw, ev.camera, own, cfg, now);
       targets.set(t.key, t);
@@ -184,6 +180,9 @@ export = function (app: ServerApp): Plugin {
       labels: cfg.detectClasses,
       enabled: detectionEnabled,
       max_targets: maxTargets,
+      // The container does the minimum-range filtering EARLY (events + overlay);
+      // this is the single source of truth, pushed so it survives a restart.
+      min_target_range_m: cfg.minTargetRangeM,
     };
     let nextCamera: string | null = null;
     let nextModeHint: string | null = null;

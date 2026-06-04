@@ -131,6 +131,10 @@ class ControlRequest(BaseModel):
     confidence: Optional[float] = Field(None, ge=0.0, le=1.0)
     # Maximum detections to keep per frame before tracking/event generation.
     max_targets: Optional[int] = Field(None, ge=1, le=300)
+    # Drop detections closer than this many metres (own-hull / very-near clutter),
+    # before events + overlay. person is exempt; 0 disables. Owned by the SignalK
+    # plugin's minTargetRangeM setting.
+    min_target_range_m: Optional[float] = Field(None, ge=0.0)
     mode_hint: Optional[str] = None  # e.g. "underway" | "docking" | "anchored"
     # Canonical labels to surface (person | vessel | buoy). Empty list => all.
     labels: Optional[List[str]] = None

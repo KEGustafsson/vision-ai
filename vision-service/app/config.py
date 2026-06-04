@@ -107,6 +107,13 @@ class DetectorConfig(BaseModel):
     # detection is dropped and the larger containing one is kept. A
     # person-in-water is never dropped (MOB safety). 1.0 disables.
     contained_frac: float = 0.8
+    # Drop any detection whose estimated range is below this many metres (own-hull
+    # artifacts / very-near clutter). Applied EARLY — before events and the
+    # annotated overlay — so neither surfaces a too-close object. person is exempt
+    # (man-overboard must still be seen up close); detections with no range
+    # estimate are kept. 0 disables. The SignalK plugin owns the operational value
+    # and pushes it at runtime via POST /control (detector.minTargetRangeM).
+    min_target_range_m: float = 0.0
     # Canonical labels to surface (person | vessel | buoy). None/empty => all.
     # The SignalK plugin overrides this at runtime via POST /control so the
     # operator can pick object types from the admin UI. Filtering here keeps
