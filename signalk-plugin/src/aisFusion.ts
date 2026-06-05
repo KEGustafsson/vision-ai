@@ -43,13 +43,15 @@ export function collectAisContacts(
   if (!vessels || !own.position) return out;
   for (const [id, v] of Object.entries<any>(vessels)) {
     if (id === 'self') continue;
-    // Require a real AIS identity. UUID-only / synthetic contacts have no MMSI.
-    const mmsi = id.includes('mmsi:') ? id.split('mmsi:').pop()! : null;
+    // Require a real AIS identity: exactly 9 digits (the MMSI format). A bare
+    // `mmsi:` prefix check would let a malformed token through; UUID-only /
+    // synthetic contexts have no MMSI at all.
+    const mmsi = id.match(/mmsi:(\d{9})(?::|$)/)?.[1] ?? null;
     if (!mmsi) continue;
     // Require an AIS class — confirms this came from an AIS transmitter, not a
     // bare position injected by some other plugin (ours included).
     const aisClass = v?.sensors?.ais?.class?.value ?? v?.sensors?.ais?.class;
-    if (typeof aisClass !== 'string' || aisClass.length === 0) continue;
+    if (typeof aisClass !== 'string' || aisClass.trim().length === 0) continue;
     const p = v?.navigation?.position?.value ?? v?.navigation?.position;
     if (!p || typeof p.latitude !== 'number') continue;
     const pos: LatLon = { latitude: p.latitude, longitude: p.longitude };

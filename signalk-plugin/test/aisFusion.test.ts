@@ -45,7 +45,9 @@ describe('aisFusion', () => {
       // Our own synthetic blip: UUID context, position + name, no MMSI/class.
       'urn:mrn:signalk:uuid:vision-forward-1': { navigation: { position: { value: pos } }, name: { value: 'VIS-vessel-1' } },
       // Real MMSI context but no AIS class — still rejected.
-      'urn:mrn:imo:mmsi:999': { navigation: { position: { value: pos } } },
+      'urn:mrn:imo:mmsi:999999999': { navigation: { position: { value: pos } } },
+      // 'mmsi:' prefix but a malformed (non-9-digit) identity — rejected.
+      'urn:mrn:imo:mmsi:111': aisVessel(pos),
     };
     expect(collectAisContacts(vessels, own)).toHaveLength(0);
   });
@@ -54,22 +56,22 @@ describe('aisFusion', () => {
     const nearPos = destinationPoint(own.position, deg2rad(90), 5);
     const farPos = destinationPoint(own.position, deg2rad(90), 100);
     const vessels = {
-      'urn:mrn:imo:mmsi:111': aisVessel(nearPos),
-      'urn:mrn:imo:mmsi:222': aisVessel(farPos),
+      'urn:mrn:imo:mmsi:111111111': aisVessel(nearPos),
+      'urn:mrn:imo:mmsi:222222222': aisVessel(farPos),
     };
     const contacts = collectAisContacts(vessels, own, 25);
-    expect(contacts.map((c) => c.mmsi)).toEqual(['222']);
+    expect(contacts.map((c) => c.mmsi)).toEqual(['222222222']);
   });
 
   it('correlates a visual target with a co-located AIS contact', () => {
     const brg = deg2rad(90);
     const aisPos = destinationPoint(own.position, brg, 600);
-    const vessels = { 'urn:mrn:imo:mmsi:111': aisVessel(aisPos) };
+    const vessels = { 'urn:mrn:imo:mmsi:111111111': aisVessel(aisPos) };
     const contacts = collectAisContacts(vessels, own);
     const res = fuse([visualTarget(brg, 610)], contacts, cfg);
     expect(res.aisCorrelatedCount).toBe(1);
     expect(res.targets[0].aisCorrelated).toBe(true);
-    expect(res.targets[0].aisMmsi).toBe('111');
+    expect(res.targets[0].aisMmsi).toBe('111111111');
     expect(res.darkTargetKeys).toHaveLength(0);
   });
 
@@ -77,13 +79,13 @@ describe('aisFusion', () => {
     const brg = deg2rad(90);
     const aisPos = destinationPoint(own.position, brg, 600);
     const vessels = {
-      'urn:mrn:imo:mmsi:111': aisVessel(aisPos, {
+      'urn:mrn:imo:mmsi:111111111': aisVessel(aisPos, {
         courseOverGroundTrue: { value: deg2rad(270) },
         speedOverGround: { value: 4 },
       }),
     };
     const contacts = collectAisContacts(vessels, own);
-    expect(contacts[0].mmsi).toBe('111');
+    expect(contacts[0].mmsi).toBe('111111111');
     expect(contacts[0].cog).toBeCloseTo(deg2rad(270), 5);
     expect(contacts[0].sog).toBe(4);
     const res = fuse([visualTarget(brg, 610)], contacts, cfg);
