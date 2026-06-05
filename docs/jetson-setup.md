@@ -55,12 +55,14 @@ policy) and enable the plugin in the SignalK admin UI.
 ## 6. DeepStream GPU pipeline (alternative backend)
 
 `VISION_MODE=deepstream` runs a fully GPU-resident pipeline instead of the
-Python/TensorRT one: frames stay in NVMM from decode through inference and
-tracking — `nvv4l2decoder → [nvdewarper] → nvstreammux → nvinfer (TRT) →
-nvtracker (NvDCF)` — and only the displayed frame is copied to the CPU (after
-inference) for MJPEG annotation. It exposes the same API and `DetectionEvent`
-contract as the default backend. Built from `Dockerfile.deepstream`; needs
-JetPack 6 + **DeepStream 7.x** on the host.
+Python/TensorRT one: frames stay in NVMM end to end — `nvv4l2decoder →
+[nvdewarper] → nvstreammux → nvinfer (TRT) → nvtracker (NvDCF) → nvdsosd →
+nvjpegenc`. Overlays are drawn on the GPU (`nvdsosd`) and the MJPEG is encoded on
+the NVJPG block (`nvjpegenc`), so the CPU only handles the finished JPEG bytes —
+no per-frame pixel copy (the lone exception is throttled auto-horizon detection,
+~1/s, skipped when `horizon_y` is calibrated). It exposes the same API and
+`DetectionEvent` contract as the default backend. Built from
+`Dockerfile.deepstream`; needs JetPack 6 + **DeepStream 7.x** on the host.
 
 ```bash
 # 1. Build the deepstream-yolo nvinfer parser ON THE HOST (the DS samples image

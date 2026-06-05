@@ -55,16 +55,24 @@ chosen by `VISION_MODE`/`detector.backend`; all of them emit the identical
 
   ```text
   rtspsrc → nvv4l2decoder → [nvdewarper] → nvstreammux → nvinfer (TRT)
-          → nvtracker (NvDCF) → pad probe → annotate → LatestFrame
+          → nvtracker (NvDCF) → nvvideoconvert(RGBA) → [pad probe] → nvstreamdemux
+          → per camera: nvdsosd → nvvideoconvert(I420) → nvjpegenc → appsink → LatestFrame
   ```
 
   Both cameras are batched by `nvstreammux`; inference + GPU tracking run on the
   batch in one pass. `nvstreammux` outputs the native camera resolution (display
   + geometry coords) and `nvinfer` rescales to `imgsz` internally on the GPU.
   Lens correction (barrel + rotation) is applied on the GPU by `nvdewarper`
-  before inference. Only the displayed frame is copied to the CPU, after
-  inference, for MJPEG annotation. A per-camera PTS guard in the probe drops
-  `nvstreammux` frame repeats so output never exceeds the camera's input rate.
+  before inference. A per-camera PTS guard in the probe drops `nvstreammux` frame
+  repeats so output never exceeds the camera's input rate.
+
+  The display path is also zero-copy: the pad probe reads detection metadata only
+  (no pixel copy) and attaches GPU overlay metadata (`NvDsDisplayMeta`); a
+  per-camera `nvdsosd` burns the boxes/labels/HUD onto the NVMM surface and
+  `nvjpegenc` encodes the JPEG on the NVJPG block — so the CPU only ever sees the
+  finished JPEG bytes (delivered via `appsink` → `LatestFrame`). The one host
+  pixel access is auto-horizon detection, throttled to ~1/s per camera and skipped
+  entirely when a camera has an explicit `horizon_y` calibration.
 
 On the plugin side, each `DetectionEvent` is:
 
