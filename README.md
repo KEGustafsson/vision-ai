@@ -9,6 +9,9 @@ Example: 2x Cams (bow, aft), 10fps each, DeepStream
 WebUI
 ![image](./docs/Marine_Vision-AI.png)
 
+Camera detected synthetic vessels on map
+![image](./docs/synthetic_vessels.png)
+
 nVidia jtop process views:
 ![image](./docs/nVidia_Nano_jtop.png)
 
