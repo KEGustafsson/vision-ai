@@ -119,17 +119,18 @@ export class Publisher {
     for (const t of eligible) {
       const uuid = `urn:mrn:signalk:uuid:vision-${t.camera}-${t.track_id}`;
       current.add(uuid);
-      // Only ever write REAL values onto a synthetic vessel — never a null leaf.
-      // position + name are always present; each kinematic is included only once
-      // computed, so a live chart contact never carries null data.
+      // position + name always identify the contact. The four kinematics are
+      // written value-or-null every cycle: emitting an explicit null when an
+      // estimate is lost clears any previously published value, so a live chart
+      // contact never carries a stale SOG/COG vector or CPA.
       const values: Array<{ path: string; value: unknown }> = [
         { path: 'navigation.position', value: t.position },
         { path: 'name', value: `VIS-${t.label}-${t.track_id}` },
+        { path: 'navigation.speedOverGround', value: t.sog },
+        { path: 'navigation.courseOverGroundTrue', value: t.cog },
+        { path: 'navigation.cpa', value: t.cpa },
+        { path: 'navigation.tcpa', value: t.tcpa },
       ];
-      if (t.sog !== null) values.push({ path: 'navigation.speedOverGround', value: t.sog });
-      if (t.cog !== null) values.push({ path: 'navigation.courseOverGroundTrue', value: t.cog });
-      if (t.cpa !== null) values.push({ path: 'navigation.cpa', value: t.cpa });
-      if (t.tcpa !== null) values.push({ path: 'navigation.tcpa', value: t.tcpa });
       this.emitVessel(uuid, ts, values);
     }
     // Age out departed blips: null every leaf so none lingers without a location.
