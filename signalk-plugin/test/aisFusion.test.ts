@@ -20,55 +20,72 @@ function visualTarget(bearingRad: number, range: number, key = 'forward.1'): Enr
 describe('aisFusion', () => {
   const cfg = withDefaults(undefined);
 
+  // A real AIS vessel: real MMSI context + a reported AIS class.
+  const aisVessel = (pos: any, extra: any = {}) => ({
+    navigation: { position: { value: pos }, ...extra },
+    sensors: { ais: { class: { value: 'A' } } },
+  });
+
   it('collects AIS contacts with bearing and range', () => {
     const aisPos = destinationPoint(own.position, deg2rad(90), 600);
     const vessels = {
       self: {},
-      'urn:mrn:imo:mmsi:123456789': { navigation: { position: { value: aisPos } }, name: { value: 'TESTER' } },
+      'urn:mrn:imo:mmsi:123456789': { ...aisVessel(aisPos), name: { value: 'TESTER' } },
     };
     const contacts = collectAisContacts(vessels, own);
     expect(contacts).toHaveLength(1);
     expect(contacts[0].mmsi).toBe('123456789');
+    expect(contacts[0].aisClass).toBe('A');
     expect(contacts[0].range).toBeCloseTo(600, -1);
+  });
+
+  it('ignores contacts without an MMSI or an AIS class', () => {
+    const pos = destinationPoint(own.position, deg2rad(90), 600);
+    const vessels = {
+      // Our own synthetic blip: UUID context, position + name, no MMSI/class.
+      'urn:mrn:signalk:uuid:vision-forward-1': { navigation: { position: { value: pos } }, name: { value: 'VIS-vessel-1' } },
+      // Real MMSI context but no AIS class — still rejected.
+      'urn:mrn:imo:mmsi:999999999': { navigation: { position: { value: pos } } },
+      // 'mmsi:' prefix but a malformed (non-9-digit) identity — rejected.
+      'urn:mrn:imo:mmsi:111': aisVessel(pos),
+    };
+    expect(collectAisContacts(vessels, own)).toHaveLength(0);
   });
 
   it('filters AIS contacts too close to own ship', () => {
     const nearPos = destinationPoint(own.position, deg2rad(90), 5);
     const farPos = destinationPoint(own.position, deg2rad(90), 100);
     const vessels = {
-      'urn:mrn:imo:mmsi:111': { navigation: { position: { value: nearPos } } },
-      'urn:mrn:imo:mmsi:222': { navigation: { position: { value: farPos } } },
+      'urn:mrn:imo:mmsi:111111111': aisVessel(nearPos),
+      'urn:mrn:imo:mmsi:222222222': aisVessel(farPos),
     };
     const contacts = collectAisContacts(vessels, own, 25);
-    expect(contacts.map((c) => c.mmsi)).toEqual(['222']);
+    expect(contacts.map((c) => c.mmsi)).toEqual(['222222222']);
   });
 
   it('correlates a visual target with a co-located AIS contact', () => {
     const brg = deg2rad(90);
     const aisPos = destinationPoint(own.position, brg, 600);
-    const vessels = { 'urn:mrn:imo:mmsi:111': { navigation: { position: { value: aisPos } } } };
+    const vessels = { 'urn:mrn:imo:mmsi:111111111': aisVessel(aisPos) };
     const contacts = collectAisContacts(vessels, own);
     const res = fuse([visualTarget(brg, 610)], contacts, cfg);
     expect(res.aisCorrelatedCount).toBe(1);
     expect(res.targets[0].aisCorrelated).toBe(true);
-    expect(res.targets[0].aisMmsi).toBe('111');
+    expect(res.targets[0].aisMmsi).toBe('111111111');
     expect(res.darkTargetKeys).toHaveLength(0);
   });
 
-  it('captures AIS COG/SOG and a null MMSI for UUID-only contacts', () => {
+  it('captures AIS COG/SOG from a correlated contact', () => {
     const brg = deg2rad(90);
     const aisPos = destinationPoint(own.position, brg, 600);
     const vessels = {
-      'urn:mrn:signalk:uuid:abc': {
-        navigation: {
-          position: { value: aisPos },
-          courseOverGroundTrue: { value: deg2rad(270) },
-          speedOverGround: { value: 4 },
-        },
-      },
+      'urn:mrn:imo:mmsi:111111111': aisVessel(aisPos, {
+        courseOverGroundTrue: { value: deg2rad(270) },
+        speedOverGround: { value: 4 },
+      }),
     };
     const contacts = collectAisContacts(vessels, own);
-    expect(contacts[0].mmsi).toBeNull();
+    expect(contacts[0].mmsi).toBe('111111111');
     expect(contacts[0].cog).toBeCloseTo(deg2rad(270), 5);
     expect(contacts[0].sog).toBe(4);
     const res = fuse([visualTarget(brg, 610)], contacts, cfg);

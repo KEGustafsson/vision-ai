@@ -7,7 +7,8 @@ import { angularDiff, bearingTo, deg2rad, haversine } from './geo';
 import { EnrichedTarget, LatLon, OwnShip } from './types';
 
 export interface AisContact {
-  mmsi: string | null;
+  mmsi: string; // real AIS identity — never null (a contact without one is dropped)
+  aisClass: string; // AIS class ("A"/"B"/ATON type) reported by the transmitter
   name?: string;
   position: LatLon;
   bearing: number; // rad, from own ship
@@ -25,7 +26,14 @@ const VESSEL_LABELS = new Set([
   'sailboat', 'speedboat', 'warship',
 ]);
 
-/** Extract AIS contacts (excluding self) that have a position. */
+/**
+ * Extract REAL AIS contacts (excluding self) to correlate against. A contact
+ * qualifies only if it carries both an MMSI and an AIS class — i.e. it is an
+ * actual transmitting vessel, not a position-only blip. This deliberately
+ * excludes our own synthetic camera vessels (published as UUID contexts with no
+ * MMSI/class), which would otherwise self-correlate with the visual targets that
+ * spawned them.
+ */
 export function collectAisContacts(
   vessels: any,
   own: OwnShip,
@@ -35,14 +43,23 @@ export function collectAisContacts(
   if (!vessels || !own.position) return out;
   for (const [id, v] of Object.entries<any>(vessels)) {
     if (id === 'self') continue;
+    // Require a real AIS identity: exactly 9 digits (the MMSI format). A bare
+    // `mmsi:` prefix check would let a malformed token through; UUID-only /
+    // synthetic contexts have no MMSI at all.
+    const mmsi = id.match(/mmsi:(\d{9})(?::|$)/)?.[1] ?? null;
+    if (!mmsi) continue;
+    // Require an AIS class — confirms this came from an AIS transmitter, not a
+    // bare position injected by some other plugin (ours included).
+    const aisClass = v?.sensors?.ais?.class?.value ?? v?.sensors?.ais?.class;
+    if (typeof aisClass !== 'string' || aisClass.trim().length === 0) continue;
     const p = v?.navigation?.position?.value ?? v?.navigation?.position;
     if (!p || typeof p.latitude !== 'number') continue;
     const pos: LatLon = { latitude: p.latitude, longitude: p.longitude };
     const range = haversine(own.position, pos);
     if (minRangeM > 0 && range < minRangeM) continue;
-    const mmsi = id.includes('mmsi:') ? id.split('mmsi:').pop()! : null;
     out.push({
       mmsi,
+      aisClass,
       name: v?.name?.value ?? v?.name,
       position: pos,
       bearing: bearingTo(own.position, pos),
