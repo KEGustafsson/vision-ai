@@ -136,15 +136,50 @@ class HwJpegEncoder:
             self._teardown()
 
 
+class _ResilientHwJpegEncoder:
+    """Wrap the HW encoder so a *runtime* failure degrades to CPU once and stays
+    there. The factory only catches construction failures, but the GStreamer
+    pipeline is built lazily on the first frame (and rebuilt on a size change),
+    so ``_build``/encode can still raise later — without this the MJPEG stream
+    would error every frame instead of falling back."""
+
+    def __init__(self, hw, quality: int, logger=None):
+        self._enc = hw
+        self._quality = quality
+        self._logger = logger
+        self.backend = hw.backend
+
+    def encode(self, image: np.ndarray) -> bytes:
+        if self.backend == "cpu":
+            return self._enc.encode(image)
+        try:
+            return self._enc.encode(image)
+        except Exception as exc:
+            if self._logger:
+                self._logger.warning(
+                    "hw_jpeg runtime failure (%s); falling back to cpu", exc)
+            try:
+                self._enc.close()
+            except Exception:  # pragma: no cover - best-effort teardown
+                pass
+            self._enc = CpuJpegEncoder(self._quality)
+            self.backend = self._enc.backend
+            return self._enc.encode(image)
+
+    def close(self) -> None:
+        self._enc.close()
+
+
 def make_jpeg_encoder(quality: int = 80, hw: bool = False, logger=None):
     """Return a JPEG encoder. Falls back to CPU if the HW path is unavailable,
-    so a stale/over-eager ``hw_jpeg`` flag never takes the stream down."""
+    so a stale/over-eager ``hw_jpeg`` flag never takes the stream down — at
+    construction (no gi/plugin) and, via the wrapper, on a later runtime failure."""
     if hw:
         try:
             enc = HwJpegEncoder(quality)
             if logger:
                 logger.info("jpeg encoder: nvjpegenc (hardware)")
-            return enc
+            return _ResilientHwJpegEncoder(enc, quality, logger)
         except Exception as exc:  # ImportError (no gi) or pipeline build failure
             if logger:
                 logger.warning("hw_jpeg requested but unavailable (%s); using cpu", exc)

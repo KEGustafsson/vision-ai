@@ -931,13 +931,16 @@ class DeepStreamPipeline:
                 and now - state.last_horizon_t < _HORIZON_REFRESH_S):
             return state.horizon_y_cached
 
+        # Stamp the throttle now, before attempting the map, so a persistent
+        # failure backs off to ~1/s too instead of retrying (and logging) every
+        # frame; the cached value (if any) is preserved on error.
+        state.last_horizon_t = now
         try:
             import numpy as np
             n_frame = pyds.get_nvds_buf_surface(hash(gst_buf), frame_meta.batch_id)
             rgba = np.array(n_frame, copy=True)            # cache-coherent on Jetson
             bgr = rgba[:, :, :3][:, :, ::-1].copy()        # RGBA → BGR, drop alpha
             state.horizon_y_cached = detect_horizon_y(bgr)
-            state.last_horizon_t = now
         except Exception as exc:
             self._log.debug("horizon refresh failed (%s): %s", cam.name, exc)
         finally:
