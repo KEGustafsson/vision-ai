@@ -12,7 +12,8 @@ import threading
 import time
 from datetime import datetime, timezone
 
-from .api.overlay import annotate, encode_jpeg
+from .api.jpeg import make_jpeg_encoder
+from .api.overlay import annotate
 from .api.undistort import Undistorter
 from .camera import create_source
 from .config import CameraConfig, Settings
@@ -94,6 +95,14 @@ class CameraWorker(threading.Thread):
         self._source = None
         # Lazily built once the frame size is known; only when undistort is on.
         self._undistorter: Undistorter | None = None
+        # Per-worker JPEG encoder (the HW GStreamer pipeline isn't thread-safe, so
+        # each camera owns its own). Falls back to CPU cv2.imencode when nvjpegenc
+        # is unavailable, so a stale hw_jpeg flag can't take the stream down.
+        self._encoder = make_jpeg_encoder(
+            quality=settings.server.jpeg_quality,
+            hw=settings.server.hw_jpeg,
+            logger=logger,
+        )
         # Per-camera flicker damping: keeps a detected track alive (coasted)
         # across short dropouts instead of blinking it off. State is per camera.
         d = settings.detector
@@ -211,8 +220,7 @@ class CameraWorker(threading.Thread):
                     # remap the overlay to match. The published event above keeps
                     # the raw-frame geometry, so bearings/range are unaffected.
                     disp_img, disp_event = self._for_display(frame.image, event)
-                    jpeg = encode_jpeg(annotate(disp_img, disp_event),
-                                       self._settings.server.jpeg_quality)
+                    jpeg = self._encoder.encode(annotate(disp_img, disp_event))
                     # set() is a no-op while the store is paused (detection off),
                     # so a frame encoded just before a disable cannot resurface.
                     if jpeg:
@@ -229,6 +237,7 @@ class CameraWorker(threading.Thread):
                     time.sleep(period - dt)
         finally:
             self.close_source()
+            self._encoder.close()
 
     def _undistorter_for(self, w, h) -> Undistorter:
         """Lazily build + cache this camera's undistorter for the frame size."""

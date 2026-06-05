@@ -105,9 +105,14 @@ backends, selected by `VISION_MODE` (both emit the same `DetectionEvent`):
 
 - **`jetson`** — Ultralytics YOLOv8 on **TensorRT**; decode in a GStreamer
   pipeline, inference + ByteTrack in Python (`docker-compose.jetson.yml`).
-- **`deepstream`** — a fully GPU-resident **NVIDIA DeepStream** pipeline:
-  zero-copy decode → inference → tracking in NVMM (nvv4l2decoder → nvstreammux →
-  nvinfer → nvtracker), with optional GPU lens correction (nvdewarper)
+  Optional `server.hw_jpeg` offloads the MJPEG encode to the Jetson NVJPG block
+  (`nvjpegenc`) instead of CPU `cv2.imencode`.
+- **`deepstream`** — a fully GPU-resident **NVIDIA DeepStream** pipeline,
+  **end-to-end zero-copy in NVMM** — decode → inference → tracking → GPU overlay
+  → hardware JPEG (nvv4l2decoder → nvstreammux → nvinfer → nvtracker →
+  nvdsosd → nvjpegenc), with optional GPU lens correction (nvdewarper). The
+  annotated MJPEG is drawn on the GPU by `nvdsosd` and encoded on the NVJPG block
+  by `nvjpegenc`, so the CPU never touches a pixel — only the finished JPEG bytes
   (`docker-compose.deepstream.yml`).
 
 See [Jetson setup & deployment](docs/jetson-setup.md).
