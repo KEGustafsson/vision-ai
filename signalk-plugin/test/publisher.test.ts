@@ -81,19 +81,32 @@ describe('Publisher', () => {
     expect(vals.find((v) => v.path === 'navigation.tcpa')!.value).toBe(120);
   });
 
-  it('omits kinematics when unavailable — an active vessel never carries null data', () => {
+  it('writes kinematics as null when unavailable so stale values never linger', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', cfg);
     pub.publishTargets([tgt(1)]); // sog/cog/cpa all null
     const vals = app.valuesFor(VIS1);
-    const paths = vals.map((v) => v.path);
-    expect(paths).toContain('navigation.position');
-    expect(paths).toContain('name');
-    expect(paths).not.toContain('navigation.speedOverGround');
-    expect(paths).not.toContain('navigation.courseOverGroundTrue');
-    expect(paths).not.toContain('navigation.cpa');
-    expect(paths).not.toContain('navigation.tcpa');
-    // No value written to a live synthetic vessel is ever null.
-    expect(vals.every((v) => v.value !== null)).toBe(true);
+    // position + name are always real; the four kinematics are emitted as
+    // explicit null so a chartplotter clears any previously published vector.
+    expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
+    expect(vals.find((v) => v.path === 'name')!.value).toBe('VIS-vessel-1');
+    expect(vals.find((v) => v.path === 'navigation.speedOverGround')!.value).toBeNull();
+    expect(vals.find((v) => v.path === 'navigation.courseOverGroundTrue')!.value).toBeNull();
+    expect(vals.find((v) => v.path === 'navigation.cpa')!.value).toBeNull();
+    expect(vals.find((v) => v.path === 'navigation.tcpa')!.value).toBeNull();
+  });
+
+  it('clears a stale kinematic when a live blip loses its estimate', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1, { sog: 3.2, cog: 1.1, cpa: 50, tcpa: 120 })]);
+    app.deltas = [];
+    // Same track still actively detected, but the velocity estimate is gone.
+    pub.publishTargets([tgt(1)]);
+    const vals = app.valuesFor(VIS1);
+    expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
+    expect(vals.find((v) => v.path === 'navigation.speedOverGround')!.value).toBeNull();
+    expect(vals.find((v) => v.path === 'navigation.courseOverGroundTrue')!.value).toBeNull();
+    expect(vals.find((v) => v.path === 'navigation.cpa')!.value).toBeNull();
+    expect(vals.find((v) => v.path === 'navigation.tcpa')!.value).toBeNull();
   });
 
   it('publishes fusion summary counts', () => {

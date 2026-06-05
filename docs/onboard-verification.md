@@ -133,12 +133,12 @@ from the SignalK host to the container.
 # synthetic AIS vessels — needs "Publish targets as synthetic AIS vessels" on:
 curl -s "$SK/signalk/v1/api/vessels" | jq '[keys[]|select(test("vision-"))]'
 curl -s "$SK/signalk/v1/api/vessels/self/vision/fusion" | jq
-# metadata + zones on the fps path:
+# metadata on the fps path (units only — no zones, by design):
 curl -s "$SK/signalk/v1/api/vessels/self/vision/system/inferenceFps/meta" | jq
 ```
 **PASS:** `vessels.urn:…:vision-<camera>-<id>` appear (with `navigation.position`
 + `VIS-…` name) while targets are in view; `vision.fusion.darkTargetCount`/
-`aisCorrelatedCount` present; `inferenceFps` carries `units:"Hz"` + zones.
+`aisCorrelatedCount` present; `inferenceFps` meta carries `units:"Hz"`.
 
 ### 3.3 Live delta stream
 ```bash
