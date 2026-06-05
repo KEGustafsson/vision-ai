@@ -161,6 +161,12 @@ class ServerConfig(BaseModel):
     target_fps: float = 10.0           # processing cadence cap
     jpeg_quality: int = 80
     event_buffer: int = 200
+    # Encode the annotated MJPEG/snapshot frames on the Jetson NVJPG hardware
+    # block (GStreamer nvjpegenc) instead of CPU cv2.imencode, lifting the encode
+    # out of the per-frame `post` cost. Needs python3-gi + GStreamer introspection
+    # in the image (see Dockerfile); silently falls back to CPU when unavailable,
+    # so it's safe to leave off on hosts without the binding.
+    hw_jpeg: bool = False
     # Allowed CORS origins; default permissive for dev. Restrict to the SignalK
     # origin(s) in production (the plugin proxies same-origin anyway).
     cors_origins: List[str] = Field(default_factory=lambda: ["*"])

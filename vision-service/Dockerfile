@@ -27,6 +27,14 @@ if "GStreamer:                   YES" not in info and "GStreamer: YES" not in in
 print(f"OpenCV {cv2.__version__} imported from {cv2.__file__}")
 PY
 
+# PyGObject + GStreamer introspection: only needed for the optional hardware
+# JPEG encoder (server.hw_jpeg -> nvjpegenc). The app falls back to CPU encoding
+# when this is absent, so it's safe to drop if hw_jpeg is never enabled. Installs
+# into the system python3 the app runs under (/usr/bin/python3).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-gi gir1.2-glib-2.0 gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY app ./app
 COPY config ./config
 COPY scripts ./scripts

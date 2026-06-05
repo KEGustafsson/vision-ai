@@ -11,13 +11,17 @@ decode through TRT inference. The CPU never touches a pixel before inference.
         → nvstreammux         # batch N cameras into one NVMM buffer; resizes to 640×640
         → nvinfer             # reads NVMM directly → TRT engine (FP16) → detections
         → nvtracker           # NvDCF on GPU → stable track IDs
-        → [pad probe]         # reads NvDsObjectMeta (metadata only — no pixel copy)
-        → fakesink
+        → nvvideoconvert      # → NVMM RGBA (for nvdsosd; probe maps it for horizon)
+        → [pad probe]         # reads NvDsObjectMeta + attaches display meta (no pixel copy)
+        → nvstreamdemux       # split batch back into per-camera NVMM buffers
+        → (per camera) nvdsosd → nvvideoconvert(NVMM I420) → nvjpegenc → appsink
+                              # per-camera OSD renders only that source's display meta
 
-Display path (one CPU copy per camera per displayed frame, after inference):
-
-    probe  →  pyds.get_nvds_buf_surface()  →  np.array() copy to CPU
-           →  annotate()  →  encode_jpeg()  →  LatestFrame
+Display path is now fully zero-copy: pixels stay in NVMM through overlay + JPEG
+encode and only the compressed bytes reach the CPU, on the per-camera appsink
+(_on_jpeg_sample → LatestFrame). The single remaining host pixel access is the
+auto-horizon surface map, throttled to ~1/s per camera (_horizon_for); explicit
+horizon calibration avoids it entirely.
 
 What is eliminated vs. pipeline.py
 ====================================
@@ -65,7 +69,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .api.overlay import annotate, encode_jpeg
+from .api.osd import draw_event
 from .config import CameraConfig, Settings
 from .detector.base import RawTrack
 from .detector.classmap import (
@@ -92,6 +96,11 @@ from .schemas import (
 from .util import EventBuffer, LatestFrame
 
 _STALL_TIMEOUT_S = 5.0  # mirror pipeline.py: flag a camera with no frames this long
+# Zero-copy keeps pixels in NVMM, so auto-horizon (which needs host pixels) is
+# refreshed by mapping the RGBA surface at most this often per camera — rare
+# enough that the per-frame path stays copy-free, frequent enough to track a
+# horizon that drifts with the boat's pitch/roll.
+_HORIZON_REFRESH_S = 1.0
 # Recycled display-id pool. Starts at 10 (always a readable >=2-digit number) and
 # spans max-targets-per-frame, so emitted ids stay bounded to roughly the number
 # of vessels drawn rather than a fixed 10..99.
@@ -176,6 +185,10 @@ class _StreamState:
     # exceeds the camera's real frame rate. dup_skipped counts those drops.
     last_pts: int = -1
     dup_skipped: int = 0
+    # Throttled auto-horizon cache (zero-copy path): last detected horizon and the
+    # monotonic time it was computed, so we only map the surface ~1/s.
+    horizon_y_cached: Optional[float] = None
+    last_horizon_t: float = 0.0
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
@@ -575,45 +588,81 @@ class DeepStreamPipeline:
                        ll_config_file=tracker_cfg,
                        tracker_width=self.settings.detector.imgsz,
                        tracker_height=384,  # power-of-2 height for GPU efficiency
-                       display_tracking_id=1)
+                       # 0 = don't let the tracker stamp "<label> <id>" object text
+                       # onto the OSD: we draw every label ourselves from the
+                       # stabilized event (draw_event), so this would double up.
+                       display_tracking_id=0)
 
-        # Display conversion: the probe extracts pixels with
-        # pyds.get_nvds_buf_surface(), which requires an RGBA surface. The
-        # tracker emits NV12, so insert nvvideoconvert → RGBA (kept in NVMM;
-        # get_nvds_buf_surface maps it to the CPU on Jetson). Without this stage
-        # the surface read fails and the MJPEG/snapshot frames come out blank.
+        # ── Zero-copy NVMM display + HW JPEG path ─────────────────────────────
+        # Everything from here stays in NVMM until nvjpegenc emits compressed
+        # bytes: the frame pixels never round-trip to host. nvvideoconvert lifts
+        # the tracker's NV12 to RGBA (needed by the per-camera nvdsosd, and what
+        # the probe maps for the throttled auto-horizon read); the probe attaches
+        # display meta per frame; nvstreamdemux splits the batch into per-camera
+        # buffers; each branch has its OWN nvdsosd (a single OSD before the demux
+        # renders every source's meta onto one surface — boxes/HUD leak between
+        # cameras), then converts to NVMM I420 and HW-encodes to JPEG.
         dispconv = make("nvvideoconvert", "dispconv")
         dispcaps = make("capsfilter", "dispcaps")
         dispcaps.set_property(
             "caps",
             Gst.Caps.from_string("video/x-raw(memory:NVMM),format=RGBA"),
         )
+        demux = make("nvstreamdemux", "demux")
 
-        # fakesink: swallows frames after conversion; we consume everything via
-        # the probe on the converter's src pad.
-        sink = make("fakesink", "fsink")
-        sink.set_property("async", False)
-        sink.set_property("sync", False)
-
-        # Main chain: mux → pgie → tracker → dispconv → dispcaps(RGBA) → sink
+        # Main batched chain: mux → pgie → tracker → dispconv → dispcaps(RGBA)
+        #                     → nvstreamdemux
         for src_el, dst_el in [
             (mux, pgie), (pgie, tracker),
-            (tracker, dispconv), (dispconv, dispcaps), (dispcaps, sink),
+            (tracker, dispconv), (dispconv, dispcaps), (dispcaps, demux),
         ]:
             if not src_el.link(dst_el):
                 raise RuntimeError(
                     f"Failed to link {src_el.get_name()} → {dst_el.get_name()}"
                 )
 
-        # Probe on the RGBA capsfilter src pad: fires after tracking + conversion.
-        # This is where we read NvDsObjectMeta and extract the RGBA frame pixels
-        # for MJPEG annotation.
+        # Probe on the RGBA capsfilter src pad: fires after tracking + conversion
+        # and BEFORE the demux, so the display meta it attaches to each frame_meta
+        # travels with that frame to its per-camera nvdsosd. It reads NvDsObjectMeta
+        # (small) to build events and, at most once per _HORIZON_REFRESH_S, maps the
+        # RGBA surface to re-detect the horizon.
         probe_pad = dispcaps.get_static_pad("src")
-        probe_pad.add_probe(
-            Gst.PadProbeType.BUFFER,
-            self._probe_callback,
-            None,
-        )
+        probe_pad.add_probe(Gst.PadProbeType.BUFFER, self._probe_callback, None)
+
+        # Per-camera tail: demux.src_N → queue → nvdsosd → nvvideoconvert → NVMM
+        # I420 → nvjpegenc → appsink. The per-camera nvdsosd renders only that
+        # source's display meta; appsink hands finished JPEG bytes to the camera's
+        # LatestFrame via _on_jpeg_sample (generic GObject signals, so the GstApp
+        # typelib is not required).
+        for i, cam in enumerate(cams):
+            que = make("queue", f"encq{i}")
+            que.set_property("max-size-buffers", 2)
+            que.set_property("leaky", 2)  # drop oldest: MJPEG is latest-frame-wins
+            osd = make("nvdsosd", f"osd{i}")
+            osd.set_property("process-mode", 1)  # 1 = GPU (cairo) — supports text
+            jconv = make("nvvideoconvert", f"jconv{i}")
+            jcaps = make("capsfilter", f"jcaps{i}")
+            jcaps.set_property(
+                "caps",
+                Gst.Caps.from_string("video/x-raw(memory:NVMM),format=I420"),
+            )
+            enc = make("nvjpegenc", f"nvjpegenc{i}",
+                       quality=self.settings.server.jpeg_quality)
+            appsink = make("appsink", f"appsink{i}",
+                           emit_signals=True, sync=False,
+                           max_buffers=1, drop=True)
+            appsink.connect("new-sample", self._on_jpeg_sample, cam.name)
+
+            demux_src = demux.get_request_pad(f"src_{i}")
+            q_sink = que.get_static_pad("sink")
+            if demux_src.link(q_sink) != Gst.PadLinkReturn.OK:
+                raise RuntimeError(f"Failed to link demux.src_{i} → encq{i}")
+            for src_el, dst_el in [(que, osd), (osd, jconv), (jconv, jcaps),
+                                   (jcaps, enc), (enc, appsink)]:
+                if not src_el.link(dst_el):
+                    raise RuntimeError(
+                        f"Failed to link {src_el.get_name()} → {dst_el.get_name()}"
+                    )
 
         return pipeline
 
@@ -643,6 +692,39 @@ class DeepStreamPipeline:
             self._log.warning(
                 "rtspsrc pad link returned %s for %s", ret, src_elem.get_name()
             )
+
+    # ── appsink callback: finished HW-JPEG bytes per camera ──────────────────
+
+    def _on_jpeg_sample(self, appsink, cam_name):
+        """Pull a HW-encoded JPEG from a per-camera appsink and store it.
+
+        Runs in the appsink's streaming thread. The bytes are the only thing that
+        ever leaves NVMM on the display path; LatestFrame.set() is a no-op while
+        paused (detection disabled), so a frame can't resurface after a disable.
+        """
+        import gi
+        gi.require_version("Gst", "1.0")
+        from gi.repository import Gst
+
+        sample = appsink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.OK
+        gbuf = sample.get_buffer()
+        ok, info = gbuf.map(Gst.MapFlags.READ)
+        if not ok:
+            return Gst.FlowReturn.OK
+        try:
+            jpeg = bytes(info.data)
+        finally:
+            gbuf.unmap(info)
+        if jpeg:
+            self.frames.set(cam_name, jpeg)
+            proxy = self.workers.get(cam_name)
+            if proxy is not None:
+                proxy.last_frame_at = time.time()
+                if proxy.error and proxy.error.startswith("no frames"):
+                    proxy.error = None  # recovered from a stall
+        return Gst.FlowReturn.OK
 
     # ── Probe callback (GLib thread, every batch buffer) ─────────────────────
 
@@ -751,6 +833,14 @@ class DeepStreamPipeline:
                     break
 
                 r = obj.rect_params
+                # Suppress nvdsosd's default per-object box AND text: we draw every
+                # box/label ourselves from the stabilized event (which also includes
+                # coasted tracks that have no obj meta), so the raw nvinfer/tracker
+                # rect+label must not be rendered too. border_width=0 drops the box;
+                # blanking display_text + bg drops the "<label> <id>" stamp.
+                r.border_width = 0
+                obj.text_params.display_text = ""
+                obj.text_params.set_bg_clr = 0
                 cls_id = int(obj.class_id)
                 conf = float(obj.confidence)
                 tid_raw = int(obj.object_id)
@@ -784,29 +874,12 @@ class DeepStreamPipeline:
 
             state.vel.prune(active_ids, state.seq)
 
-            # ── Display frame: one CPU copy per camera, after inference ─────
-            # pyds.get_nvds_buf_surface() returns a numpy array view of the NVMM
-            # RGBA surface. On Jetson unified memory, np.array(…, copy=True) is a
-            # cache-coherent access (not a DMA transfer) — still far cheaper than
-            # the pipeline.py path that copied BGR frames BEFORE inference.
-            disp_img = None
-            try:
-                import numpy as np
-                n_frame = pyds.get_nvds_buf_surface(hash(gst_buf), frame_meta.batch_id)
-                frame_rgba = np.array(n_frame, copy=True)  # NVMM → CPU
-                # RGBA → BGR: reverse first 3 channels (drop alpha)
-                disp_img = frame_rgba[:, :, :3][:, :, ::-1].copy()
-            except Exception as exc:
-                self._log.debug("display frame extraction failed (%s): %s", cam_name, exc)
-            finally:
-                # Release the surface mapping (Jetson leaks NvBufSurface maps across
-                # frames otherwise); no-op if this pyds build lacks the symbol.
-                _unmap = getattr(pyds, "unmap_nvds_buf_surface", None)
-                if _unmap is not None:
-                    try:
-                        _unmap(hash(gst_buf), frame_meta.batch_id)
-                    except Exception:
-                        pass
+            # ── Horizon (throttled, zero-copy friendly) ─────────────────────
+            # Explicit calibration wins. Otherwise auto-horizon needs host pixels,
+            # so we map the RGBA surface at most once per _HORIZON_REFRESH_S and
+            # cache the result; every other frame reuses the cached value and the
+            # pipeline stays copy-free.
+            horizon_y = self._horizon_for(state, pyds, gst_buf, frame_meta)
 
             # ── Stabilizer (Python, per-camera) ────────────────────────────
             # NvDCF already provides track IDs; the Python stabilizer adds
@@ -820,23 +893,16 @@ class DeepStreamPipeline:
                 state, raw_tracks, W, H,
                 conf_thresh, allowed, max_det,
                 latency_ms, frame_meta.frame_num,
-                disp_img=disp_img,
+                horizon_y=horizon_y,
             )
 
             self.events.publish(event.model_dump(mode="json"))
 
-            # ── Annotate + store MJPEG ──────────────────────────────────────
-            if disp_img is not None:
-                jpeg = encode_jpeg(
-                    annotate(disp_img, event), self.settings.server.jpeg_quality)
-                if jpeg:
-                    self.frames.set(cam_name, jpeg)
-
-            if cam_name in self.workers:
-                proxy = self.workers[cam_name]
-                proxy.last_frame_at = time.time()
-                if proxy.error and proxy.error.startswith("no frames"):
-                    proxy.error = None  # recovered from a stall
+            # ── Overlay on the GPU ───────────────────────────────────────────
+            # Attach display meta for nvdsosd (downstream) to burn onto the NVMM
+            # surface. No pixels touched here; the encoded JPEG arrives later on
+            # the per-camera appsink (_on_jpeg_sample), which updates last_frame_at.
+            draw_event(pyds, batch_meta, frame_meta, event)
 
             try:
                 l_frame = l_frame.next
@@ -844,6 +910,45 @@ class DeepStreamPipeline:
                 break
 
         return 1  # Gst.PadProbeReturn.OK
+
+    # ── Horizon (throttled host-pixel access) ──────────────────────────────────
+
+    def _horizon_for(self, state, pyds, gst_buf, frame_meta) -> Optional[float]:
+        """Horizon line for this frame. Explicit calibration wins; otherwise
+        auto-detect from the RGBA surface, but only once per _HORIZON_REFRESH_S
+        (the cached value is reused in between so the per-frame path is copy-free).
+
+        This is the ONLY host pixel access left on the display path; it runs about
+        once a second per camera, not per frame, so the zero-copy property holds.
+        """
+        cam = state.cam
+        if cam.horizon_y is not None:
+            return cam.horizon_y
+        if not self.settings.geometry.auto_horizon:
+            return None
+        now = time.time()
+        if (state.horizon_y_cached is not None
+                and now - state.last_horizon_t < _HORIZON_REFRESH_S):
+            return state.horizon_y_cached
+
+        try:
+            import numpy as np
+            n_frame = pyds.get_nvds_buf_surface(hash(gst_buf), frame_meta.batch_id)
+            rgba = np.array(n_frame, copy=True)            # cache-coherent on Jetson
+            bgr = rgba[:, :, :3][:, :, ::-1].copy()        # RGBA → BGR, drop alpha
+            state.horizon_y_cached = detect_horizon_y(bgr)
+            state.last_horizon_t = now
+        except Exception as exc:
+            self._log.debug("horizon refresh failed (%s): %s", cam.name, exc)
+        finally:
+            # Release the mapping (Jetson leaks NvBufSurface maps otherwise).
+            _unmap = getattr(pyds, "unmap_nvds_buf_surface", None)
+            if _unmap is not None:
+                try:
+                    _unmap(hash(gst_buf), frame_meta.batch_id)
+                except Exception:
+                    pass
+        return state.horizon_y_cached
 
     # ── Event construction ────────────────────────────────────────────────────
 
@@ -857,16 +962,12 @@ class DeepStreamPipeline:
         max_det: int,
         latency_ms: float,
         frame_num: int,
-        disp_img=None,
+        horizon_y: Optional[float] = None,
     ) -> DetectionEvent:
         cam = state.cam
 
-        # Horizon: prefer explicit calibration, fall back to auto-detect
-        # (auto-detect needs the display frame; skip it if unavailable).
-        horizon_y: Optional[float] = cam.horizon_y
-        if horizon_y is None and self.settings.geometry.auto_horizon and disp_img is not None:
-            horizon_y = detect_horizon_y(disp_img)
-
+        # Horizon is resolved by the caller (_horizon_for): explicit calibration,
+        # else a throttled auto-detect, else None.
         calib = (
             CalibrationStatus.ok if cam.horizon_y is not None
             else CalibrationStatus.auto if horizon_y is not None
