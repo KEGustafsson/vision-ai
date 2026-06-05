@@ -92,6 +92,16 @@ from .schemas import (
 from .util import EventBuffer, LatestFrame
 
 _STALL_TIMEOUT_S = 5.0  # mirror pipeline.py: flag a camera with no frames this long
+# Recycled display-id pool. Starts at 10 (always a readable >=2-digit number) and
+# spans max-targets-per-frame, so emitted ids stay bounded to roughly the number
+# of vessels drawn rather than a fixed 10..99.
+_DISPLAY_ID_MIN = 10
+
+
+def _display_id_max(max_targets: int) -> int:
+    """Top of the display-id range for a given max-targets-per-frame (>=1)."""
+    return _DISPLAY_ID_MIN + max(1, max_targets) - 1
+
 _GST_CLOCK_TIME_NONE = 0xFFFF_FFFF_FFFF_FFFF  # GStreamer "invalid timestamp" sentinel
 _DEEPSTREAM_DIR = Path(__file__).resolve().parent.parent / "deepstream"
 _TRACKER_LIB = "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"
@@ -242,6 +252,8 @@ class DeepStreamPipeline:
                 cam=cam, settings=self.settings, stabilizer=stab,
                 confidence=self._confidence, allowed_labels=self._allowed_labels,
                 min_target_range_m=self._min_target_range_m,
+                vel=VelocityTracker(id_min=_DISPLAY_ID_MIN,
+                                    id_max=_display_id_max(self._max_det)),
             )
 
         self._gst = self._build_pipeline(Gst)
@@ -322,6 +334,10 @@ class DeepStreamPipeline:
         with self._lock:
             self._max_det = value
             self.settings.detector.max_det = value
+            # Keep emitted display ids bounded to roughly the number of vessels
+            # actually drawn: the recycled id pool tracks max-targets-per-frame.
+            for st in self._states.values():
+                st.vel.set_id_range(_DISPLAY_ID_MIN, _display_id_max(value))
 
     def max_targets(self) -> int:
         with self._lock:

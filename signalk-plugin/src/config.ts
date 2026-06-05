@@ -12,16 +12,16 @@ export interface PluginConfig {
   // Master on/off for detection in the container. Persisted default; the captain
   // webapp can flip it live (the live state is re-synced to the container).
   enableDetection: boolean;
-  // Computation toggles — run the analysis and publish its data paths.
-  enableVisualRadar: boolean; // publish vision.targets.* (data only, no alert)
+  // Output toggle — publish each georeferenced target as a synthetic AIS vessel
+  // (vessels.* chart blip). No vision.targets.* data tree.
+  enableVisualRadar: boolean;
   enableAisFusion: boolean; // AIS correlation + dark-target detection + vision.fusion.*
-  enableCollision: boolean; // CPA/TCPA + threatLevel on vision.targets.*
+  enableCollision: boolean; // CPA/TCPA + threatLevel (drives blip SOG/COG/CPA + collision notify)
   // Notification toggles — raise/clear the SignalK alert. Collision and dark
   // target require their computation (above) to be on.
   enableMob: boolean; // notifications.mob (no separate computation)
   notifyCollision: boolean; // notifications.vision.collision.*
   notifyDarkTarget: boolean; // notifications.vision.darkTarget.*
-  enableAisBlips: boolean; // project visual targets as synthetic vessels.* (default off)
   enableContextControl: boolean;
   detectClasses: string[]; // object types to surface (person | vessel | buoy); empty => all
   // Thresholds
@@ -46,13 +46,12 @@ export interface PluginConfig {
 export const DEFAULT_CONFIG: PluginConfig = {
   containerUrl: 'http://localhost:7000',
   enableDetection: true,
-  enableVisualRadar: true,
+  enableVisualRadar: false,
   enableAisFusion: true,
   enableCollision: true,
   enableMob: true,
   notifyCollision: true,
   notifyDarkTarget: true,
-  enableAisBlips: false,
   enableContextControl: true,
   detectClasses: ['person', 'vessel', 'buoy'],
   minConfidence: 0.4,
@@ -95,14 +94,14 @@ export function schema(): object {
       // --- Computation: run the analysis and publish its data paths. ---
       enableVisualRadar: {
         type: 'boolean',
-        title: 'Compute: visual-radar targets',
-        description: 'Publishes each tracked detection under vision.targets.<camera>.<id>.* (bearing, range, position…). Data only — never raises a notification.',
-        default: true,
+        title: 'Publish targets as synthetic AIS vessels',
+        description: 'Renders each georeferenced target as a vessels.* chart blip with a VIS- name prefix, navigation.position and (when "Compute: collision" is on) SOG/COG/CPA. No vision.targets.* data tree is published. Data only — never raises a notification. Off by default to avoid confusion with real AIS.',
+        default: false,
       },
       enableCollision: {
         type: 'boolean',
         title: 'Compute: collision (CPA/TCPA)',
-        description: 'Computes CPA/TCPA and threat level for each target (published on vision.targets.*). Required for the collision notification below.',
+        description: 'Computes CPA/TCPA, SOG/COG and threat level for each target (surfaced on the synthetic vessel blips above). Required for the collision notification below.',
         default: true,
       },
       enableAisFusion: {
@@ -121,7 +120,7 @@ export function schema(): object {
       notifyCollision: {
         type: 'boolean',
         title: 'Notify: collision risk',
-        description: 'Raises notifications.vision.collision.<track> (state: warn, then alarm; visual+sound) for risky approaches. Needs "Compute: collision" on. Turn this off to keep CPA data on the radar without an audible alarm.',
+        description: 'Raises notifications.vision.collision.<track> (state: warn, then alarm; visual+sound) for risky approaches. Needs "Compute: collision" on. Turn this off to keep CPA on the synthetic vessels without an audible alarm.',
         default: true,
       },
       notifyDarkTarget: {
@@ -129,12 +128,6 @@ export function schema(): object {
         title: 'Notify: dark target (non-AIS)',
         description: 'Raises notifications.vision.darkTarget.<track> (state: alert, visual) for targets with no AIS match. Needs "Compute: AIS fusion" on.',
         default: true,
-      },
-      enableAisBlips: {
-        type: 'boolean',
-        title: 'Project visual targets as synthetic AIS vessels (advanced)',
-        description: 'Renders blips on chartplotters as vessels.* with a VIS- name prefix. Off by default to avoid confusion with real AIS.',
-        default: false,
       },
       enableContextControl: {
         type: 'boolean',
@@ -212,8 +205,9 @@ export function uiSchema(): object {
     'ui:order': [
       'containerUrl',
       'enableDetection',
-      // Computation toggles grouped first…
+      // Output: publish targets as synthetic AIS vessels.
       'enableVisualRadar',
+      // Computation toggles.
       'enableCollision',
       'enableAisFusion',
       // …then the notification toggles.
@@ -221,7 +215,6 @@ export function uiSchema(): object {
       'notifyCollision',
       'notifyDarkTarget',
       'enableContextControl',
-      'enableAisBlips',
       'detectClasses',
       'minConfidence',
       'minTargetRangeM',

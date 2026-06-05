@@ -187,7 +187,6 @@ export function registerRoutes(
         mob: c.enableMob,
         notifyCollision: c.notifyCollision,
         notifyDarkTarget: c.notifyDarkTarget,
-        aisBlips: c.enableAisBlips,
       },
       cameras: shared.system.cameras,
       activeCamera: shared.system.activeCamera,

@@ -1,26 +1,32 @@
 # SignalK paths published by the plugin
 
-All values are published on `vessels.self` with source label `vision-ai`, in SI
-units. Metadata (units / zones) is sent once per concrete path on first publish.
+`vision.*` telemetry (fusion / system) and notifications are published on
+`vessels.self` with source label `vision-ai`, in SI units. Visual targets
+themselves are published as separate synthetic vessels (see below), not as a
+`vision.targets.*` tree.
 
-## Visual-radar targets — `vision.targets.<camera>.<trackId>.*`
+## Visual targets — synthetic AIS vessels (`enableVisualRadar`, default OFF)
+
+With **Publish targets as synthetic AIS vessels** on, each georeferenced target
+is published as its own vessel context
+`vessels.urn:mrn:signalk:uuid:vision-<camera>-<trackId>`, so it renders as a
+blip on any chartplotter that draws `vessels.*`. Off by default to avoid
+confusion with real AIS contacts.
 
 | Leaf | Units | Description |
 |------|-------|-------------|
-| `bearingTrue` | rad | True bearing to the target |
-| `distance` | m | Estimated range |
-| `position` | — | `{ latitude, longitude }` georeferenced fix |
-| `label` | — | `vessel` / `buoy` / `person` / … |
-| `confidence` | ratio | Detection confidence 0..1 |
-| `rangeMethod` | — | `horizon` \| `known_size` \| null |
-| `aisCorrelated` | — | boolean: matched to an AIS contact |
-| `aisMmsi` | — | matched MMSI, or null |
-| `cpa` | m | Closest point of approach |
-| `tcpa` | s | Time to CPA |
-| `threatLevel` | — | `none` / `low` / `medium` / `high` |
+| `navigation.position` | — | `{ latitude, longitude }` georeferenced fix (always set on a live blip) |
+| `name` | — | `VIS-<label>-<trackId>` |
+| `navigation.speedOverGround` | m/s | Target ground speed (needs `enableCollision`) |
+| `navigation.courseOverGroundTrue` | rad | Target ground course `[0,2π)` (needs `enableCollision`) |
+| `navigation.cpa` | m | Closest point of approach (vision-AI estimate) |
+| `navigation.tcpa` | s | Time to CPA |
 
-When a track disappears (ages out after `trackTimeoutS`), every leaf is
-published as `null` so consumers can drop the blip.
+A blip is **never** published without a real `navigation.position`. When a track
+disappears (ages out after `trackTimeoutS`), every leaf — position, name and all
+kinematics — is published as `null`, so no synthetic vessel ever lingers without
+a location. SOG/COG let a chartplotter draw the vector and compute CPA natively;
+`navigation.cpa`/`tcpa` are non-standard convenience paths for data browsers.
 
 ## Fusion summary — `vision.fusion.*`
 
@@ -52,10 +58,3 @@ published as `null` so consumers can drop the blip.
 Notifications are cleared (`value: null`) automatically when the condition
 resolves or the track ages out; MOB has a 60 s hold to ride out brief dropouts.
 
-## Optional: synthetic AIS blips (default OFF)
-
-With `enableAisBlips` on, high-confidence georeferenced targets are also
-published as `vessels.urn:mrn:signalk:uuid:vision-<camera>-<id>` with a
-`navigation.position` and a `VIS-<label>-<id>` name, so they render as blips on
-chartplotters that only draw `vessels.*`. Off by default to avoid confusion with
-real AIS contacts.

@@ -90,3 +90,41 @@ def test_separate_instances_are_independent_per_stream():
 def test_invalid_range_rejected():
     with pytest.raises(ValueError):
         VelocityTracker(id_min=99, id_max=10)
+
+
+def test_set_id_range_bounds_new_ids():
+    vt = VelocityTracker(id_min=10, id_max=99)
+    vt.set_id_range(10, 17)  # follow max_targets=8
+    for raw in range(1, 40):
+        vt.update(raw, seq=0, cx=0.0, cy=0.0)
+        assert 10 <= vt.display_id(raw) <= 17  # always within the new range
+
+
+def test_set_id_range_remaps_out_of_range_live_ids():
+    vt = VelocityTracker(id_min=10, id_max=99)
+    vt.update(1, seq=0, cx=0.0, cy=0.0)  # gets 10
+    vt.set_id_range(20, 23)  # 10 is now out of range
+    # The live track is remapped into range immediately — no higher id lingers.
+    assert 20 <= vt.display_id(1) <= 23
+
+
+def test_set_id_range_keeps_in_range_live_ids():
+    vt = VelocityTracker(id_min=10, id_max=99)
+    vt.update(1, seq=0, cx=0.0, cy=0.0)  # gets 10
+    vt.set_id_range(10, 17)  # 10 still in range
+    assert vt.display_id(1) == 10  # unchanged — no needless reshuffle
+
+
+def test_set_id_range_all_live_ids_bounded_after_shrink():
+    vt = VelocityTracker(id_min=10, id_max=99)
+    for raw in range(1, 30):  # spread across the wide range
+        vt.update(raw, seq=0, cx=0.0, cy=0.0)
+    vt.set_id_range(10, 17)  # shrink to max_targets=8
+    for raw in range(1, 30):
+        assert 10 <= vt.display_id(raw) <= 17  # EVERY live id now in range
+
+
+def test_set_id_range_invalid_rejected():
+    vt = VelocityTracker()
+    with pytest.raises(ValueError):
+        vt.set_id_range(30, 10)
