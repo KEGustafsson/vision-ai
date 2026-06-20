@@ -176,8 +176,8 @@ class ServerConfig(BaseModel):
     # Cap concurrent MJPEG stream clients and WebSocket subscribers so an
     # unauthenticated peer can't exhaust the event loop / encode budget on a
     # resource-tight Jetson by opening connections without bound.
-    max_stream_clients: int = 16
-    max_ws_clients: int = 16
+    max_stream_clients: int = Field(16, ge=1)
+    max_ws_clients: int = Field(16, ge=1)
 
 
 class Settings(BaseModel):

@@ -71,6 +71,20 @@ describe('DetectionEvent wire contract', () => {
     }
   });
 
+  it('every calibration_status the TS type lists is allowed by the schema', () => {
+    for (const status of ['ok', 'uncalibrated', 'auto']) {
+      const ev = baseEvent();
+      ev.calibration_status = status;
+      expect(validate(ev), `calibration_status ${status}`).toBe(true);
+    }
+  });
+
+  it('rejects an unknown calibration_status', () => {
+    const ev = baseEvent();
+    ev.calibration_status = 'invalid-status';
+    expect(validate(ev)).toBe(false);
+  });
+
   it('rejects a structurally invalid event (confidence out of range)', () => {
     const ev = baseEvent();
     (ev.targets as Array<Record<string, unknown>>)[0].confidence = 5;

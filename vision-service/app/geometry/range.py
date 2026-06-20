@@ -46,11 +46,13 @@ def range_by_horizon(object_y: float, horizon_y: float, height_m: float,
     or so close to it that the estimate would be pure noise."""
     if object_y <= horizon_y:
         return None
+    if image_height <= 0:
+        return None  # invalid frame dimensions; guards the divisions below
     # Depression as a fraction of the full image height (not just the rows below
     # the horizon): this keeps both the noise gate and the confidence independent
     # of the horizon's position in the frame, so two cameras with different
     # horizon rows score an identical object identically.
-    depression_frac = (object_y - horizon_y) / max(image_height, 1)
+    depression_frac = (object_y - horizon_y) / image_height
     if depression_frac < MIN_DEPRESSION_FRAC:
         return None
     vfov = vfov_from_hfov(hfov_deg, width, image_height)

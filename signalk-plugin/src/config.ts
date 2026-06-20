@@ -253,6 +253,9 @@ function validContainerUrl(url: unknown): string {
 const clampMin = (v: number, min: number, fallback: number): number =>
   Number.isFinite(v) && v >= min ? v : fallback;
 
+const clampRange = (v: number, min: number, max: number, fallback: number): number =>
+  Number.isFinite(v) && v >= min && v <= max ? v : fallback;
+
 export function withDefaults(partial: Partial<PluginConfig> | undefined): PluginConfig {
   const cfg = { ...DEFAULT_CONFIG, ...(partial || {}) };
   // Validate / clamp values the admin UI doesn't reliably enforce, so a bad
@@ -264,6 +267,6 @@ export function withDefaults(partial: Partial<PluginConfig> | undefined): Plugin
   cfg.darkTargetRangeM = clampMin(cfg.darkTargetRangeM, 0, DEFAULT_CONFIG.darkTargetRangeM);
   cfg.aisMaxAgeS = clampMin(cfg.aisMaxAgeS, 0, DEFAULT_CONFIG.aisMaxAgeS);
   cfg.notifyHoldS = clampMin(cfg.notifyHoldS, 0, DEFAULT_CONFIG.notifyHoldS);
-  cfg.minConfidence = clampMin(cfg.minConfidence, 0, DEFAULT_CONFIG.minConfidence);
+  cfg.minConfidence = clampRange(cfg.minConfidence, 0, 1, DEFAULT_CONFIG.minConfidence);
   return cfg;
 }
