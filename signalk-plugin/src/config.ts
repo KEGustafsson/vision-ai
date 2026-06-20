@@ -1,12 +1,5 @@
 // Plugin configuration: TypeScript type + JSON Schema (for the SignalK admin UI).
 
-export interface CameraOverride {
-  name: string;
-  hfovDeg: number;
-  heightM: number;
-  bearingOffsetDeg: number;
-}
-
 export interface PluginConfig {
   containerUrl: string;
   // Master on/off for detection in the container. Persisted default; the captain
@@ -30,12 +23,14 @@ export interface PluginConfig {
   maxTargets: number; // maximum detections/tracks kept per frame in the container
   minRangeConfidence: number; // gate georeferencing
   ownAisMinRangeM: number; // ignore AIS contacts this close to own-ship
+  aisMaxAgeS: number; // ignore AIS contacts whose position is older than this; 0 => off
   darkTargetRangeM: number;
   correlationBearingDeg: number;
   correlationRangeFrac: number; // tolerance as fraction of range
   collisionTcpaS: number; // warn threshold
   collisionAlarmTcpaS: number; // alarm threshold
   collisionCpaM: number;
+  notifyHoldS: number; // keep a collision/dark notification up this long after it clears (anti-flap)
   mobMinConfidence: number;
   mobPersistFrames: number;
   underwaySogMs: number; // SOG above which we consider "underway"
@@ -59,12 +54,14 @@ export const DEFAULT_CONFIG: PluginConfig = {
   maxTargets: 20,
   minRangeConfidence: 0.3,
   ownAisMinRangeM: 25,
+  aisMaxAgeS: 120,
   darkTargetRangeM: 800,
   correlationBearingDeg: 8,
   correlationRangeFrac: 0.4,
   collisionTcpaS: 600,
   collisionAlarmTcpaS: 180,
   collisionCpaM: 100,
+  notifyHoldS: 10,
   mobMinConfidence: 0.5,
   mobPersistFrames: 3,
   underwaySogMs: 1.0,
@@ -185,12 +182,26 @@ export function schema(): object {
         default: 25,
         minimum: 0,
       },
-      darkTargetRangeM: { type: 'number', title: 'Dark-target alert range (m)', default: 800 },
+      aisMaxAgeS: {
+        type: 'number',
+        title: 'Ignore AIS contacts older than (s)',
+        description: 'SignalK retains an AIS contact’s last-known position long after it stops transmitting. Ignore contacts whose position is older than this so a stale fix can’t (a) suppress a real dark-target alarm by false-matching a vessel that is no longer transmitting, or (b) feed a wrong CPA. Set 0 to disable the age check.',
+        default: 120,
+        minimum: 0,
+      },
+      darkTargetRangeM: { type: 'number', title: 'Dark-target alert range (m)', default: 800, minimum: 0 },
       correlationBearingDeg: { type: 'number', title: 'AIS correlation bearing tolerance (deg)', default: 8 },
       correlationRangeFrac: { type: 'number', title: 'AIS correlation range tolerance (fraction)', default: 0.4 },
       collisionTcpaS: { type: 'number', title: 'Collision warn TCPA (s)', default: 600 },
       collisionAlarmTcpaS: { type: 'number', title: 'Collision alarm TCPA (s)', default: 180 },
-      collisionCpaM: { type: 'number', title: 'Collision CPA threshold (m)', default: 100 },
+      collisionCpaM: { type: 'number', title: 'Collision CPA threshold (m)', default: 100, minimum: 0 },
+      notifyHoldS: {
+        type: 'number',
+        title: 'Collision/dark-target notification hold (s)',
+        description: 'Keep a collision or dark-target notification raised for at least this long after the condition clears, so a target hovering around a threshold (noisy monocular range) doesn’t flap the audible alarm on/off every cycle. Set 0 for no hold.',
+        default: 10,
+        minimum: 0,
+      },
       mobMinConfidence: { type: 'number', title: 'MOB minimum confidence', default: 0.5, minimum: 0, maximum: 1 },
       mobPersistFrames: { type: 'number', title: 'MOB persistence (frames)', default: 3 },
       underwaySogMs: { type: 'number', title: 'Underway SOG threshold (m/s)', default: 1.0 },
@@ -225,6 +236,37 @@ export function uiSchema(): object {
   };
 }
 
+// http/https only — guards the MJPEG/PTZ proxy (router.ts) from being pointed at
+// a non-HTTP scheme (file:, etc.) by a bad config value.
+function validContainerUrl(url: unknown): string {
+  if (typeof url === 'string') {
+    try {
+      const u = new URL(url);
+      if (u.protocol === 'http:' || u.protocol === 'https:') return url;
+    } catch {
+      /* fall through to default */
+    }
+  }
+  return DEFAULT_CONFIG.containerUrl;
+}
+
+const clampMin = (v: number, min: number, fallback: number): number =>
+  Number.isFinite(v) && v >= min ? v : fallback;
+
+const clampRange = (v: number, min: number, max: number, fallback: number): number =>
+  Number.isFinite(v) && v >= min && v <= max ? v : fallback;
+
 export function withDefaults(partial: Partial<PluginConfig> | undefined): PluginConfig {
-  return { ...DEFAULT_CONFIG, ...(partial || {}) };
+  const cfg = { ...DEFAULT_CONFIG, ...(partial || {}) };
+  // Validate / clamp values the admin UI doesn't reliably enforce, so a bad
+  // saved setting can't busy-loop the process or feed nonsense into the math.
+  cfg.containerUrl = validContainerUrl(cfg.containerUrl);
+  cfg.processIntervalMs = clampMin(cfg.processIntervalMs, 200, DEFAULT_CONFIG.processIntervalMs);
+  cfg.trackTimeoutS = clampMin(cfg.trackTimeoutS, 0.1, DEFAULT_CONFIG.trackTimeoutS);
+  cfg.collisionCpaM = clampMin(cfg.collisionCpaM, 0, DEFAULT_CONFIG.collisionCpaM);
+  cfg.darkTargetRangeM = clampMin(cfg.darkTargetRangeM, 0, DEFAULT_CONFIG.darkTargetRangeM);
+  cfg.aisMaxAgeS = clampMin(cfg.aisMaxAgeS, 0, DEFAULT_CONFIG.aisMaxAgeS);
+  cfg.notifyHoldS = clampMin(cfg.notifyHoldS, 0, DEFAULT_CONFIG.notifyHoldS);
+  cfg.minConfidence = clampRange(cfg.minConfidence, 0, 1, DEFAULT_CONFIG.minConfidence);
+  return cfg;
 }

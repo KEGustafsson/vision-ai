@@ -37,7 +37,9 @@ const VESSEL_LABELS = new Set([
 export function collectAisContacts(
   vessels: any,
   own: OwnShip,
-  minRangeM = 0
+  minRangeM = 0,
+  maxAgeMs = 0,
+  nowMs: number = Date.now()
 ): AisContact[] {
   const out: AisContact[] = [];
   if (!vessels || !own.position) return out;
@@ -52,8 +54,20 @@ export function collectAisContacts(
     // bare position injected by some other plugin (ours included).
     const aisClass = v?.sensors?.ais?.class?.value ?? v?.sensors?.ais?.class;
     if (typeof aisClass !== 'string' || aisClass.trim().length === 0) continue;
-    const p = v?.navigation?.position?.value ?? v?.navigation?.position;
-    if (!p || typeof p.latitude !== 'number') continue;
+    const posNode = v?.navigation?.position;
+    const p = posNode?.value ?? posNode;
+    // Validate BOTH lat and lon: a numeric lat with a missing/NaN lon would
+    // produce NaN range/bearing that silently corrupts correlation.
+    if (!p || typeof p.latitude !== 'number' || typeof p.longitude !== 'number') continue;
+    // Drop stale contacts: SignalK retains an AIS vessel's last-known position
+    // long after it stops transmitting. A stale fix would let a no-longer-
+    // transmitting vessel keep correlating (suppressing its dark-target alarm)
+    // and feed a wrong AIS SOG/COG into CPA. Only enforced when a timestamp is
+    // present (full-model shape); delta-only shapes without one are kept.
+    if (maxAgeMs > 0 && typeof posNode?.timestamp === 'string') {
+      const ageMs = nowMs - Date.parse(posNode.timestamp);
+      if (Number.isFinite(ageMs) && ageMs > maxAgeMs) continue;
+    }
     const pos: LatLon = { latitude: p.latitude, longitude: p.longitude };
     const range = haversine(own.position, pos);
     if (minRangeM > 0 && range < minRangeM) continue;

@@ -99,7 +99,5 @@ server:
 
 geometry:
   auto_horizon: false
-  known_widths_m:
-    person: 0.5
-    buoy: 0.8
-    vessel: 4.0
+  # known_widths_m intentionally omitted: the full per-label table in
+  # default.yaml applies (one source of truth). Override here only to add deltas.

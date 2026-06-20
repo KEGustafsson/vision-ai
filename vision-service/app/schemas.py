@@ -18,11 +18,9 @@ from typing import List, Optional
 from pydantic import BaseModel, Field
 
 SCHEMA_VERSION = "1.0"
-
-
-class Camera(str, Enum):
-    forward = "forward"
-    aft = "aft"
+# Major version the plugin must understand. Bump the major on any
+# backwards-incompatible change to the wire contract below; the plugin checks it
+# and raises a notification on mismatch (signalk-plugin/src/eventStream.ts).
 
 
 class Backend(str, Enum):

@@ -232,6 +232,21 @@ function renderOwnShip(own) {
   el.textContent = `${own.position.latitude.toFixed(5)}, ${own.position.longitude.toFixed(5)} · HDG ${hdg} · SOG ${sog}`;
 }
 
+// Threat levels are a fixed, known set — never interpolate an unvalidated value
+// into a CSS class name (it comes from the plugin, but treat it as untrusted).
+const THREAT_LEVELS = new Set(['none', 'low', 'medium', 'high']);
+const safeThreat = (lvl) => (THREAT_LEVELS.has(lvl) ? lvl : 'none');
+
+// Append a <td> whose text is set via textContent (never innerHTML), so
+// attacker-controlled detection labels / AIS MMSI can't inject HTML/script.
+function addCell(tr, text, ...nodes) {
+  const td = document.createElement('td');
+  if (text) td.textContent = text;
+  nodes.forEach((n) => td.appendChild(n));
+  tr.appendChild(td);
+  return td;
+}
+
 let lastTargets = [];
 function renderTargets(targets) {
   lastTargets = targets;
@@ -243,17 +258,30 @@ function renderTargets(targets) {
     .sort((a, b) => threatRank(b) - threatRank(a))
     .slice(0, displayLimit)
     .forEach((t) => {
+      const lvl = safeThreat(t.threatLevel);
       const tr = document.createElement('tr');
-      tr.className = `threat-${t.threatLevel}${t.is_person_in_water ? ' mob' : ''}`;
-      tr.innerHTML = `
-        <td>${t.is_person_in_water ? '🆘 ' : ''}${t.label}${t.track_id != null ? ' #' + t.track_id : ''}</td>
-        <td>${fmtBrg(t.bearingTrue)}</td>
-        <td>${fmtRng(t.geometry.range_m)}</td>
-        <td>${fmtRng(t.cpa)}</td>
-        <td>${fmtTcpa(t.tcpa)}</td>
-        <td>${t.aisCorrelated ? '✔ ' + (t.aisMmsi || '') : '<span class="dark">DARK</span>'}</td>
-        <td><span class="dot ${t.threatLevel}"></span>${t.threatLevel}</td>`;
-      tbody.appendChild(tr);
+      tr.className = `threat-${lvl}${t.is_person_in_water ? ' mob' : ''}`;
+
+      const name = `${t.is_person_in_water ? '🆘 ' : ''}${t.label}` +
+        `${t.track_id != null ? ' #' + t.track_id : ''}`;
+      addCell(tr, name);
+      addCell(tr, fmtBrg(t.bearingTrue));
+      addCell(tr, fmtRng(t.geometry.range_m));
+      addCell(tr, fmtRng(t.cpa));
+      addCell(tr, fmtTcpa(t.tcpa));
+
+      if (t.aisCorrelated) {
+        addCell(tr, `✔ ${t.aisMmsi || ''}`);
+      } else {
+        const dark = document.createElement('span');
+        dark.className = 'dark';
+        dark.textContent = 'DARK';
+        addCell(tr, '', dark);
+      }
+
+      const dot = document.createElement('span');
+      dot.className = `dot ${lvl}`;
+      addCell(tr, '', dot).appendChild(document.createTextNode(lvl));
     });
 }
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from ..detector.classmap import MODEL_LABELS
 from ..schemas import Backend, ControlRequest, HealthResponse, PtzRequest
@@ -58,7 +58,7 @@ def cameras(request: Request):
 
 
 @router.get("/events/recent")
-def recent_events(request: Request, n: int = 20):
+def recent_events(request: Request, n: int = Query(20, ge=1, le=1000)):
     return _pipeline(request).events.recent(n)
 
 

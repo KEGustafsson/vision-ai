@@ -55,3 +55,21 @@ def test_range_by_horizon_matches_formula():
     ifov = vfov / 1080
     theta = math.radians((oy - hy) * ifov)
     assert abs(res[0] - h / math.tan(theta)) < 1e-6
+
+
+def test_range_by_horizon_confidence_is_full_image_height_fraction():
+    # Confidence = depression_frac * 1.5, where depression_frac is measured
+    # against the FULL image height (horizon-position independent), so an object
+    # 0.2 of the image height below the horizon scores exactly 0.3.
+    res = range_by_horizon(756, 540, 2.5, 90.0, 1920, 1080)  # (756-540)/1080 = 0.2
+    assert res is not None
+    assert abs(res[1] - 0.3) < 1e-9
+
+
+def test_range_by_horizon_confidence_independent_of_horizon_row():
+    # The SAME object geometry (object 216 px below the horizon, same image) must
+    # score the same confidence regardless of where the horizon sits in frame.
+    a = range_by_horizon(756, 540, 2.5, 90.0, 1920, 1080)
+    b = range_by_horizon(516, 300, 2.5, 90.0, 1920, 1080)
+    assert a is not None and b is not None
+    assert abs(a[1] - b[1]) < 1e-9

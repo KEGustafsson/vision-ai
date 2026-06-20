@@ -10,17 +10,29 @@ import { DetectionEvent } from './types';
 
 type Logger = { debug: (m: string, ...a: unknown[]) => void; error: (m: string) => void };
 
+// Wire-contract major version this plugin understands. The container stamps
+// every event with `schema_version` (see vision-service/app/schemas.py); a major
+// mismatch means breaking field changes, so we refuse those events and surface a
+// notification rather than silently mis-interpreting them.
+const SUPPORTED_SCHEMA_MAJOR = '1';
+// Don't spam the log on a persistent bad-frame source; warn at most this often.
+const WARN_INTERVAL_MS = 30000;
+
 export class EventStream {
   private ws: WebSocket | null = null;
   private closed = false;
   private backoff = 1000;
   private validate: ValidateFunction | null = null;
-  private validationWarned = false;
+  private lastValidationWarnAt = 0;
+  private mismatchedVersion: string | null = null;
 
   constructor(
     private wsUrl: string,
     private onEvent: (ev: DetectionEvent) => void,
-    private log: Logger
+    private log: Logger,
+    // Raised once per distinct incompatible version seen (and cleared when a
+    // compatible event arrives) so the plugin can notify the operator.
+    private onVersionMismatch?: (version: string | null) => void
   ) {
     this.loadSchema();
   }
@@ -54,7 +66,9 @@ export class EventStream {
   private connect(): void {
     if (this.closed) return;
     this.log.debug(`vision-ai: connecting to ${this.wsUrl}`);
-    const ws = new WebSocket(this.wsUrl);
+    // Cap inbound frame size so a hostile/buggy container can't pressure memory
+    // with an enormous frame (default ws limit is 100 MB).
+    const ws = new WebSocket(this.wsUrl, { maxPayload: 4 * 1024 * 1024 });
     this.ws = ws;
 
     ws.on('open', () => {
@@ -70,13 +84,37 @@ export class EventStream {
         return;
       }
       if (this.validate && !this.validate(parsed)) {
-        if (!this.validationWarned) {
-          this.validationWarned = true;
+        const now = Date.now();
+        if (now - this.lastValidationWarnAt > WARN_INTERVAL_MS) {
+          this.lastValidationWarnAt = now;
           this.log.error(`vision-ai: event failed schema validation: ${JSON.stringify(this.validate.errors)}`);
         }
         return;
       }
-      this.onEvent(parsed as DetectionEvent);
+      // Refuse an event whose major schema version we don't understand, and
+      // notify once per distinct bad version. Clear the flag when a compatible
+      // event arrives again.
+      const version = (parsed as { schema_version?: unknown }).schema_version;
+      const major = typeof version === 'string' ? version.split('.')[0] : null;
+      if (major !== SUPPORTED_SCHEMA_MAJOR) {
+        const seen = typeof version === 'string' ? version : 'unknown';
+        if (this.mismatchedVersion !== seen) {
+          this.mismatchedVersion = seen;
+          this.log.error(`vision-ai: incompatible event schema_version ${seen} (need ${SUPPORTED_SCHEMA_MAJOR}.x)`);
+          this.onVersionMismatch?.(seen);
+        }
+        return;
+      }
+      if (this.mismatchedVersion !== null) {
+        this.mismatchedVersion = null;
+        this.onVersionMismatch?.(null);
+      }
+      // A downstream throw must not tear down the socket pipeline.
+      try {
+        this.onEvent(parsed as DetectionEvent);
+      } catch (e) {
+        this.log.error(`vision-ai: event handler error: ${e}`);
+      }
     });
 
     ws.on('close', () => this.scheduleReconnect());

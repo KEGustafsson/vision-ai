@@ -85,7 +85,9 @@ export = function (app: ServerApp): Plugin {
     frameCount.set(ev.camera, (frameCount.get(ev.camera) ?? 0) + 1);
     const own = readOwnShip(app);
 
-    for (const raw of ev.targets) {
+    // `targets` is optional in the wire contract (default empty list); guard so a
+    // valid event that omits it can't throw in this per-frame hot path.
+    for (const raw of ev.targets ?? []) {
       if (raw.confidence < cfg.minConfidence) continue;
       if (cfg.detectClasses.length > 0 && !cfg.detectClasses.includes(raw.label)) continue;
       // NB: minimum-range filtering (minTargetRangeM) is done in the container
@@ -121,7 +123,8 @@ export = function (app: ServerApp): Plugin {
     let darkKeys = new Set<string>();
     let aisCount = 0;
     if (cfg.enableAisFusion) {
-      const contacts = collectAisContacts(app.getPath('vessels'), own, cfg.ownAisMinRangeM);
+      const contacts = collectAisContacts(
+        app.getPath('vessels'), own, cfg.ownAisMinRangeM, cfg.aisMaxAgeS * 1000, now);
       const res = fuse(all, contacts, cfg);
       darkKeys = new Set(res.darkTargetKeys);
       aisCount = res.aisCorrelatedCount;
@@ -273,10 +276,26 @@ export = function (app: ServerApp): Plugin {
       notifier = new NotificationManager(app, pluginId, cfg);
       cpa = new CpaEstimator();
 
-      stream = new EventStream(client.wsUrl(), handleEvent, {
-        debug: (m, ...a) => app.debug(m, ...a),
-        error: (m) => app.error(m),
-      });
+      stream = new EventStream(
+        client.wsUrl(),
+        handleEvent,
+        {
+          debug: (m, ...a) => app.debug(m, ...a),
+          error: (m) => app.error(m),
+        },
+        (version) => {
+          if (!notifier) return;
+          if (version === null) {
+            notifier.clearSchemaMismatch();
+          } else {
+            notifier.setSchemaMismatch(
+              `Vision container speaks event schema ${version}, but this plugin ` +
+              `understands 1.x. Update the plugin or the container so they match — ` +
+              `events are being ignored until then.`
+            );
+          }
+        }
+      );
       stream.start();
 
       lastStatsAt = Date.now();

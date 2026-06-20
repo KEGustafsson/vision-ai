@@ -54,7 +54,10 @@ a location. SOG/COG let a chartplotter draw the vector and compute CPA natively;
 | `notifications.vision.darkTarget.<key>` | `alert` | In-range vessel with no AIS correlation |
 | `notifications.vision.collision.<key>` | `warn` / `alarm` | TCPA/CPA thresholds (alarm = high threat) |
 | `notifications.vision.labelMismatch` | `warn` | Selected labels not producible by the active model |
+| `notifications.vision.schemaMismatch` | `warn` | Vision container emits an incompatible event `schema_version` (major mismatch); events are ignored until it matches |
 
 Notifications are cleared (`value: null`) automatically when the condition
 resolves or the track ages out; MOB has a 60 s hold to ride out brief dropouts.
+Collision and dark-target notifications also have a short anti-flap hold
+(`notifyHoldS`) so a target near a threshold doesn't toggle the alarm each cycle.
 

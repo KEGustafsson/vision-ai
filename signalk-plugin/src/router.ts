@@ -4,9 +4,28 @@
 
 import http from 'http';
 import https from 'https';
-import { ContainerClient } from './containerClient';
+import { ContainerClient, ControlBody } from './containerClient';
 import { PluginConfig } from './config';
 import { EnrichedTarget, OwnShip } from './types';
+
+// Only forward known control fields to the container — never relay an arbitrary
+// client body verbatim. The container validates types/ranges too, but the plugin
+// must not be a blind passthrough to a looser/older container.
+const CONTROL_KEYS: (keyof ControlBody)[] = [
+  'active_camera', 'confidence', 'max_targets',
+  'min_target_range_m', 'mode_hint', 'labels', 'enabled',
+];
+
+function pickControl(body: unknown): ControlBody {
+  const out: ControlBody = {};
+  if (body && typeof body === 'object') {
+    for (const k of CONTROL_KEYS) {
+      const v = (body as Record<string, unknown>)[k];
+      if (v !== undefined) (out as Record<string, unknown>)[k] = v;
+    }
+  }
+  return out;
+}
 
 export interface SharedState {
   readonly targets: EnrichedTarget[];
@@ -224,7 +243,7 @@ export function registerRoutes(
     const client = shared.client();
     if (!client) return res.status(503).json({ error: 'not started' });
     try {
-      const result = await client.control(req.body || {});
+      const result = await client.control(pickControl(req.body));
       res.json(result);
     } catch (e) {
       res.status(502).json({ error: String(e) });

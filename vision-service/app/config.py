@@ -167,9 +167,17 @@ class ServerConfig(BaseModel):
     # in the image (see Dockerfile); silently falls back to CPU when unavailable,
     # so it's safe to leave off on hosts without the binding.
     hw_jpeg: bool = False
-    # Allowed CORS origins; default permissive for dev. Restrict to the SignalK
-    # origin(s) in production (the plugin proxies same-origin anyway).
-    cors_origins: List[str] = Field(default_factory=lambda: ["*"])
+    # Allowed CORS origins. Empty by default (no cross-origin access): the plugin
+    # proxies the stream same-origin, so the browser never needs to reach the
+    # container cross-origin. Set explicitly to the SignalK origin(s) only if you
+    # deliberately expose the container to another origin. Avoid "*", which — with
+    # no auth on the control endpoints — would let any web page drive the cameras.
+    cors_origins: List[str] = Field(default_factory=list)
+    # Cap concurrent MJPEG stream clients and WebSocket subscribers so an
+    # unauthenticated peer can't exhaust the event loop / encode budget on a
+    # resource-tight Jetson by opening connections without bound.
+    max_stream_clients: int = Field(16, ge=1)
+    max_ws_clients: int = Field(16, ge=1)
 
 
 class Settings(BaseModel):
@@ -212,7 +220,12 @@ def _apply_env(raw: dict) -> dict:
     if "VISION_MOCK_SOURCE" in env:
         raw["mock_source"] = env["VISION_MOCK_SOURCE"]
     if "VISION_PORT" in env:
-        raw.setdefault("server", {})["port"] = int(env["VISION_PORT"])
+        try:
+            raw.setdefault("server", {})["port"] = int(env["VISION_PORT"])
+        except ValueError:
+            raise ValueError(
+                f"VISION_PORT must be an integer, got {env['VISION_PORT']!r}"
+            )
     det = raw.setdefault("detector", {})
     if "VISION_MODEL_PT" in env:
         det["model_pt"] = env["VISION_MODEL_PT"]

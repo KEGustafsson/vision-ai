@@ -11,15 +11,15 @@ from typing import Optional
 
 import cv2
 
-from .base import Frame, FrameSource
+from .base import Frame, FrameSource, redact_url
 
 
 def _validate_url(url: str) -> None:
     if not url.startswith(("rtsp://", "rtspt://")):
-        raise ValueError(f"RTSP url must start with rtsp://: {url!r}")
+        raise ValueError(f"RTSP url must start with rtsp://: {redact_url(url)!r}")
     # Reject characters that would break out of the GStreamer pipeline string.
     if any(c in url for c in " \t\n!'\"\\"):
-        raise ValueError(f"RTSP url contains unsafe characters: {url!r}")
+        raise ValueError(f"RTSP url contains unsafe characters: {redact_url(url)!r}")
 
 
 def build_pipeline(url: str, codec: str = "h264",
@@ -56,7 +56,7 @@ class RtspGstreamerSource(FrameSource):
         pipeline = build_pipeline(url, codec, width, height)
         self._cap = cv2.VideoCapture(pipeline, cv2.CAP_GSTREAMER)
         if not self._cap.isOpened():
-            raise RuntimeError(f"cannot open GStreamer pipeline for {url}")
+            raise RuntimeError(f"cannot open GStreamer pipeline for {redact_url(url)}")
 
     @property
     def width(self) -> int:

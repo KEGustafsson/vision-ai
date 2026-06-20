@@ -36,6 +36,9 @@ ARG DS_BASE=nvcr.io/nvidia/deepstream:7.1-samples-multiarch
 
 FROM ${EXPORT_BASE} AS export
 
+# The export base (vision-ai:jetson) now ends on a non-root USER; this build-only
+# stage needs root to pip-install build deps and write the exported ONNX.
+USER root
 WORKDIR /export
 COPY models/yolov8n.pt .
 # onnx + onnxslim back the export script's --simplify; pull the same DeepStream-Yolo

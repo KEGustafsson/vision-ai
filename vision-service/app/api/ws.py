@@ -20,16 +20,26 @@ async def ws_events(websocket: WebSocket):
     pipeline = websocket.app.state.pipeline
     camera = websocket.query_params.get("camera")
 
+    # Cap concurrent subscribers (see ServerConfig.max_ws_clients). Touched only
+    # from the event loop, so a plain counter on app.state needs no lock.
+    state = websocket.app.state
+    limit = pipeline.settings.server.max_ws_clients
+    if getattr(state, "ws_clients", 0) >= limit:
+        await websocket.close(code=1013)  # 1013 = "try again later"
+        return
+    state.ws_clients = getattr(state, "ws_clients", 0) + 1
+
     def match(ev: dict) -> bool:
         return camera is None or ev.get("camera") == camera
 
-    # Late-join catch-up.
-    for ev in pipeline.events.recent(20):
-        if match(ev):
-            await websocket.send_json(ev)
-
-    queue = pipeline.events.subscribe()
+    queue = None
     try:
+        # Late-join catch-up.
+        for ev in pipeline.events.recent(20):
+            if match(ev):
+                await websocket.send_json(ev)
+
+        queue = pipeline.events.subscribe()
         while True:
             ev = await queue.get()
             if match(ev):
@@ -39,4 +49,6 @@ async def ws_events(websocket: WebSocket):
     except asyncio.CancelledError:  # pragma: no cover
         pass
     finally:
-        pipeline.events.unsubscribe(queue)
+        if queue is not None:
+            pipeline.events.unsubscribe(queue)
+        state.ws_clients = max(0, getattr(state, "ws_clients", 1) - 1)

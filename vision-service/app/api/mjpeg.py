@@ -24,6 +24,15 @@ async def stream(request: Request, camera: str):
         raise HTTPException(status_code=404, detail=f"unknown camera {camera}")
     fps = pipeline.settings.server.target_fps
 
+    # Cap concurrent stream clients so a peer can't exhaust the encode/poll budget
+    # by opening unbounded MJPEG connections. The counter lives on app.state and
+    # is only touched from the (single-threaded) event loop, so no lock is needed.
+    state = request.app.state
+    limit = pipeline.settings.server.max_stream_clients
+    if getattr(state, "mjpeg_clients", 0) >= limit:
+        raise HTTPException(status_code=503, detail="too many stream clients")
+    state.mjpeg_clients = getattr(state, "mjpeg_clients", 0) + 1
+
     async def gen():
         # Poll a little faster than the configured cap so a freshly produced
         # frame is forwarded promptly, but only emit frames we haven't sent yet.
@@ -32,16 +41,22 @@ async def stream(request: Request, camera: str):
         # the video behind real time.
         period = 1.0 / max(fps * 2.0, 1.0)
         last_seq = 0
-        while True:
-            if await request.is_disconnected():
-                break
-            last_seq, jpeg = pipeline.frames.get_if_new(camera, last_seq)
-            if jpeg:
-                yield (b"--" + _BOUNDARY.encode() + b"\r\n"
-                       b"Content-Type: image/jpeg\r\n"
-                       b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
-                       + jpeg + b"\r\n")
-            await asyncio.sleep(period)
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                last_seq, jpeg = pipeline.frames.get_if_new(camera, last_seq)
+                if jpeg:
+                    try:
+                        yield (b"--" + _BOUNDARY.encode() + b"\r\n"
+                               b"Content-Type: image/jpeg\r\n"
+                               b"Content-Length: " + str(len(jpeg)).encode() + b"\r\n\r\n"
+                               + jpeg + b"\r\n")
+                    except (BrokenPipeError, ConnectionResetError):
+                        break  # client went away mid-write; stop the stream
+                await asyncio.sleep(period)
+        finally:
+            state.mjpeg_clients = max(0, getattr(state, "mjpeg_clients", 1) - 1)
 
     return StreamingResponse(
         gen(),
