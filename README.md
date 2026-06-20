@@ -138,5 +138,6 @@ cd signalk-plugin && npm test        # geo, enrich, AIS fusion, CPA, publisher
 
 Vision-derived alerts are an *aid*, not a replacement for proper lookout, radar
 or AIS. Range is monocular and coarse, and auto-MOB is a best-effort guess —
-all alerting features are configurable and the synthetic-AIS-blip projection is
-**off by default** to avoid being confused with real AIS contacts.
+all alerting features are configurable and the synthetic-AIS-blip projection
+("Publish targets as synthetic AIS vessels" / `enableVisualRadar`) is **off by
+default** to avoid being confused with real AIS contacts.

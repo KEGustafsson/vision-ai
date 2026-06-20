@@ -44,5 +44,13 @@ ENV VISION_MODE=jetson \
     VISION_PORT=7000 \
     PYTHONUNBUFFERED=1
 
+# Run as a non-root user to reduce blast radius (mirrors Dockerfile.cpu). The
+# TensorRT engine is pre-built on the host and bind-mounted read-only at runtime
+# (see docker-compose.jetson.yml), so the app only needs to READ it. NB: when
+# this image is reused as the deepstream export base, that stage re-escalates to
+# root for its build steps (see Dockerfile.deepstream).
+RUN useradd --create-home --uid 10001 appuser && chown -R appuser /opt/vision-service
+USER appuser
+
 EXPOSE 7000
 CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7000"]

@@ -13,10 +13,25 @@ function sanitize(key: string): string {
   return key.replace(/[^a-zA-Z0-9]/g, '_');
 }
 
+// Notifications managed outside evaluate() (set/cleared by their own lifecycle),
+// so the per-cycle clear loop must not touch them.
+const EXTERNAL_PATHS = new Set([
+  'notifications.vision.labelMismatch',
+  'notifications.vision.schemaMismatch',
+]);
+
+const isHoldable = (path: string): boolean =>
+  path.startsWith('notifications.vision.collision.') ||
+  path.startsWith('notifications.vision.darkTarget.');
+
 export class NotificationManager {
   private active = new Set<string>();
   private mobCounters = new Map<string, number>();
   private mobHoldUntil = new Map<string, number>();
+  // Anti-flap hold for collision/dark notifications: keep them up briefly after
+  // they would clear so a target hovering around a threshold doesn't toggle the
+  // audible alarm every cycle.
+  private holdUntil = new Map<string, number>();
   private lastMobMessage: string | null = null;
 
   constructor(
@@ -68,9 +83,29 @@ export class NotificationManager {
       this.evaluateCollision(targets, wantActive);
     }
 
-    // Clear any previously-active notification no longer wanted.
+    this.applyHold(wantActive, nowMs);
+
+    // Clear any previously-active notification no longer wanted. Skip paths owned
+    // by a separate lifecycle (label/schema mismatch) so we don't clear them here.
     for (const path of [...this.active]) {
+      if (EXTERNAL_PATHS.has(path)) continue;
       if (!wantActive.has(path)) this.clear(path);
+    }
+  }
+
+  // Refresh the hold for currently-wanted holdable paths, then re-add any held
+  // path whose hold hasn't expired so it isn't cleared yet (anti-flap).
+  private applyHold(want: Set<string>, nowMs: number): void {
+    const holdMs = this.cfg.notifyHoldS * 1000;
+    for (const path of want) {
+      if (isHoldable(path)) this.holdUntil.set(path, nowMs + holdMs);
+    }
+    for (const [path, until] of [...this.holdUntil]) {
+      if (until <= nowMs) {
+        this.holdUntil.delete(path);
+      } else if (!want.has(path) && this.active.has(path)) {
+        want.add(path);
+      }
     }
   }
 
@@ -162,10 +197,19 @@ export class NotificationManager {
     this.clear('notifications.vision.labelMismatch');
   }
 
+  setSchemaMismatch(message: string): void {
+    this.send('notifications.vision.schemaMismatch', 'warn', message, ['visual']);
+  }
+
+  clearSchemaMismatch(): void {
+    this.clear('notifications.vision.schemaMismatch');
+  }
+
   clearAll(): void {
     for (const path of [...this.active]) this.clear(path);
     this.mobCounters.clear();
     this.mobHoldUntil.clear();
+    this.holdUntil.clear();
     this.lastMobMessage = null;
   }
 }

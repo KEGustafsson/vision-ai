@@ -97,6 +97,10 @@ class EventBuffer:
             pass
 
     def recent(self, n: int = 20) -> List[dict]:
+        # Guard n=0 (``[-0:]`` is ``[0:]`` and would dump the whole buffer) and
+        # negative n (would slice from the wrong end).
+        if n <= 0:
+            return []
         with self._lock:
             return list(self._events)[-n:]
 

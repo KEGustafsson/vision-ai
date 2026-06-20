@@ -26,12 +26,14 @@ services:
       VISION_CAMERA_AFT_URL: ${VISION_CAMERA_AFT_URL}
     volumes:
       # Site calibration (horizon_y, height_m, hfov, bearing offsets) lives in
-      # config/deepstream.yaml; bind-mount so edits take effect on restart.
-      - ./vision-service/config:/opt/vision-service/config
-      # Application code: bind-mount so Python edits (pipeline/detector/geometry)
-      # take effect on a plain `restart`, no image rebuild needed. The image still
-      # bakes a copy, so the container also runs standalone without this mount.
-      - ./vision-service/app:/opt/vision-service/app
+      # config/deepstream.yaml; bind-mount read-only so edits take effect on a
+      # restart but a compromised container can't rewrite host-side calibration.
+      - ./vision-service/config:/opt/vision-service/config:ro
+      # Application code: bind-mount read-only so Python edits (pipeline/detector/
+      # geometry) take effect on a plain `restart` (no rebuild) while a compromised
+      # container can't tamper with the host source the host runs. The image still
+      # bakes a copy, so it also runs standalone without this mount.
+      - ./vision-service/app:/opt/vision-service/app:ro
       # DeepStream assets: pgie configs, labels, the deepstream-yolo ONNX/parser
       # .so, AND the TensorRT engine. nvinfer writes the built engine into THIS
       # dir (model-engine-file is relative to the pgie config), so mounting it

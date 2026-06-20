@@ -2,9 +2,13 @@
 // (vision-service/app/schemas.py). Kept minimal; validation against the
 // generated JSON Schema in eventStream.ts is the real guard against drift.
 
-export type CameraName = 'forward' | 'aft';
-export type Backend = 'tensorrt' | 'torch-cuda' | 'torch-cpu' | 'mock';
+// Camera name is free-form on the wire ("forward"/"aft" are the defaults, but any
+// configured camera name is valid), so don't narrow it to a misleading union.
+export type CameraName = string;
+export type Backend =
+  | 'tensorrt' | 'torch-cuda' | 'torch-cpu' | 'mock' | 'deepstream';
 export type RangeMethod = 'horizon' | 'known_size';
+export type CalibrationStatus = 'ok' | 'uncalibrated' | 'auto';
 
 export interface BBox {
   x: number;
@@ -36,6 +40,9 @@ export interface RawTarget {
   pixel_velocity: PixelVelocity;
   first_seen: string | null;
   age_frames: number;
+  // True when the stabilizer is coasting this track across a detector dropout
+  // (last detection + velocity) rather than from a fresh detection this frame.
+  coasting?: boolean;
 }
 
 export interface DetectionEvent {
@@ -46,7 +53,7 @@ export interface DetectionEvent {
   frame_size: { w: number; h: number };
   horizon_y: number | null;
   inference: { backend: Backend; latency_ms: number };
-  calibration_status: string;
+  calibration_status: CalibrationStatus;
   targets: RawTarget[];
 }
 

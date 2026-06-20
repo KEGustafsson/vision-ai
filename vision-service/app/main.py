@@ -41,11 +41,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 pipeline.stop()
 
     app = FastAPI(title="Marine Vision-AI Service", version="1.0", lifespan=lifespan)
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=settings.server.cors_origins or ["*"],
-        allow_methods=["*"], allow_headers=["*"],
-    )
+    # Only enable CORS when origins are explicitly configured. Defaulting to "*"
+    # would, given the unauthenticated control endpoints, let any web page the
+    # operator visits drive the cameras / disable detection cross-origin.
+    if settings.server.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=settings.server.cors_origins,
+            allow_methods=["*"], allow_headers=["*"],
+        )
 
     pipeline = _create_pipeline(settings, log)
     app.state.pipeline = pipeline

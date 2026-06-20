@@ -20,9 +20,10 @@ services:
     volumes:
       - ./vision-service/models:/opt/vision-service/models
       # Site calibration (horizon_y, height_m, hfov, bearing offsets) lives in
-      # config/jetson.yaml; bind-mount it so calibration edits take effect on a
-      # restart without rebuilding the image (see docs/onboard-verification.md §7).
-      - ./vision-service/config:/opt/vision-service/config
+      # config/jetson.yaml; bind-mount read-only so calibration edits take effect
+      # on a restart without rebuilding the image (see docs/onboard-verification.md
+      # §7), while the container can't rewrite host-side calibration.
+      - ./vision-service/config:/opt/vision-service/config:ro
     # Bind to localhost on the boat network; the SignalK plugin proxies it.
     ports:
       - "127.0.0.1:7000:7000"

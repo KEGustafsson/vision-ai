@@ -31,8 +31,9 @@ def vfov_from_hfov(hfov_deg: float, width: int, height: int) -> float:
     return math.degrees(vfov)
 
 
-# Below this depression (as a fraction of the image height below the horizon)
-# the range estimate is dominated by horizon/pitch noise, so we decline it.
+# Below this depression — measured as a fraction of the FULL image height, so it
+# is independent of where the horizon sits in the frame — the range estimate is
+# dominated by horizon/pitch noise, so we decline it.
 MIN_DEPRESSION_FRAC = 0.01
 # Sanity cap: nothing detectable on the water surface is realistically beyond
 # this from a small-craft camera height; larger "estimates" are horizon noise.
@@ -45,7 +46,11 @@ def range_by_horizon(object_y: float, horizon_y: float, height_m: float,
     or so close to it that the estimate would be pure noise."""
     if object_y <= horizon_y:
         return None
-    depression_frac = (object_y - horizon_y) / max(image_height - horizon_y, 1)
+    # Depression as a fraction of the full image height (not just the rows below
+    # the horizon): this keeps both the noise gate and the confidence independent
+    # of the horizon's position in the frame, so two cameras with different
+    # horizon rows score an identical object identically.
+    depression_frac = (object_y - horizon_y) / max(image_height, 1)
     if depression_frac < MIN_DEPRESSION_FRAC:
         return None
     vfov = vfov_from_hfov(hfov_deg, width, image_height)
@@ -56,7 +61,7 @@ def range_by_horizon(object_y: float, horizon_y: float, height_m: float,
     rng = height_m / math.tan(theta)
     if rng > MAX_RANGE_M:
         return None
-    # Confidence ramps from ~0 at the horizon to ~0.9 lower in the frame.
+    # Confidence ramps from ~0 at the horizon toward ~0.75-0.9 lower in the frame.
     conf = max(0.0, min(0.9, depression_frac * 1.5))
     return rng, conf
 

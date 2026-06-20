@@ -25,6 +25,7 @@ import urllib.request
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
+from xml.sax.saxutils import escape as _xml_escape
 
 from .config import CameraConfig, Settings
 
@@ -88,6 +89,11 @@ def _security_header(user: str, password: str) -> str:
     wsu = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd"
     pwtype = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-username-token-profile-1.0#PasswordDigest"
     enctype = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary"
+    # Escape the username: ONVIF credentials can legally contain &, <, >, " (RTSP
+    # userinfo is url-decoded before reaching here), which would otherwise break
+    # the SOAP envelope or allow XML injection. The password value is hashed into
+    # the digest, so only the username is interpolated as text.
+    user = _xml_escape(user)
     return (
         f'<s:Header><Security s:mustUnderstand="1" xmlns="{wsse}">'
         f"<UsernameToken><Username>{user}</Username>"

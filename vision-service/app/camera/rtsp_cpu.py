@@ -16,7 +16,7 @@ from typing import Optional
 
 import cv2
 
-from .base import Frame, FrameSource
+from .base import Frame, FrameSource, redact_url
 
 # Don't hammer a down camera: wait this long between reconnect attempts.
 _REOPEN_INTERVAL_S = 3.0
@@ -48,7 +48,7 @@ class RtspCpuSource(FrameSource):
         self._last_delivered_seq = 0
         cap = self._open_capture()
         if cap is None:
-            raise RuntimeError(f"cannot open RTSP stream: {url}")
+            raise RuntimeError(f"cannot open RTSP stream: {redact_url(url)}")
         self._cap = cap
         self._w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) or 1280
         self._h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) or 720
@@ -127,7 +127,10 @@ class RtspCpuSource(FrameSource):
             if self._closed or self._latest_img is None:
                 return None
             self._last_delivered_seq = self._latest_seq
-            return Frame(image=self._latest_img, seq=self._latest_seq)
+            # Copy under the lock: the reader thread rebinds (and OpenCV may reuse
+            # the underlying buffer for) ``_latest_img`` on the next frame, so the
+            # consumer must not share the live buffer it could overwrite mid-encode.
+            return Frame(image=self._latest_img.copy(), seq=self._latest_seq)
 
     def close(self) -> None:
         self._closed = True
