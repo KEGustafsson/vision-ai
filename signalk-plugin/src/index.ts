@@ -88,7 +88,13 @@ export = function (app: ServerApp): Plugin {
     // `targets` is optional in the wire contract (default empty list); guard so a
     // valid event that omits it can't throw in this per-frame hot path.
     for (const raw of ev.targets ?? []) {
-      if (raw.confidence < cfg.minConfidence) continue;
+      // NB: do NOT re-filter by raw.confidence here. The container is the single
+      // source of truth for what to surface — its stabilizer keeps a track shown
+      // via EMA/hysteresis/coasting even when the per-frame confidence dips below
+      // the threshold (and context control may lower that threshold at night).
+      // Re-gating on raw.confidence would drop exactly those stabilized tracks,
+      // so they'd appear on the video overlay but never in the list. The
+      // operator's minConfidence is enforced on the container (syncContainer).
       if (cfg.detectClasses.length > 0 && !cfg.detectClasses.includes(raw.label)) continue;
       // NB: minimum-range filtering (minTargetRangeM) is done in the container
       // (pushed via syncContainer), so events already exclude too-close objects
@@ -186,6 +192,10 @@ export = function (app: ServerApp): Plugin {
       // The container does the minimum-range filtering EARLY (events + overlay);
       // this is the single source of truth, pushed so it survives a restart.
       min_target_range_m: cfg.minTargetRangeM,
+      // Always push the confidence threshold so the container (and its stabilizer)
+      // gates at the operator's value even when context control is off. The
+      // context-control block below overrides it with the night-lowered value.
+      confidence: cfg.minConfidence,
     };
     let nextCamera: string | null = null;
     let nextModeHint: string | null = null;
