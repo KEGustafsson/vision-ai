@@ -282,6 +282,8 @@ function renderTargets(targets) {
       const dot = document.createElement('span');
       dot.className = `dot ${lvl}`;
       addCell(tr, '', dot).appendChild(document.createTextNode(lvl));
+
+      tbody.appendChild(tr);
     });
 }
 
