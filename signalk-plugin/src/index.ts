@@ -139,6 +139,10 @@ export = function (app: ServerApp): Plugin {
       aisAssignment = res.assignment;
       darkKeys = new Set(res.darkTargetKeys);
       aisCount = res.aisCorrelatedCount;
+    } else {
+      // Drop hysteresis state while fusion is off so a later re-enable starts
+      // clean instead of reusing target→MMSI mappings nothing has maintained.
+      aisAssignment = new Map<string, string>();
     }
 
     if (cfg.enableCollision && cpa) cpa.update(all, own, cfg, now);

@@ -155,6 +155,17 @@ describe('aisFusion', () => {
     expect(res.darkTargetKeys).toHaveLength(0);
   });
 
+  it('correlates nothing (no NaN) when the bearing tolerance is misconfigured to 0', () => {
+    const brg = deg2rad(90);
+    const aisPos = destinationPoint(own.position, brg, 600);
+    const vessels = { 'urn:mrn:imo:mmsi:111111111': aisVessel(aisPos) };
+    const contacts = collectAisContacts(vessels, own);
+    const zeroCfg = withDefaults({ correlationBearingDeg: 0 });
+    const res = fuse([visualTarget(brg, 610)], contacts, zeroCfg);
+    expect(res.aisCorrelatedCount).toBe(0);
+    expect(res.targets[0].aisCorrelated).toBe(false);
+  });
+
   it('does not correlate a vessel detection with an aid-to-navigation (ATON) contact', () => {
     const brg = deg2rad(90);
     const atonPos = destinationPoint(own.position, brg, 600);

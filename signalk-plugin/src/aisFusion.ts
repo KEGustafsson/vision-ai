@@ -149,6 +149,10 @@ function pairScore(
   if (t.bearingTrue === null) return null;
   if (!classAllowed(t.label, a.aisClass)) return null;
   const { range, hasRange, bearingTol, rangeTol } = gatesFor(t, cfg);
+  // A zero/negative bearing gate (correlationBearingDeg misconfigured to 0)
+  // would make the dB/bearingTol score NaN and corrupt the assignment sort.
+  // Treat it as "nothing correlates" rather than dividing by it.
+  if (bearingTol <= 0) return null;
   const dB = angularDiff(t.bearingTrue, a.bearing);
   if (dB > bearingTol) return null;
   let score = dB / bearingTol;
