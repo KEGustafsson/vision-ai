@@ -103,4 +103,71 @@ describe('aisFusion', () => {
     const res = fuse([visualTarget(deg2rad(270), 5000)], [], cfg);
     expect(res.darkTargetKeys).toHaveLength(0);
   });
+
+  it('assigns one-to-one: two targets cannot share one AIS contact', () => {
+    const brg = deg2rad(90);
+    const aisPos = destinationPoint(own.position, brg, 600);
+    // A single real AIS vessel, but two visual targets near it (one slightly off).
+    const vessels = { 'urn:mrn:imo:mmsi:111111111': aisVessel(aisPos) };
+    const contacts = collectAisContacts(vessels, own);
+    const near = visualTarget(brg, 610, 'forward.1');
+    const off = visualTarget(deg2rad(91), 650, 'forward.2');
+    const res = fuse([near, off], contacts, cfg);
+    // Exactly one target may carry the MMSI — the single contact cannot be
+    // claimed twice. The loser sits beside the same real vessel, so it is
+    // ambiguous (near-miss), not a confident dark target.
+    const correlated = res.targets.filter((t) => t.aisCorrelated);
+    expect(correlated).toHaveLength(1);
+    expect(correlated[0].key).toBe('forward.1'); // the closer match wins
+    expect(res.aisCorrelatedCount).toBe(1);
+    expect(res.targets.find((t) => t.key === 'forward.2')!.aisCorrelated).toBe(false);
+    expect(res.darkTargetKeys).not.toContain('forward.2');
+  });
+
+  it('keeps a target on its previous AIS identity when two contacts both gate (hysteresis)', () => {
+    const brg = deg2rad(90);
+    // Two AIS contacts straddling the target so either could match.
+    const aPos = destinationPoint(own.position, deg2rad(89.5), 600);
+    const bPos = destinationPoint(own.position, deg2rad(90.5), 600);
+    const vessels = {
+      'urn:mrn:imo:mmsi:111111111': aisVessel(aPos),
+      'urn:mrn:imo:mmsi:222222222': aisVessel(bPos),
+    };
+    const contacts = collectAisContacts(vessels, own);
+    const tgt = visualTarget(brg, 600, 'forward.1');
+    // Pin a prior assignment to the contact that is NOT the marginally-best one.
+    const prev = new Map([['forward.1', '222222222']]);
+    const res = fuse([tgt], contacts, cfg, prev);
+    expect(res.targets[0].aisMmsi).toBe('222222222');
+    expect(res.assignment.get('forward.1')).toBe('222222222');
+  });
+
+  it('does not flag a dark target when a near-miss AIS contact sits just outside the gate', () => {
+    const brg = deg2rad(270);
+    // Vessel detected at 400 m; a real AIS vessel at 520 m on the same bearing —
+    // beyond the correlation range gate (~96 m at conf 0.7) but inside the
+    // 1.5× near-miss band (~144 m): ambiguous, so we hold off the dark call.
+    const aisPos = destinationPoint(own.position, brg, 520);
+    const vessels = { 'urn:mrn:imo:mmsi:111111111': aisVessel(aisPos) };
+    const contacts = collectAisContacts(vessels, own);
+    const res = fuse([visualTarget(brg, 400)], contacts, cfg);
+    expect(res.targets[0].aisCorrelated).toBe(false);
+    expect(res.darkTargetKeys).toHaveLength(0);
+  });
+
+  it('does not correlate a vessel detection with an aid-to-navigation (ATON) contact', () => {
+    const brg = deg2rad(90);
+    const atonPos = destinationPoint(own.position, brg, 600);
+    const vessels = {
+      'urn:mrn:imo:mmsi:111111111': {
+        navigation: { position: { value: atonPos } },
+        sensors: { ais: { class: { value: 'ATON' } } },
+      },
+    };
+    const contacts = collectAisContacts(vessels, own);
+    expect(contacts).toHaveLength(1); // collected (a buoy could match it)
+    const res = fuse([visualTarget(brg, 610)], contacts, cfg); // label 'vessel'
+    expect(res.targets[0].aisCorrelated).toBe(false);
+    expect(res.darkTargetKeys).toContain('forward.1');
+  });
 });
