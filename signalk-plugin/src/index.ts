@@ -31,6 +31,10 @@ export = function (app: ServerApp): Plugin {
   let syncTimer: NodeJS.Timeout | null = null;
 
   const targets = new Map<string, EnrichedTarget>();
+  // Last cycle's AIS association (target key -> mmsi). Persisted across process
+  // cycles so fuse() can keep a stable target on the same contact instead of
+  // flapping its identity as the noisy monocular range wanders.
+  let aisAssignment = new Map<string, string>();
   const lastEventByCamera = new Map<string, DetectionEvent>();
   const frameCount = new Map<string, number>();
   let activeCamera = 'forward';
@@ -131,9 +135,14 @@ export = function (app: ServerApp): Plugin {
     if (cfg.enableAisFusion) {
       const contacts = collectAisContacts(
         app.getPath('vessels'), own, cfg.ownAisMinRangeM, cfg.aisMaxAgeS * 1000, now);
-      const res = fuse(all, contacts, cfg);
+      const res = fuse(all, contacts, cfg, aisAssignment);
+      aisAssignment = res.assignment;
       darkKeys = new Set(res.darkTargetKeys);
       aisCount = res.aisCorrelatedCount;
+    } else {
+      // Drop hysteresis state while fusion is off so a later re-enable starts
+      // clean instead of reusing target→MMSI mappings nothing has maintained.
+      aisAssignment = new Map<string, string>();
     }
 
     if (cfg.enableCollision && cpa) cpa.update(all, own, cfg, now);
@@ -331,6 +340,7 @@ export = function (app: ServerApp): Plugin {
       if (publisher) publisher.reset();
       if (cpa) cpa.reset();
       targets.clear();
+      aisAssignment = new Map<string, string>();
       lastEventByCamera.clear();
       frameCount.clear();
       activeCamera = 'forward';
