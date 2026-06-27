@@ -156,4 +156,12 @@ RUN useradd --create-home --uid 10001 --groups video appuser \
 USER appuser
 
 EXPOSE 7000
+# Liveness: probe /health and report `unhealthy` on unreachable or degraded.
+# DeepStream surfaces its auto-restart count in /health (pipeline_restarts), so a
+# wedged GPU pipeline that has exhausted self-restarts shows up here. The
+# start-period is the longest of the three images: nvinfer builds the TRT engine
+# from the ONNX on first run, which can take several minutes on the Orin Nano.
+# See scripts/healthcheck.py.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
+    CMD ["python3", "/opt/vision-service/scripts/healthcheck.py"]
 CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7000"]

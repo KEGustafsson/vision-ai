@@ -19,6 +19,8 @@ const EXTERNAL_PATHS = new Set([
   'notifications.vision.labelMismatch',
   'notifications.vision.schemaMismatch',
   'notifications.vision.staleEvents',
+  'notifications.vision.containerDown',
+  'notifications.vision.containerDegraded',
 ]);
 
 const isHoldable = (path: string): boolean =>
@@ -212,6 +214,28 @@ export class NotificationManager {
 
   clearStaleEvents(): void {
     this.clear('notifications.vision.staleEvents');
+  }
+
+  // Container unreachable: the whole vision sensor is offline (no events, no
+  // stream). Raised at `alarm` so it's distinct from the data-quality warnings
+  // above, but visual-only to avoid an audible alarm flapping on a routine
+  // container restart — the plugin recovers on its own when it comes back.
+  setContainerDown(message: string): void {
+    this.send('notifications.vision.containerDown', 'alarm', message, ['visual']);
+  }
+
+  clearContainerDown(): void {
+    this.clear('notifications.vision.containerDown');
+  }
+
+  // Container reachable but reporting status="degraded" (camera/RTSP stall or a
+  // pipeline auto-restart). The sensor is partially working, so this is a warn.
+  setContainerDegraded(message: string): void {
+    this.send('notifications.vision.containerDegraded', 'warn', message, ['visual']);
+  }
+
+  clearContainerDegraded(): void {
+    this.clear('notifications.vision.containerDegraded');
   }
 
   clearAll(): void {
