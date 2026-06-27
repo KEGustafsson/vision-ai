@@ -40,7 +40,28 @@ FROM ${EXPORT_BASE} AS export
 # stage needs root to pip-install build deps and write the exported ONNX.
 USER root
 WORKDIR /export
-COPY models/yolov8n.pt .
+# Acquire the YOLOv8n weights deterministically. A clean checkout has NO
+# models/yolov8n.pt (weights are gitignored), so requiring it as a build input
+# would make the image unbuildable from a fresh clone. Instead: use a hand-placed
+# offline copy if the operator left one in models/, else let Ultralytics (present
+# in the export base) fetch the official weights into the workdir. The build
+# already needs the network for the base images, so the online path adds nothing.
+# Pin the model artifact by content hash, not just the mutable upstream filename,
+# so a clean build can't silently bake in different yolov8n.pt bits (reproducibility
+# + provenance). This is the canonical Ultralytics YOLOv8n checkpoint hash. Override
+# when intentionally changing the model (--build-arg YOLOV8N_SHA256=<hash>), or set
+# it empty to skip the check.
+ARG YOLOV8N_SHA256=f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36
+COPY models/ ./models/
+RUN if [ -f models/yolov8n.pt ]; then \
+        cp models/yolov8n.pt yolov8n.pt; \
+    else \
+        python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"; \
+    fi \
+    && test -f yolov8n.pt \
+    && if [ -n "${YOLOV8N_SHA256}" ]; then \
+         echo "${YOLOV8N_SHA256}  yolov8n.pt" | sha256sum -c -; \
+       fi
 # onnx + onnxslim back the export script's --simplify; pull the same DeepStream-Yolo
 # repo stage 2 builds the parser from, so the export and the parser stay in lockstep.
 # onnxscript is required by this image's torch.onnx.export path (newer torch
@@ -89,8 +110,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN pip3 install --no-cache-dir \
       https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.2.0/pyds-1.2.0-cp310-cp310-linux_aarch64.whl
 
-COPY requirements-deepstream.txt .
-RUN pip3 install --no-cache-dir -r requirements-deepstream.txt
+COPY requirements-deepstream.txt constraints.txt ./
+RUN pip3 install --no-cache-dir -c constraints.txt -r requirements-deepstream.txt
 
 COPY app ./app
 COPY config ./config
@@ -120,6 +141,19 @@ RUN mkdir -p models
 ENV VISION_MODE=deepstream \
     VISION_PORT=7000 \
     PYTHONUNBUFFERED=1
+
+# Run as a non-root user to reduce blast radius (mirrors Dockerfile / Dockerfile.cpu).
+# The user is added to the `video` group for GPU device access (/dev/nvhost*),
+# which the DeepStream/nvinfer pipeline needs on the Jetson. nvinfer also writes
+# the built TRT engine into deepstream/ and models/ (both bind-mounted) on first
+# run, so — exactly as the jetson image already requires for models/ — the host
+# directories must be writable by UID 10001 for the engine to persist (otherwise
+# it is harmlessly rebuilt each start). If your Jetson's nvidia container runtime
+# denies GPU access to non-root, set `user: root` on the deepstream compose
+# service as a documented exception.
+RUN useradd --create-home --uid 10001 --groups video appuser \
+    && chown -R appuser /opt/vision-service
+USER appuser
 
 EXPOSE 7000
 CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7000"]

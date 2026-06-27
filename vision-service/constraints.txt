@@ -1,0 +1,21 @@
+# Pinned, known-good versions of the FastAPI / Starlette / TestClient stack and
+# its transitive deps. The runtime requirements (requirements*.txt) intentionally
+# carry broad lower bounds so the app can adopt patches, but a *clean* install of
+# those lower bounds resolves whatever is newest on PyPI — which silently changed
+# the verified stack under us. Concretely: FastAPI only requires `starlette>=0.46`
+# with no upper bound, so a fresh install pulled Starlette 1.3.x, whose
+# `starlette.testclient.TestClient` deprecates the httpx backend in favour of
+# `httpx2` and (on a slightly newer point release) fails test collection entirely
+# — breaking CI before any safety test runs, with no code change.
+#
+# These pins make verification reproducible. CI and the release Docker builds
+# install with `-c constraints.txt` so the same stack is exercised everywhere.
+# All packages here are pure-Python and arch-independent (safe for the aarch64
+# Jetson images too). Bump deliberately: change a pin, re-run `pytest`, commit.
+anyio==4.14.1
+fastapi==0.138.1
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+starlette==1.3.1
+uvicorn==0.49.0

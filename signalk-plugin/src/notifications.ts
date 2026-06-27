@@ -18,6 +18,7 @@ function sanitize(key: string): string {
 const EXTERNAL_PATHS = new Set([
   'notifications.vision.labelMismatch',
   'notifications.vision.schemaMismatch',
+  'notifications.vision.staleEvents',
 ]);
 
 const isHoldable = (path: string): boolean =>
@@ -203,6 +204,14 @@ export class NotificationManager {
 
   clearSchemaMismatch(): void {
     this.clear('notifications.vision.schemaMismatch');
+  }
+
+  setStaleEvents(message: string): void {
+    this.send('notifications.vision.staleEvents', 'warn', message, ['visual']);
+  }
+
+  clearStaleEvents(): void {
+    this.clear('notifications.vision.staleEvents');
   }
 
   clearAll(): void {

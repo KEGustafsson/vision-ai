@@ -1,8 +1,15 @@
 # Core runtime deps. These are all that mock mode needs, so the default image
 # stays light. Real YOLO inference (cpu mode) adds ultralytics/torch via
 # requirements-cpu.txt.
-fastapi>=0.110
-uvicorn[standard]>=0.29
+#
+# Upper bounds keep a clean install on the verified major lines; constraints.txt
+# pins the exact known-good versions for CI/release. In particular `starlette` is
+# capped explicitly because FastAPI itself imposes no upper bound — an unpinned
+# install drifts onto a Starlette whose TestClient drops the httpx backend and
+# breaks test collection (see constraints.txt).
+fastapi>=0.110,<0.140
+starlette>=0.46,<1.4
+uvicorn[standard]>=0.29,<0.50
 h11>=0.16.0           # avoid GHSA-vqfr-h8mv-ghfj (uvicorn pulls h11>=0.8)
 pydantic>=2.6,<3      # cap for deterministic JSON-Schema export (CI drift guard)
 numpy>=1.24

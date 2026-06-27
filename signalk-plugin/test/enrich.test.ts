@@ -26,7 +26,7 @@ function raw(relBrg: number, range: number | null, rangeConf = 0.6): RawTarget {
 
 describe('enrichTarget', () => {
   const cfg = withDefaults(undefined);
-  const own = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 0, cog: 0 };
+  const own = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 0, cog: 0, stale: false };
 
   it('computes true bearing = heading + relative', () => {
     const t = enrichTarget(raw(30, 500), 'forward', { ...own, headingTrue: Math.PI / 2 }, cfg, 0);

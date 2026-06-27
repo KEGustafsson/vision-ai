@@ -112,6 +112,13 @@ def _display_id_max(max_targets: int) -> int:
     return _DISPLAY_ID_MIN + max(1, max_targets) - 1
 
 _GST_CLOCK_TIME_NONE = 0xFFFF_FFFF_FFFF_FFFF  # GStreamer "invalid timestamp" sentinel
+# Auto-restart after a fatal GStreamer error/EOS: a transient RTSP/decoder glitch
+# must not take detection down until a manual container restart. The supervisor
+# rebuilds the pipeline with exponential backoff and keeps trying indefinitely
+# (a safety system should keep attempting to recover); the restart count and last
+# error are surfaced in /health so a flapping feed is visible.
+_RESTART_BACKOFF_INITIAL_S = 2.0
+_RESTART_BACKOFF_MAX_S = 30.0
 _DEEPSTREAM_DIR = Path(__file__).resolve().parent.parent / "deepstream"
 _TRACKER_LIB = "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"
 _TRACKER_CFG_STOCK = Path(
@@ -226,7 +233,12 @@ class DeepStreamPipeline:
         # GStreamer pipeline + GLib main loop (in daemon thread)
         self._gst = None
         self._loop = None
-        self._loop_thread: Optional[threading.Thread] = None
+        # Supervisor thread: runs the GLib loop and rebuilds the pipeline with
+        # backoff after a fatal GStreamer error/EOS (see _supervise).
+        self._supervisor: Optional[threading.Thread] = None
+        self._stopping = threading.Event()
+        self._restart_count = 0
+        self._last_error: Optional[str] = None
 
         # Holds generated nvdewarper config files; cleaned up on stop().
         self._dewarp_tmp: Optional[tempfile.TemporaryDirectory] = None
@@ -250,6 +262,7 @@ class DeepStreamPipeline:
         from gi.repository import GLib, Gst
 
         Gst.init(None)
+        self._stopping.clear()
 
         d = self.settings.detector
         for i, cam in enumerate(self.settings.cameras):
@@ -260,6 +273,7 @@ class DeepStreamPipeline:
                 hysteresis_ratio=d.stabilize_hysteresis_ratio,
                 ema_alpha=d.stabilize_ema_alpha,
                 coast_velocity_factor=d.stabilize_coast_velocity_factor,
+                person_confirm_frames=d.stabilize_person_confirm_frames,
             ) if d.stabilize else None
             self._states[cam.name] = _StreamState(
                 cam=cam, settings=self.settings, stabilizer=stab,
@@ -269,6 +283,17 @@ class DeepStreamPipeline:
                                     id_max=_display_id_max(self._max_det)),
             )
 
+        # First bring-up happens synchronously so a hard misconfiguration (bad
+        # RTSP URL, missing plugin) still fails fast at startup. Subsequent
+        # failures are recovered by the supervisor instead of going dark.
+        self._bring_up(Gst, GLib)
+        self._supervisor = threading.Thread(
+            target=self._supervise, args=(Gst, GLib), daemon=True, name="ds-supervisor")
+        self._supervisor.start()
+
+    def _bring_up(self, Gst, GLib) -> None:
+        """Build the pipeline, set it PLAYING, and create (but do not run) the
+        GLib loop + stall watchdog. Raises on a hard state-change failure."""
         self._gst = self._build_pipeline(Gst)
 
         bus = self._gst.get_bus()
@@ -289,28 +314,103 @@ class DeepStreamPipeline:
         now = time.time()
         for proxy in self.workers.values():
             proxy.last_frame_at = now
+            # Clear any error left from a prior fault (the GStreamer error stamped
+            # on every camera by _on_bus_message, or a stale "no frames" flag);
+            # the pipeline is healthy again here. Historical detail is kept in
+            # self._last_error / /health's pipeline_last_error.
+            proxy.error = None
         GLib.timeout_add_seconds(2, self._watchdog)
-        self._loop_thread = threading.Thread(
-            target=self._loop.run, daemon=True, name="glib-main")
-        self._loop_thread.start()
+        # Respect a current disable across rebuilds: if detection was toggled off,
+        # a recovered pipeline must come back PAUSED, not silently resume PLAYING.
+        if not self.enabled:
+            try:
+                self._gst.set_state(Gst.State.PAUSED)
+            except Exception:  # pragma: no cover - hardware dependent
+                pass
         self._log.info(
-            "DeepStream pipeline PLAYING: %d camera(s) → nvinfer(%s) → nvtracker",
+            "DeepStream pipeline %s: %d camera(s) → nvinfer(%s) → nvtracker",
+            "PLAYING" if self.enabled else "PAUSED (detection disabled)",
             len(self.settings.cameras), self.settings.detector.model,
         )
 
-    def stop(self) -> None:
-        if self._loop is not None:
-            self._loop.quit()
+    def _tear_down(self, Gst) -> None:
+        """Set the current pipeline to NULL and drop the loop reference. Safe to
+        call repeatedly (used between supervised restarts and on stop)."""
         if self._gst is not None:
             try:
-                import gi
-                gi.require_version("Gst", "1.0")
-                from gi.repository import Gst
                 self._gst.set_state(Gst.State.NULL)
             except Exception:
                 pass
-        if self._loop_thread is not None:
-            self._loop_thread.join(timeout=3.0)
+            self._gst = None
+        self._loop = None
+
+    def _supervise(self, Gst, GLib) -> None:
+        """Run the GLib loop; on a fatal error/EOS, rebuild with backoff.
+
+        start() has already brought up the first pipeline, so the first iteration
+        runs that loop. When it exits (a bus ERROR/EOS quits it via
+        _on_bus_message), we tear down and — unless stop() was called — rebuild
+        and try again, never giving up so a transient RTSP/decoder fault can't
+        leave detection permanently offline.
+        """
+        backoff = _RESTART_BACKOFF_INITIAL_S
+        first = True
+        while not self._stopping.is_set():
+            if not first:
+                try:
+                    self._bring_up(Gst, GLib)
+                    backoff = _RESTART_BACKOFF_INITIAL_S
+                except Exception as exc:  # pragma: no cover - hardware dependent
+                    self._last_error = str(exc)
+                    self._log.error("DeepStream bring-up failed: %s", exc)
+                    for proxy in self.workers.values():
+                        proxy.error = f"pipeline down: {exc}"
+                    if self._stopping.wait(timeout=backoff):
+                        break
+                    backoff = min(backoff * 2, _RESTART_BACKOFF_MAX_S)
+                    continue
+            first = False
+
+            loop = self._loop
+            if loop is not None:
+                try:
+                    loop.run()  # blocks until quit (error / EOS / stop)
+                except Exception as exc:  # pragma: no cover - hardware dependent
+                    self._last_error = str(exc)
+                    self._log.error("DeepStream loop error: %s", exc)
+
+            self._tear_down(Gst)
+            if self._stopping.is_set():
+                break
+
+            self._restart_count += 1
+            self._log.error(
+                "DeepStream pipeline exited (restart #%d, last_error=%s); "
+                "rebuilding in %.0fs", self._restart_count, self._last_error, backoff)
+            if self._stopping.wait(timeout=backoff):
+                break
+            backoff = min(backoff * 2, _RESTART_BACKOFF_MAX_S)
+
+    def restart_info(self) -> Dict[str, object]:
+        """Auto-restart telemetry for /health: how many times the GStreamer
+        pipeline has been rebuilt after a fault, and the last error seen."""
+        return {"restarts": self._restart_count, "last_error": self._last_error}
+
+    def stop(self) -> None:
+        self._stopping.set()
+        if self._loop is not None:
+            self._loop.quit()
+        if self._supervisor is not None:
+            self._supervisor.join(timeout=5.0)
+            self._supervisor = None
+        # Ensure the pipeline is released even if the supervisor never ran.
+        try:
+            import gi
+            gi.require_version("Gst", "1.0")
+            from gi.repository import Gst
+            self._tear_down(Gst)
+        except Exception:
+            pass
         if self._dewarp_tmp is not None:
             self._dewarp_tmp.cleanup()
             self._dewarp_tmp = None
@@ -366,6 +466,24 @@ class DeepStreamPipeline:
             self.frames.resume()
         else:
             self.frames.pause()
+        # Unlike the CPU/Jetson pipeline (whose workers release the capture device
+        # when disabled), the DeepStream graph would otherwise keep decoding and
+        # running nvinfer on the GPU even while "off" — burning power/thermal
+        # budget on the Jetson for nothing. So transition the whole pipeline to
+        # PAUSED on disable (decoders + nvinfer stop pulling data) and back to
+        # PLAYING on enable. The probe's `if not self.enabled` guard and the
+        # frame-store pause above still apply as before.
+        gst = self._gst
+        if gst is None:
+            return
+        try:
+            import gi
+            gi.require_version("Gst", "1.0")
+            from gi.repository import Gst
+            gst.set_state(Gst.State.PLAYING if value else Gst.State.PAUSED)
+        except Exception as exc:  # pragma: no cover - hardware dependent
+            self._log.warning(
+                "DeepStream set_enabled(%s) state change failed: %s", value, exc)
 
     def camera_errors(self) -> Dict[str, str]:
         return {name: p.error for name, p in self.workers.items() if p.error}
@@ -987,7 +1105,12 @@ class DeepStreamPipeline:
                 continue
             if allowed is not None and tr.label not in allowed:
                 continue
-            if (tr.w * tr.h) / frame_area > max_area:
+            # person is EXEMPT from the oversized-box drop: a man-overboard close
+            # to the hull legitimately fills much of the frame, and dropping it
+            # before the is_person_in_water classification below would lose the
+            # most safety-critical detection (mirrors pipeline.py and the
+            # person-exempt min-range filter).
+            if tr.label != "person" and (tr.w * tr.h) / frame_area > max_area:
                 continue
 
             brg = estimate_bearing(tr, cam, W)
@@ -1050,8 +1173,11 @@ class DeepStreamPipeline:
             err, debug = message.parse_error()
             self._log.error(
                 "DeepStream GStreamer error: %s\n  debug: %s", err.message, debug)
+            self._last_error = err.message
             for proxy in self.workers.values():
                 proxy.error = f"GStreamer error: {err.message}"
+            # Quitting the loop hands control to the supervisor, which rebuilds the
+            # pipeline with backoff instead of leaving detection down (see _supervise).
             if self._loop:
                 self._loop.quit()
         elif t == Gst.MessageType.WARNING:

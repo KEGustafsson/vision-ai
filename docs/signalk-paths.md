@@ -55,6 +55,7 @@ a location. SOG/COG let a chartplotter draw the vector and compute CPA natively;
 | `notifications.vision.collision.<key>` | `warn` / `alarm` | TCPA/CPA thresholds (alarm = high threat) |
 | `notifications.vision.labelMismatch` | `warn` | Selected labels not producible by the active model |
 | `notifications.vision.schemaMismatch` | `warn` | Vision container emits an incompatible event `schema_version` (major mismatch); events are ignored until it matches |
+| `notifications.vision.staleEvents` | `warn` | Detection events are arriving older than `eventMaxAgeS` and are being ignored (detection effectively offline — check the container, network link, and container/SignalK clock sync) |
 
 Notifications are cleared (`value: null`) automatically when the condition
 resolves or the track ages out; MOB has a 60 s hold to ride out brief dropouts.

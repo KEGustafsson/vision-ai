@@ -112,6 +112,7 @@ class CameraWorker(threading.Thread):
             hysteresis_ratio=d.stabilize_hysteresis_ratio,
             ema_alpha=d.stabilize_ema_alpha,
             coast_velocity_factor=d.stabilize_coast_velocity_factor,
+            person_confirm_frames=d.stabilize_person_confirm_frames,
         ) if d.stabilize else None
         # Runtime-adjustable via /control.
         self.confidence = settings.detector.confidence
@@ -295,7 +296,12 @@ class CameraWorker(threading.Thread):
                 continue
             # Drop oversized detections (own hull / very-near structure): they
             # swamp the frame and create phantom dark-target/collision alerts.
-            if (tr.w * tr.h) / frame_area > max_area_frac:
+            # person is EXEMPT: a man-overboard close to the hull legitimately
+            # fills much of the frame, and dropping it here — before the
+            # is_person_in_water classification below — would silently lose the
+            # most safety-critical detection. (Consistent with the min-range
+            # filter, which also exempts person.)
+            if tr.label != "person" and (tr.w * tr.h) / frame_area > max_area_frac:
                 continue
             brg = estimate_bearing(tr, self._cam, w)
             rng, method, rconf = estimate_range(

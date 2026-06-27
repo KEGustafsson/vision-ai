@@ -125,6 +125,11 @@ class DetectorConfig(BaseModel):
     stabilize: bool = True
     # Frames a new track must be seen before it is shown (debounce false pops).
     stabilize_confirm_frames: int = 3
+    # MOB-critical override: person tracks confirm after this many frames instead
+    # (default 1 = first frame). A person in the water must not be held back by the
+    # generic false-positive debounce; the plugin's MOB persistence counter still
+    # debounces the actual alarm, so confirming on frame 1 here is safe.
+    stabilize_person_confirm_frames: int = 1
     # Frames a confirmed-but-undetected track is coasted before being dropped.
     # ~max_coast_frames / target_fps seconds of persistence across dropouts.
     stabilize_max_coast_frames: int = 8

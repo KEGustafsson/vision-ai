@@ -33,11 +33,29 @@ export class CpaEstimator {
     const t = nowMs / 1000;
     const active = new Set<string>();
 
-    // Own velocity (east, north) m/s.
-    const voE = own.sog !== null && own.cog !== null ? own.sog * Math.sin(own.cog) : 0;
-    const voN = own.sog !== null && own.cog !== null ? own.sog * Math.cos(own.cog) : 0;
+    // Own velocity (east, north) m/s. CPA is relative motion, so it needs BOTH
+    // own SOG and COG. If either is unknown (no fix, or aged out as stale by
+    // readOwnShip) we must NOT substitute zero — "unknown own velocity" is not
+    // "stationary own vessel", and assuming zero would compute a bogus CPA from
+    // the target's motion alone (e.g. a target on a parallel course would look
+    // like a head-on threat, or a real closing threat would be missed). Instead
+    // we leave CPA unresolved for this cycle (below).
+    const ownVelKnown = own.sog !== null && own.cog !== null;
+    const voE = ownVelKnown ? (own.sog as number) * Math.sin(own.cog as number) : 0;
+    const voN = ownVelKnown ? (own.sog as number) * Math.cos(own.cog as number) : 0;
+
+    const clearCpa = (target: EnrichedTarget): void => {
+      target.cpa = null;
+      target.tcpa = null;
+      target.threatLevel = 'none';
+    };
 
     for (const tgt of targets) {
+      // Clear CPA up front so ANY path that can't (re)compute it this cycle —
+      // missing target/own position, no finite-difference baseline, or unknown
+      // own velocity — leaves the target unresolved instead of preserving a stale
+      // cpa/tcpa/threatLevel that would keep a collision alarm up on unsupported data.
+      clearCpa(tgt);
       if (!tgt.position || !own.position) continue;
       active.add(tgt.key);
       const cur = toLocal(own.position, tgt.position);
@@ -77,9 +95,16 @@ export class CpaEstimator {
       }
 
       // Target ground kinematics, surfaced onto the target for the synthetic
-      // vessel blip (navigation.speedOverGround / courseOverGroundTrue).
+      // vessel blip (navigation.speedOverGround / courseOverGroundTrue). These are
+      // the target's own ground velocity, independent of own-ship, so they're
+      // still valid (and useful) even when own velocity is unknown.
       tgt.sog = Math.hypot(vtE, vtN);
       tgt.cog = normalizeRad(Math.atan2(vtE, vtN)); // clockwise from true north
+
+      // Own velocity unknown (no/stale SOG/COG): a CPA computed against an assumed
+      // stationary own-ship would be misleading, so leave it unresolved (cleared
+      // above) rather than raise or suppress a collision alert on bad data.
+      if (!ownVelKnown) continue;
 
       // Relative motion: target relative to own.
       const rE = cur.e;

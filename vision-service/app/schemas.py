@@ -176,3 +176,8 @@ class HealthResponse(BaseModel):
     model: str = "coco"
     # Canonical labels this model can produce (e.g. ["buoy","person","vessel"]).
     model_labels: List[str] = Field(default_factory=list)
+    # DeepStream auto-restart telemetry: how many times the GStreamer pipeline has
+    # been rebuilt after a fatal error/EOS, and the last error message. 0/None on
+    # the CPU/Jetson backends (which have no such supervisor).
+    pipeline_restarts: int = 0
+    pipeline_last_error: Optional[str] = None

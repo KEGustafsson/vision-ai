@@ -7,8 +7,9 @@
 # Unlike the TensorRT image, the DeepStream pipeline does NOT need torch/ultralytics
 # at runtime — nvinfer does inference. Those are only used in the build's export
 # stage to produce the YOLOv8n ONNX. So this list is just the web stack + numpy.
-fastapi>=0.110
-uvicorn[standard]>=0.29
+fastapi>=0.110,<0.140
+starlette>=0.46,<1.4   # cap explicitly: FastAPI imposes no upper bound (see constraints.txt)
+uvicorn[standard]>=0.29,<0.50
 h11>=0.16.0           # avoid GHSA-vqfr-h8mv-ghfj (uvicorn pulls h11>=0.8)
 pydantic>=2.6,<3
 PyYAML>=6.0

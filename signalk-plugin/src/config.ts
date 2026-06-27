@@ -23,6 +23,7 @@ export interface PluginConfig {
   maxTargets: number; // maximum detections/tracks kept per frame in the container
   minRangeConfidence: number; // gate georeferencing
   ownAisMinRangeM: number; // ignore AIS contacts this close to own-ship
+  ownNavMaxAgeS: number; // treat own-ship nav (position/heading/SOG/COG) older than this as unknown; 0 => off
   aisMaxAgeS: number; // ignore AIS contacts whose position is older than this; 0 => off
   darkTargetRangeM: number;
   correlationBearingDeg: number;
@@ -35,6 +36,7 @@ export interface PluginConfig {
   mobPersistFrames: number;
   underwaySogMs: number; // SOG above which we consider "underway"
   trackTimeoutS: number; // age out a visual track after this idle time
+  eventMaxAgeS: number; // reject detection events whose timestamp is older than this (replay/buffer guard); 0 => off
   processIntervalMs: number; // cadence of the fusion/CPA/notify/publish cycle
 }
 
@@ -54,6 +56,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
   maxTargets: 20,
   minRangeConfidence: 0.3,
   ownAisMinRangeM: 25,
+  ownNavMaxAgeS: 5,
   aisMaxAgeS: 120,
   darkTargetRangeM: 800,
   correlationBearingDeg: 8,
@@ -66,6 +69,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
   mobPersistFrames: 3,
   underwaySogMs: 1.0,
   trackTimeoutS: 5,
+  eventMaxAgeS: 10,
   processIntervalMs: 1000,
 };
 
@@ -182,10 +186,17 @@ export function schema(): object {
         default: 25,
         minimum: 0,
       },
+      ownNavMaxAgeS: {
+        type: 'number',
+        title: 'Own-ship nav max age (s)',
+        description: 'SignalK keeps the last own-ship position/heading/SOG/COG long after the sensor stops updating. Ignore any of these values older than this so a frozen GPS/heading feed can’t (a) georeference targets to a stale fix, or (b) be read as zero own velocity and suppress a real collision (CPA) warning. Stale/missing own kinematics are treated as unknown, never as a stationary ship. Set 0 to disable the age check.',
+        default: 5,
+        minimum: 0,
+      },
       aisMaxAgeS: {
         type: 'number',
         title: 'Ignore AIS contacts older than (s)',
-        description: 'SignalK retains an AIS contact’s last-known position long after it stops transmitting. Ignore contacts whose position is older than this so a stale fix can’t (a) suppress a real dark-target alarm by false-matching a vessel that is no longer transmitting, or (b) feed a wrong CPA. Set 0 to disable the age check.',
+        description: 'SignalK retains an AIS contact’s last-known position long after it stops transmitting. Ignore contacts whose position is older than this so a stale fix can’t (a) suppress a real dark-target alarm by false-matching a vessel that is no longer transmitting, or (b) feed a wrong CPA. Fail-closed: while the age check is on, a contact with no verifiable (parseable, recent) position timestamp is ignored too, and AIS COG/SOG older than this are dropped so they can’t feed CPA. Set 0 to disable the age check (then timestamp-less contacts are kept).',
         default: 120,
         minimum: 0,
       },
@@ -206,6 +217,13 @@ export function schema(): object {
       mobPersistFrames: { type: 'number', title: 'MOB persistence (frames)', default: 3 },
       underwaySogMs: { type: 'number', title: 'Underway SOG threshold (m/s)', default: 1.0 },
       trackTimeoutS: { type: 'number', title: 'Track age-out timeout (s)', default: 5 },
+      eventMaxAgeS: {
+        type: 'number',
+        title: 'Detection event max age (s)',
+        description: 'Reject detection events whose timestamp is older than this, so delayed, buffered or replayed frames can’t be treated as live and enter CPA/fusion history. Events with an invalid timestamp, or out-of-order frames older than the last one accepted for that camera, are always dropped. Keep this comfortably above normal network/processing latency. Set 0 to disable the absolute age check (the out-of-order guard stays active).',
+        default: 10,
+        minimum: 0,
+      },
       processIntervalMs: { type: 'number', title: 'Processing cadence (ms)', default: 1000, minimum: 200 },
     },
   };
@@ -266,7 +284,9 @@ export function withDefaults(partial: Partial<PluginConfig> | undefined): Plugin
   cfg.collisionCpaM = clampMin(cfg.collisionCpaM, 0, DEFAULT_CONFIG.collisionCpaM);
   cfg.darkTargetRangeM = clampMin(cfg.darkTargetRangeM, 0, DEFAULT_CONFIG.darkTargetRangeM);
   cfg.aisMaxAgeS = clampMin(cfg.aisMaxAgeS, 0, DEFAULT_CONFIG.aisMaxAgeS);
+  cfg.ownNavMaxAgeS = clampMin(cfg.ownNavMaxAgeS, 0, DEFAULT_CONFIG.ownNavMaxAgeS);
   cfg.notifyHoldS = clampMin(cfg.notifyHoldS, 0, DEFAULT_CONFIG.notifyHoldS);
+  cfg.eventMaxAgeS = clampMin(cfg.eventMaxAgeS, 0, DEFAULT_CONFIG.eventMaxAgeS);
   cfg.minConfidence = clampRange(cfg.minConfidence, 0, 1, DEFAULT_CONFIG.minConfidence);
   return cfg;
 }

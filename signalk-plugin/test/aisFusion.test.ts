@@ -4,7 +4,7 @@ import { withDefaults } from '../src/config';
 import { destinationPoint, deg2rad } from '../src/geo';
 import { EnrichedTarget } from '../src/types';
 
-const own = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 0, cog: 0 };
+const own = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 0, cog: 0, stale: false };
 
 function visualTarget(bearingRad: number, range: number, key = 'forward.1'): EnrichedTarget {
   return {
@@ -164,6 +164,57 @@ describe('aisFusion', () => {
     const res = fuse([visualTarget(brg, 610)], contacts, zeroCfg);
     expect(res.aisCorrelatedCount).toBe(0);
     expect(res.targets[0].aisCorrelated).toBe(false);
+  });
+
+  it('fail-closed: ignores AIS contacts without a verifiable fresh timestamp when the age check is on', () => {
+    const aisPos = destinationPoint(own.position, deg2rad(90), 600);
+    const now = Date.now();
+    const withTs = (ageMs: number) => ({
+      navigation: { position: { value: aisPos, timestamp: new Date(now - ageMs).toISOString() } },
+      sensors: { ais: { class: { value: 'A' } } },
+    });
+    const vessels = {
+      'urn:mrn:imo:mmsi:111111111': withTs(1000),        // fresh
+      'urn:mrn:imo:mmsi:222222222': withTs(5 * 60_000),  // stale (>120 s)
+      'urn:mrn:imo:mmsi:333333333': aisVessel(aisPos),   // no timestamp at all
+    };
+    // maxAgeMs = 120 s. Only the fresh contact survives.
+    const contacts = collectAisContacts(vessels, own, 0, 120_000, now);
+    expect(contacts.map((c) => c.mmsi)).toEqual(['111111111']);
+  });
+
+  it('rejects non-finite AIS coordinates (NaN/Infinity)', () => {
+    const vessels = {
+      'urn:mrn:imo:mmsi:111111111': {
+        navigation: { position: { value: { latitude: NaN, longitude: 25 } } },
+        sensors: { ais: { class: { value: 'A' } } },
+      },
+      'urn:mrn:imo:mmsi:222222222': {
+        navigation: { position: { value: { latitude: 60, longitude: Infinity } } },
+        sensors: { ais: { class: { value: 'A' } } },
+      },
+    };
+    expect(collectAisContacts(vessels, own)).toHaveLength(0);
+  });
+
+  it('drops stale AIS COG/SOG (fail-closed) so they cannot feed CPA', () => {
+    const aisPos = destinationPoint(own.position, deg2rad(90), 600);
+    const now = Date.now();
+    const vessels = {
+      'urn:mrn:imo:mmsi:111111111': {
+        navigation: {
+          position: { value: aisPos, timestamp: new Date(now).toISOString() },
+          // Kinematics stamped 10 min ago — older than the 120 s gate.
+          courseOverGroundTrue: { value: deg2rad(270), timestamp: new Date(now - 600_000).toISOString() },
+          speedOverGround: { value: 4, timestamp: new Date(now - 600_000).toISOString() },
+        },
+        sensors: { ais: { class: { value: 'A' } } },
+      },
+    };
+    const contacts = collectAisContacts(vessels, own, 0, 120_000, now);
+    expect(contacts).toHaveLength(1);
+    expect(contacts[0].cog).toBeNull();
+    expect(contacts[0].sog).toBeNull();
   });
 
   it('does not correlate a vessel detection with an aid-to-navigation (ATON) contact', () => {

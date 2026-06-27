@@ -42,7 +42,8 @@ that schema, so the two sides cannot silently drift.
       },
       "pixel_velocity": { "vx": -2.1, "vy": 0.3 },  // px/frame
       "first_seen": null,
-      "age_frames": 35
+      "age_frames": 35,
+      "coasting": false                // true => box is extrapolated, not freshly detected
     }
   ]
 }
@@ -71,6 +72,14 @@ that schema, so the two sides cannot silently drift.
   different objects.
 - **`is_person_in_water`** is decided in the container (person whose waterline is
   below the horizon) so MOB latency is one frame, not a round-trip.
+- **`coasting`** (default `false`) is `true` when the track stabilizer is
+  *extrapolating* this box across a short detector dropout — last known box
+  advanced by its `pixel_velocity` — rather than reporting a fresh detection this
+  frame. Safety-relevant: a coasting target has not been re-confirmed by the
+  detector, so its position is a prediction (it grows less reliable the longer it
+  coasts) and a coasting box does not, on its own, prove the object is still there.
+  The plugin still surfaces it (it keeps a track stable across blinks), but treat
+  a long-coasting target with appropriate caution.
 - Labels are canonical marine terms from `app/detector/classmap.py`
   (`person`, `vessel`, `buoy`, …), independent of the underlying model's class
   ids — swap in a maritime-trained model without touching the plugin.
