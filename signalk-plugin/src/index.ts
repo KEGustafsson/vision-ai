@@ -51,7 +51,7 @@ export = function (app: ServerApp): Plugin {
       return [...targets.values()];
     },
     get ownShip() {
-      return readOwnShip(app);
+      return readOwnShip(app, cfg.ownNavMaxAgeS);
     },
     get system() {
       return {
@@ -77,17 +77,32 @@ export = function (app: ServerApp): Plugin {
     client: () => client,
   };
 
+  // Per-camera timestamp (ms) of the last event accepted, to drop out-of-order /
+  // replayed frames whose timestamp is not newer than the last one we took.
+  const lastEventTsByCamera = new Map<string, number>();
+
   // --- Ingest: cheap, runs per WebSocket frame ---
   // Only update the target map here; the heavy fusion/CPA/notify/publish work
   // is debounced to a fixed cadence in processCycle() so it doesn't scale with
-  // (and flap at) the camera frame rate. Only tracked detections are kept —
-  // untracked boxes (track_id null) have no stable key, so they cannot be
-  // associated across frames for CPA/MOB persistence and would churn the map.
+  // (and flap at) the camera frame rate. Tracked detections are keyed by
+  // camera.track_id; untracked boxes are dropped (no stable key for CPA/fusion
+  // persistence) EXCEPT untracked person-in-water, which is a man-overboard
+  // candidate too important to discard (see below).
   function handleEvent(ev: DetectionEvent): void {
-    const now = Date.now();
+    // eventStream already rejected invalid/over-age timestamps; here we enforce
+    // monotonic per-camera ordering so a buffered burst of older-but-not-stale
+    // frames can't rewind a track's position into CPA/fusion history. Use the
+    // event time (not arrival time) so freshness reflects when the frame was
+    // actually captured.
+    const evTs = Date.parse(ev.timestamp);
+    if (!Number.isFinite(evTs)) return; // belt-and-braces; eventStream filters these
+    const prevTs = lastEventTsByCamera.get(ev.camera);
+    if (prevTs !== undefined && evTs <= prevTs) return; // out-of-order / replayed
+    lastEventTsByCamera.set(ev.camera, evTs);
+
     lastEventByCamera.set(ev.camera, ev);
     frameCount.set(ev.camera, (frameCount.get(ev.camera) ?? 0) + 1);
-    const own = readOwnShip(app);
+    const own = readOwnShip(app, cfg.ownNavMaxAgeS, Date.now());
 
     // `targets` is optional in the wire contract (default empty list); guard so a
     // valid event that omits it can't throw in this per-frame hot path.
@@ -103,8 +118,20 @@ export = function (app: ServerApp): Plugin {
       // NB: minimum-range filtering (minTargetRangeM) is done in the container
       // (pushed via syncContainer), so events already exclude too-close objects
       // from both the target list AND the annotated overlay.
-      if (raw.track_id === null) continue;
-      const t = enrichTarget(raw, ev.camera, own, cfg, now);
+      if (raw.track_id === null) {
+        // Untracked detection: normally dropped (no stable id to persist across
+        // frames). EXCEPTION: an untracked person-in-water is a MOB candidate, so
+        // route it through with a per-camera stable key ("mob-anon") instead of
+        // enrich's churning anon-x-y key — that lets the MOB persistence counter
+        // accumulate across frames and fire even without a track id. Non-MOB
+        // untracked boxes stay excluded from the AIS/CPA path.
+        if (!raw.is_person_in_water) continue;
+        const t = enrichTarget(raw, ev.camera, own, cfg, evTs);
+        t.key = `${ev.camera}.mob-anon`;
+        targets.set(t.key, t);
+        continue;
+      }
+      const t = enrichTarget(raw, ev.camera, own, cfg, evTs);
       targets.set(t.key, t);
     }
     pruneLabelSelection();
@@ -120,7 +147,7 @@ export = function (app: ServerApp): Plugin {
   // --- Process: fixed cadence, does the expensive correlated work ---
   function processCycle(): void {
     const now = Date.now();
-    const own = readOwnShip(app);
+    const own = readOwnShip(app, cfg.ownNavMaxAgeS, now);
 
     // Age out stale tracks first so downstream sees only live targets.
     const timeoutMs = cfg.trackTimeoutS * 1000;
@@ -209,7 +236,7 @@ export = function (app: ServerApp): Plugin {
     let nextCamera: string | null = null;
     let nextModeHint: string | null = null;
     if (cfg.enableContextControl) {
-      const own = readOwnShip(app);
+      const own = readOwnShip(app, cfg.ownNavMaxAgeS);
       const underway = (own.sog ?? 0) >= cfg.underwaySogMs;
       const hour = new Date().getHours();
       const night = hour < 6 || hour >= 21;
@@ -313,6 +340,19 @@ export = function (app: ServerApp): Plugin {
               `events are being ignored until then.`
             );
           }
+        },
+        () => cfg.eventMaxAgeS * 1000,
+        (stale) => {
+          if (!notifier) return;
+          if (stale) {
+            notifier.setStaleEvents(
+              `Vision detection events are arriving older than ${cfg.eventMaxAgeS}s and ` +
+              `are being ignored — detection is effectively offline. Check the vision ` +
+              `container, the network link, and clock sync between the container and SignalK.`
+            );
+          } else {
+            notifier.clearStaleEvents();
+          }
         }
       );
       stream.start();
@@ -342,6 +382,7 @@ export = function (app: ServerApp): Plugin {
       targets.clear();
       aisAssignment = new Map<string, string>();
       lastEventByCamera.clear();
+      lastEventTsByCamera.clear();
       frameCount.clear();
       activeCamera = 'forward';
       modeHint = null;

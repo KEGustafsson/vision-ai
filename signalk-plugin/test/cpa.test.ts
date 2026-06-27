@@ -20,7 +20,7 @@ function target(pos: LatLon): EnrichedTarget {
 describe('CpaEstimator', () => {
   it('detects a head-on collision course (CPA ~0, positive TCPA)', () => {
     const est = new CpaEstimator();
-    const own0: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 5, cog: 0 };
+    const own0: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 5, cog: 0, stale: false };
 
     // t=0: target 1000 m due north.
     const tgtAbs0 = destinationPoint(own0.position!, 0, 1000);
@@ -41,7 +41,7 @@ describe('CpaEstimator', () => {
 
   it('uses AIS velocity for a correlated target on the first sample', () => {
     const est = new CpaEstimator();
-    const own: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 0, cog: 0 };
+    const own: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 0, cog: 0, stale: false };
     // Target 1000 m due north, moving due south (180°T) at 5 m/s via AIS.
     const tgtAbs = destinationPoint(own.position!, 0, 1000);
     const t = { ...target(tgtAbs), aisCorrelated: true, aisCog: deg2rad(180), aisSog: 5 };
@@ -51,6 +51,24 @@ describe('CpaEstimator', () => {
     expect(t.tcpa).not.toBeNull();
     expect(t.tcpa!).toBeGreaterThan(0);
     expect(t.cpa!).toBeLessThan(50);
+  });
+
+  it('leaves CPA unresolved when own velocity is unknown (no SOG/COG)', () => {
+    const est = new CpaEstimator();
+    // Own position is known but SOG/COG are null (e.g. aged out as stale by
+    // readOwnShip). Must NOT assume a stationary own ship and fabricate a CPA.
+    const own0: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: null, cog: null, stale: true };
+    const tgtAbs0 = destinationPoint(own0.position!, 0, 1000);
+    est.update([target(tgtAbs0)], own0, cfg, 0);
+
+    const own1: OwnShip = { ...own0, position: destinationPoint(own0.position!, 0, 5) };
+    const tgtAbs1 = destinationPoint(tgtAbs0, deg2rad(180), 5);
+    const t = target(tgtAbs1);
+    est.update([t], own1, cfg, 1000);
+
+    expect(t.cpa).toBeNull();
+    expect(t.tcpa).toBeNull();
+    expect(t.threatLevel).toBe('none');
   });
 
   it('classify thresholds', () => {

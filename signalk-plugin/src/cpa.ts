@@ -33,9 +33,16 @@ export class CpaEstimator {
     const t = nowMs / 1000;
     const active = new Set<string>();
 
-    // Own velocity (east, north) m/s.
-    const voE = own.sog !== null && own.cog !== null ? own.sog * Math.sin(own.cog) : 0;
-    const voN = own.sog !== null && own.cog !== null ? own.sog * Math.cos(own.cog) : 0;
+    // Own velocity (east, north) m/s. CPA is relative motion, so it needs BOTH
+    // own SOG and COG. If either is unknown (no fix, or aged out as stale by
+    // readOwnShip) we must NOT substitute zero — "unknown own velocity" is not
+    // "stationary own vessel", and assuming zero would compute a bogus CPA from
+    // the target's motion alone (e.g. a target on a parallel course would look
+    // like a head-on threat, or a real closing threat would be missed). Instead
+    // we leave CPA unresolved for this cycle (below).
+    const ownVelKnown = own.sog !== null && own.cog !== null;
+    const voE = ownVelKnown ? (own.sog as number) * Math.sin(own.cog as number) : 0;
+    const voN = ownVelKnown ? (own.sog as number) * Math.cos(own.cog as number) : 0;
 
     for (const tgt of targets) {
       if (!tgt.position || !own.position) continue;
@@ -77,9 +84,21 @@ export class CpaEstimator {
       }
 
       // Target ground kinematics, surfaced onto the target for the synthetic
-      // vessel blip (navigation.speedOverGround / courseOverGroundTrue).
+      // vessel blip (navigation.speedOverGround / courseOverGroundTrue). These are
+      // the target's own ground velocity, independent of own-ship, so they're
+      // still valid (and useful) even when own velocity is unknown.
       tgt.sog = Math.hypot(vtE, vtN);
       tgt.cog = normalizeRad(Math.atan2(vtE, vtN)); // clockwise from true north
+
+      // Own velocity unknown (no/stale SOG/COG): a CPA computed against an assumed
+      // stationary own-ship would be misleading, so leave it unresolved rather than
+      // raise or suppress a collision alert on bad data.
+      if (!ownVelKnown) {
+        tgt.cpa = null;
+        tgt.tcpa = null;
+        tgt.threatLevel = 'none';
+        continue;
+      }
 
       // Relative motion: target relative to own.
       const rE = cur.e;

@@ -27,6 +27,25 @@ function pickControl(body: unknown): ControlBody {
   return out;
 }
 
+// Strip any embedded credentials (user:pass@) from a URL before returning it to
+// the webapp. containerUrl accepts arbitrary http(s) URLs, so it can carry
+// credentials; the webapp reaches the container only through this plugin's
+// same-origin proxy routes and never needs them. Mirrors the vision service,
+// which redacts camera RTSP URLs from its own /config.
+function redactUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    if (u.username || u.password) {
+      u.username = '';
+      u.password = '';
+      return u.toString();
+    }
+    return url;
+  } catch {
+    return url;
+  }
+}
+
 export interface SharedState {
   readonly targets: EnrichedTarget[];
   readonly ownShip: OwnShip;
@@ -198,7 +217,7 @@ export function registerRoutes(
   router.get('/config', (_req: any, res: any) => {
     const c = getCfg();
     res.json({
-      containerUrl: c.containerUrl,
+      containerUrl: redactUrl(c.containerUrl),
       features: {
         visualRadar: c.enableVisualRadar,
         aisFusion: c.enableAisFusion,

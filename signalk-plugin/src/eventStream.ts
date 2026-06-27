@@ -24,7 +24,9 @@ export class EventStream {
   private backoff = 1000;
   private validate: ValidateFunction | null = null;
   private lastValidationWarnAt = 0;
+  private lastStaleWarnAt = 0;
   private mismatchedVersion: string | null = null;
+  private staleActive = false;
 
   constructor(
     private wsUrl: string,
@@ -32,9 +34,34 @@ export class EventStream {
     private log: Logger,
     // Raised once per distinct incompatible version seen (and cleared when a
     // compatible event arrives) so the plugin can notify the operator.
-    private onVersionMismatch?: (version: string | null) => void
+    private onVersionMismatch?: (version: string | null) => void,
+    // Max accepted event age (ms); 0 disables the absolute check. A getter so a
+    // changed setting is picked up without rebuilding the stream.
+    private getMaxAgeMs: () => number = () => 0,
+    // Raised when events start being rejected as stale (and cleared when fresh
+    // ones resume) so a frozen/replayed feed surfaces instead of going silently
+    // dark — dropping every event without telling anyone is itself a hazard.
+    private onStaleEvents?: (stale: boolean) => void
   ) {
     this.loadSchema();
+  }
+
+  // Flip the stale state on transition only, notifying + logging once each way.
+  private markStale(stale: boolean, ageMs?: number): void {
+    if (stale) {
+      const now = Date.now();
+      if (now - this.lastStaleWarnAt > WARN_INTERVAL_MS) {
+        this.lastStaleWarnAt = now;
+        this.log.error(
+          `vision-ai: dropping detection events as stale` +
+          (ageMs !== undefined ? ` (age ${(ageMs / 1000).toFixed(1)}s)` : '') +
+          ' — check container/SignalK clock sync and the network'
+        );
+      }
+    }
+    if (stale === this.staleActive) return;
+    this.staleActive = stale;
+    this.onStaleEvents?.(stale);
   }
 
   private loadSchema(): void {
@@ -109,9 +136,33 @@ export class EventStream {
         this.mismatchedVersion = null;
         this.onVersionMismatch?.(null);
       }
+      // Freshness gate: a delayed/buffered/replayed frame must not be treated as
+      // live (it would feed a stale position into CPA/fusion history). Reject an
+      // unparseable timestamp outright, and — when an age limit is set — anything
+      // older than it. The per-camera out-of-order guard lives in the handler
+      // (index.ts handleEvent), which holds the last-accepted time per camera.
+      const ev = parsed as DetectionEvent;
+      const ts = Date.parse(ev.timestamp);
+      if (!Number.isFinite(ts)) {
+        const now = Date.now();
+        if (now - this.lastStaleWarnAt > WARN_INTERVAL_MS) {
+          this.lastStaleWarnAt = now;
+          this.log.error(`vision-ai: dropping event with invalid timestamp ${JSON.stringify(ev.timestamp)}`);
+        }
+        return;
+      }
+      const maxAgeMs = this.getMaxAgeMs();
+      if (maxAgeMs > 0) {
+        const ageMs = Date.now() - ts;
+        if (ageMs > maxAgeMs) {
+          this.markStale(true, ageMs);
+          return;
+        }
+      }
+      this.markStale(false);
       // A downstream throw must not tear down the socket pipeline.
       try {
-        this.onEvent(parsed as DetectionEvent);
+        this.onEvent(ev);
       } catch (e) {
         this.log.error(`vision-ai: event handler error: ${e}`);
       }

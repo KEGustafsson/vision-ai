@@ -71,6 +71,12 @@ export interface OwnShip {
   headingTrue: number | null; // rad
   sog: number | null; // m/s
   cog: number | null; // rad
+  // True when at least one nav value was dropped (nulled) because its SignalK
+  // timestamp was older than the configured max age (or unparseable). Downstream
+  // treats stale/missing own kinematics as unknown — never as a stationary ship —
+  // so a frozen GPS/heading feed can't silently georeference targets to an old
+  // fix or suppress a CPA by assuming zero own velocity.
+  stale: boolean;
 }
 
 export interface EnrichedTarget extends RawTarget {

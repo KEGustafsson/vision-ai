@@ -18,7 +18,23 @@ export interface AisContact {
 }
 
 const num = (v: any): number | null =>
-  typeof v === 'number' && isFinite(v) ? v : null;
+  typeof v === 'number' && Number.isFinite(v) ? v : null;
+
+// Read a numeric AIS field with freshness: a SignalK node may be { value,
+// timestamp } or a bare value. When a max age is set and the node carries a
+// timestamp, a value older than it is dropped to null so stale kinematics can't
+// be fed into CPA (a vessel that stopped transmitting keeps its last COG/SOG in
+// SignalK indefinitely). Bare/timestamp-less values pass through num().
+const freshNum = (node: any, maxAgeMs: number, nowMs: number): number | null => {
+  if (node && typeof node === 'object' && 'value' in node) {
+    if (maxAgeMs > 0 && typeof node.timestamp === 'string') {
+      const ageMs = nowMs - Date.parse(node.timestamp);
+      if (!Number.isFinite(ageMs) || ageMs > maxAgeMs) return null;
+    }
+    return num(node.value);
+  }
+  return num(node);
+};
 
 const VESSEL_LABELS = new Set([
   'vessel', 'boat', 'ship', 'ferry', 'sail boat', 'speed boat', 'kayak',
@@ -56,30 +72,37 @@ export function collectAisContacts(
     if (typeof aisClass !== 'string' || aisClass.trim().length === 0) continue;
     const posNode = v?.navigation?.position;
     const p = posNode?.value ?? posNode;
-    // Validate BOTH lat and lon: a numeric lat with a missing/NaN lon would
-    // produce NaN range/bearing that silently corrupts correlation.
-    if (!p || typeof p.latitude !== 'number' || typeof p.longitude !== 'number') continue;
-    // Drop stale contacts: SignalK retains an AIS vessel's last-known position
-    // long after it stops transmitting. A stale fix would let a no-longer-
-    // transmitting vessel keep correlating (suppressing its dark-target alarm)
-    // and feed a wrong AIS SOG/COG into CPA. Only enforced when a timestamp is
-    // present (full-model shape); delta-only shapes without one are kept.
-    if (maxAgeMs > 0 && typeof posNode?.timestamp === 'string') {
-      const ageMs = nowMs - Date.parse(posNode.timestamp);
-      if (Number.isFinite(ageMs) && ageMs > maxAgeMs) continue;
+    // Validate BOTH lat and lon with Number.isFinite (NOT typeof number, which
+    // admits NaN/±Infinity): a non-finite coordinate would produce NaN
+    // range/bearing/score that silently corrupts the association and could
+    // suppress a real dark-target alarm.
+    if (!p || !Number.isFinite(p.latitude) || !Number.isFinite(p.longitude)) continue;
+    // Stale-data handling, FAIL-CLOSED: SignalK retains an AIS vessel's last-known
+    // position long after it stops transmitting. A stale fix would let a
+    // no-longer-transmitting vessel keep correlating (suppressing its dark-target
+    // alarm) and feed a wrong AIS SOG/COG into CPA. So when the age check is on
+    // (aisMaxAgeS > 0) we require a parseable, recent position timestamp — a
+    // contact we can't prove is fresh is dropped entirely rather than trusted.
+    // Set aisMaxAgeS = 0 to disable (then timestamp-less contacts are kept).
+    if (maxAgeMs > 0) {
+      const ts = typeof posNode?.timestamp === 'string' ? Date.parse(posNode.timestamp) : NaN;
+      if (!Number.isFinite(ts) || nowMs - ts > maxAgeMs) continue;
     }
     const pos: LatLon = { latitude: p.latitude, longitude: p.longitude };
     const range = haversine(own.position, pos);
+    if (!Number.isFinite(range)) continue;
     if (minRangeM > 0 && range < minRangeM) continue;
+    const bearing = bearingTo(own.position, pos);
+    if (!Number.isFinite(bearing)) continue;
     out.push({
       mmsi,
       aisClass,
       name: v?.name?.value ?? v?.name,
       position: pos,
-      bearing: bearingTo(own.position, pos),
+      bearing,
       range,
-      cog: num(v?.navigation?.courseOverGroundTrue?.value ?? v?.navigation?.courseOverGroundTrue),
-      sog: num(v?.navigation?.speedOverGround?.value ?? v?.navigation?.speedOverGround),
+      cog: freshNum(v?.navigation?.courseOverGroundTrue, maxAgeMs, nowMs),
+      sog: freshNum(v?.navigation?.speedOverGround, maxAgeMs, nowMs),
     });
   }
   return out;
@@ -170,6 +193,10 @@ function pairScore(
   ) {
     score += KINEMATIC_WEIGHT * (angularDiff(t.cog, a.cog) / Math.PI);
   }
+  // Defensive: a non-finite score (from any unexpected NaN/±Infinity input) must
+  // not enter the assignment sort, where it would scramble the ordering and could
+  // let a target borrow the wrong identity (suppressing a dark-target alarm).
+  if (!Number.isFinite(score)) return null;
   return score;
 }
 
