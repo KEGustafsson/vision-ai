@@ -5,14 +5,25 @@
 #
 # Build ON the Jetson:
 #   docker build -t vision-ai:jetson .
+#
+# RELEASE PINNING: the default tag below floats (`latest-jetson-jetpack6`), so a
+# rebuilt image can silently pick up a new base. For a reproducible safety release
+# pin to a digest resolved ON the Jetson (the tag is multi-arch; resolve the
+# aarch64 digest on the target box), e.g.:
+#   docker pull ultralytics/ultralytics:latest-jetson-jetpack6
+#   docker inspect --format='{{index .RepoDigests 0}}' ultralytics/ultralytics:latest-jetson-jetpack6
+#   docker build --build-arg BASE=ultralytics/ultralytics@sha256:<digest> -t vision-ai:jetson .
+# (Override via --build-arg BASE=... or set it in docker-compose.jetson.yml.)
 ARG BASE=ultralytics/ultralytics:latest-jetson-jetpack6
 FROM ${BASE}
 
 WORKDIR /opt/vision-service
 
-# Only the extras not already in the base image.
-COPY requirements-jetson.txt .
-RUN pip install --no-cache-dir -r requirements-jetson.txt
+# Only the extras not already in the base image. constraints.txt pins the web
+# stack (FastAPI/Starlette/httpx) to the verified versions — pure-Python, so the
+# same pins are valid on aarch64.
+COPY requirements-jetson.txt constraints.txt ./
+RUN pip install --no-cache-dir -c constraints.txt -r requirements-jetson.txt
 
 # The Ultralytics Jetson base currently includes a pip opencv-python-headless
 # wheel in /usr/local, which shadows NVIDIA's apt OpenCV in /usr/lib. The apt

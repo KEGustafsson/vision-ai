@@ -12,7 +12,9 @@ services:
       - ./vision-service/samples:/samples:ro
 
   signalk-server:
-    image: signalk/signalk-server:latest
+    # Pinned (not :latest) so the dev stack is reproducible and a server update
+    # can't silently change demo behaviour under the plugin. Bump deliberately.
+    image: signalk/signalk-server:2.28.0
     ports:
       - "3000:3000"
     environment:

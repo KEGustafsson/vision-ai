@@ -24,7 +24,10 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest httpx
+          # -c constraints.txt pins the FastAPI/Starlette/httpx stack to the
+          # verified versions so a clean install can't drift onto an untested
+          # Starlette/httpx combo and break test collection (see constraints.txt).
+          pip install -c constraints.txt -r requirements.txt pytest httpx
       - name: Run tests
         run: pytest
       - name: Verify detection-event schema is up to date
@@ -56,3 +59,26 @@ jobs:
         run: npm run lint
       - name: Test
         run: npm test
+
+  compose:
+    name: compose / Dockerfile validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Catch a malformed compose file or a base override that no longer parses
+      # before it reaches a (RAM-tight, slow-to-build) Jetson. `config` fully
+      # resolves and validates each compose stack without building or pulling.
+      - name: Validate compose stacks
+        run: |
+          for override in mock jetson deepstream; do
+            echo "::group::docker-compose.yml + docker-compose.$override.yml"
+            docker compose -f docker-compose.yml -f docker-compose.$override.yml config -q
+            echo "::endgroup::"
+          done
+      # Lint every Dockerfile (best-effort: don't fail the build on style hints,
+      # but surface real errors such as bad instructions).
+      - name: Lint Dockerfiles (hadolint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          recursive: true
+          failure-threshold: error

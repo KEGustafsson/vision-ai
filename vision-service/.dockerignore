@@ -1,0 +1,37 @@
+# Build-context hygiene for the vision-service images. .gitignore controls what
+# git tracks; THIS controls what Docker sends into the build context (and can
+# bake into a layer). Keep it tight — the build runs on a resource-tight Jetson,
+# and a fat context risks leaking local secrets/media into an image.
+
+# Python caches / virtualenvs
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Tests aren't needed in any runtime image (no Dockerfile COPYs them).
+tests/
+
+# Local env / logs / editor cruft — never bake these in.
+.env
+.env.*
+*.log
+.DS_Store
+
+# Sample media: large, bind-mounted in mock mode, never needed in the image.
+samples/*.mp4
+samples/*.mkv
+samples/*.mov
+
+# TensorRT engines: large and hardware/TRT-version-specific. nvinfer/Ultralytics
+# build these at runtime (and they're bind-mounted to persist), so they must
+# never enter the build context.
+models/*.engine
+deepstream/*.engine
+
+# NB: model weights (models/*.pt) and the deepstream-yolo ONNX (deepstream/*.onnx)
+# are intentionally NOT excluded — they are required build inputs for offline /
+# alternative-model DeepStream builds (see Dockerfile.deepstream and
+# scripts/download_forward_watch.py).
