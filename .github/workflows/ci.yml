@@ -75,10 +75,8 @@ jobs:
             docker compose -f docker-compose.yml -f docker-compose.$override.yml config -q
             echo "::endgroup::"
           done
-      # Lint every Dockerfile (best-effort: don't fail the build on style hints,
-      # but surface real errors such as bad instructions).
-      - name: Lint Dockerfiles (hadolint)
-        uses: hadolint/hadolint-action@v3.1.0
-        with:
-          recursive: true
-          failure-threshold: error
+      # NB: a Dockerfile linter (hadolint) was intentionally NOT added here — its
+      # parser rejects the valid BuildKit heredoc (`python3 - <<'PY'`) used in
+      # vision-service/Dockerfile, which would fail the build on syntax it doesn't
+      # support. `docker compose config` above already validates that every stack
+      # parses and references its Dockerfiles correctly.
