@@ -17,11 +17,43 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import shutil
 from pathlib import Path
 
 MODELS = Path(__file__).resolve().parent.parent / "models"
+
+# Known-good content hashes for pinned model artifacts, so the offline/download
+# flow enforces the same provenance the DeepStream image build does
+# (Dockerfile.deepstream ARG YOLOV8N_SHA256). Keep these in sync.
+KNOWN_SHA256 = {
+    "yolov8n.pt": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+}
+
+
+def _sha256(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _verify(dest: Path, skip: bool) -> None:
+    """Verify dest against its pinned hash (if one is known and not skipped)."""
+    expected = KNOWN_SHA256.get(dest.name)
+    if skip or expected is None:
+        return
+    actual = _sha256(dest)
+    if actual != expected:
+        raise SystemExit(
+            f"{dest.name} sha256 mismatch: expected {expected}, got {actual}. "
+            f"The upstream artifact changed (or the file is corrupt). If this is an "
+            f"intentional model update, update KNOWN_SHA256 and "
+            f"Dockerfile.deepstream's YOLOV8N_SHA256, or pass --no-verify."
+        )
+    print(f"verified {dest.name} sha256 {actual}")
 
 
 def main() -> None:
@@ -31,6 +63,11 @@ def main() -> None:
         default="yolov8n.pt",
         help="A known Ultralytics asset name (e.g. yolov8n.pt) to download, or a "
              "path to an existing .pt file to copy into models/.",
+    )
+    ap.add_argument(
+        "--no-verify",
+        action="store_true",
+        help="Skip the sha256 provenance check (see KNOWN_SHA256).",
     )
     args = ap.parse_args()
     MODELS.mkdir(exist_ok=True)
@@ -42,6 +79,7 @@ def main() -> None:
     if src_path.exists() and src_path.is_file():
         if src_path.resolve() != dest.resolve():
             shutil.copy2(src_path, dest)
+        _verify(dest, args.no_verify)
         print(f"copied weights to {dest}")
         return
 
@@ -67,6 +105,7 @@ def main() -> None:
             f"expected weights at {dest} after download, but the file is missing — "
             f"check that {args.model!r} is a valid Ultralytics asset name."
         )
+    _verify(dest, args.no_verify)
     print(f"downloaded weights to {dest}")
 
 
