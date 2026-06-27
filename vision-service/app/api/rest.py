@@ -26,8 +26,12 @@ def health(request: Request) -> HealthResponse:
     backend = Backend(p.settings.detector.backend)
     errors = p.camera_errors()
     model = p.settings.detector.model
+    # DeepStream exposes auto-restart telemetry; the CPU/Jetson pipelines don't.
+    restart_info = p.restart_info() if hasattr(p, "restart_info") else {}
+    restarts = int(restart_info.get("restarts", 0))
+    last_error = restart_info.get("last_error")
     return HealthResponse(
-        status="degraded" if errors else "ok",
+        status="degraded" if (errors or restarts) else "ok",
         mode=p.settings.mode,
         backend=backend,
         cameras=[c.name for c in p.settings.cameras],
@@ -39,6 +43,8 @@ def health(request: Request) -> HealthResponse:
         labels=p.labels(),
         model=model,
         model_labels=MODEL_LABELS.get(model, []),
+        pipeline_restarts=restarts,
+        pipeline_last_error=last_error,
     )
 
 

@@ -13,6 +13,11 @@ publish threshold. This stage gives each track a short lifecycle instead:
   not detected every frame" behaviour.
 * **appearance debounce** — a new track must be seen ``confirm_frames`` times
   before it is shown, so a single-frame false positive never draws a box.
+  ``person`` tracks use the (lower) ``person_confirm_frames`` instead: a person in
+  the water is a man-overboard candidate, and holding it back for two extra frames
+  adds latency to the most safety-critical detection. A single-frame false person
+  is still debounced downstream by the plugin's MOB persistence counter before any
+  alarm is raised, so confirming it here on the first frame is safe.
 
 One instance per camera (state is keyed by the backend's stable track id).
 Untracked detections (no id) can't be coasted and pass through on a plain
@@ -38,8 +43,11 @@ class _State:
 class TrackStabilizer:
     def __init__(self, confirm_frames: int = 3, max_coast_frames: int = 8,
                  hysteresis_ratio: float = 0.6, ema_alpha: float = 0.4,
-                 coast_velocity_factor: float = 0.4):
+                 coast_velocity_factor: float = 0.4,
+                 person_confirm_frames: int = 1):
         self.confirm_frames = max(1, confirm_frames)
+        # MOB-critical: person tracks confirm faster (default: first frame).
+        self.person_confirm_frames = max(1, person_confirm_frames)
         self.max_coast_frames = max(0, max_coast_frames)
         self.hysteresis_ratio = min(max(hysteresis_ratio, 0.0), 1.0)
         self.alpha = min(max(ema_alpha, 0.0), 1.0)
@@ -49,6 +57,11 @@ class TrackStabilizer:
         # noisy velocity estimate fling it away over several missed frames.
         self.coast_velocity_factor = max(0.0, coast_velocity_factor)
         self._st: dict[int, _State] = {}
+
+    def _confirm_for(self, label: str) -> int:
+        """Appearance-debounce threshold for a track, lowered for MOB-critical
+        person tracks so they aren't held back by the generic false-positive gate."""
+        return self.person_confirm_frames if label == "person" else self.confirm_frames
 
     def update(self, tracks: list[RawTrack], seq: int, conf_on: float) -> list[RawTrack]:
         conf_off = conf_on * self.hysteresis_ratio
@@ -74,7 +87,7 @@ class TrackStabilizer:
                 s.track = tr
                 s.last_seq = seq
                 s.hits += 1
-            if not s.confirmed and s.hits >= self.confirm_frames and s.conf >= conf_on:
+            if not s.confirmed and s.hits >= self._confirm_for(tr.label) and s.conf >= conf_on:
                 s.confirmed = True
             if s.confirmed and s.conf >= conf_off:
                 out.append(replace(tr, confidence=s.conf, coasting=False))
@@ -86,7 +99,7 @@ class TrackStabilizer:
                 continue
             missed = seq - s.last_seq
             if not s.confirmed:
-                if missed > self.confirm_frames:
+                if missed > self._confirm_for(s.track.label):
                     del self._st[tid]
                 continue
             if missed > self.max_coast_frames or s.conf < conf_off:
