@@ -314,6 +314,11 @@ class DeepStreamPipeline:
         now = time.time()
         for proxy in self.workers.values():
             proxy.last_frame_at = now
+            # Clear any error left from a prior fault (the GStreamer error stamped
+            # on every camera by _on_bus_message, or a stale "no frames" flag);
+            # the pipeline is healthy again here. Historical detail is kept in
+            # self._last_error / /health's pipeline_last_error.
+            proxy.error = None
         GLib.timeout_add_seconds(2, self._watchdog)
         # Respect a current disable across rebuilds: if detection was toggled off,
         # a recovered pipeline must come back PAUSED, not silently resume PLAYING.

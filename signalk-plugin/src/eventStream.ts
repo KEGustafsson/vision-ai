@@ -153,9 +153,13 @@ export class EventStream {
       }
       const maxAgeMs = this.getMaxAgeMs();
       if (maxAgeMs > 0) {
+        // Reject too-old AND future-dated frames: if the container clock runs
+        // ahead of SignalK, a negative age would otherwise pass as "fresh" and
+        // push lastEventTsByCamera/lastSeen into the future, starving real-time
+        // frames and keeping tracks alive past their timeout.
         const ageMs = Date.now() - ts;
-        if (ageMs > maxAgeMs) {
-          this.markStale(true, ageMs);
+        if (Math.abs(ageMs) > maxAgeMs) {
+          this.markStale(true, Math.abs(ageMs));
           return;
         }
       }

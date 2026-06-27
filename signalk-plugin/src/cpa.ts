@@ -44,7 +44,18 @@ export class CpaEstimator {
     const voE = ownVelKnown ? (own.sog as number) * Math.sin(own.cog as number) : 0;
     const voN = ownVelKnown ? (own.sog as number) * Math.cos(own.cog as number) : 0;
 
+    const clearCpa = (target: EnrichedTarget): void => {
+      target.cpa = null;
+      target.tcpa = null;
+      target.threatLevel = 'none';
+    };
+
     for (const tgt of targets) {
+      // Clear CPA up front so ANY path that can't (re)compute it this cycle —
+      // missing target/own position, no finite-difference baseline, or unknown
+      // own velocity — leaves the target unresolved instead of preserving a stale
+      // cpa/tcpa/threatLevel that would keep a collision alarm up on unsupported data.
+      clearCpa(tgt);
       if (!tgt.position || !own.position) continue;
       active.add(tgt.key);
       const cur = toLocal(own.position, tgt.position);
@@ -91,14 +102,9 @@ export class CpaEstimator {
       tgt.cog = normalizeRad(Math.atan2(vtE, vtN)); // clockwise from true north
 
       // Own velocity unknown (no/stale SOG/COG): a CPA computed against an assumed
-      // stationary own-ship would be misleading, so leave it unresolved rather than
-      // raise or suppress a collision alert on bad data.
-      if (!ownVelKnown) {
-        tgt.cpa = null;
-        tgt.tcpa = null;
-        tgt.threatLevel = 'none';
-        continue;
-      }
+      // stationary own-ship would be misleading, so leave it unresolved (cleared
+      // above) rather than raise or suppress a collision alert on bad data.
+      if (!ownVelKnown) continue;
 
       // Relative motion: target relative to own.
       const rE = cur.e;

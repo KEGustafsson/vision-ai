@@ -9,6 +9,12 @@ services:
     build:
       context: ./vision-service
       dockerfile: Dockerfile          # Jetson base image
+      args:
+        # Pin the floating Jetson base for a release without editing the
+        # Dockerfile: resolve the aarch64 digest on the box and export
+        # VISION_JETSON_BASE=ultralytics/ultralytics@sha256:<digest> before
+        # `docker compose ... build` (see vision-service/Dockerfile header).
+        BASE: ${VISION_JETSON_BASE:-ultralytics/ultralytics:latest-jetson-jetpack6}
     image: vision-ai:jetson
     container_name: vision-service-jetson
     runtime: nvidia

@@ -35,14 +35,13 @@ function pickControl(body: unknown): ControlBody {
 function redactUrl(url: string): string {
   try {
     const u = new URL(url);
-    if (u.username || u.password) {
-      u.username = '';
-      u.password = '';
-      return u.toString();
-    }
-    return url;
+    u.username = '';
+    u.password = '';
+    return u.toString();
   } catch {
-    return url;
+    // Fail closed: if it doesn't parse as a URL, still strip any `user:pass@`
+    // userinfo rather than returning the raw value (which could leak credentials).
+    return url.replace(/^(\w+:\/\/)[^/?#@]*@/, '$1');
   }
 }
 

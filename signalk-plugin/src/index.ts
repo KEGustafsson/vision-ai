@@ -102,7 +102,11 @@ export = function (app: ServerApp): Plugin {
 
     lastEventByCamera.set(ev.camera, ev);
     frameCount.set(ev.camera, (frameCount.get(ev.camera) ?? 0) + 1);
-    const own = readOwnShip(app, cfg.ownNavMaxAgeS, Date.now());
+    // Evaluate own-ship freshness against the frame's capture time (evTs), not
+    // delivery time, so georeferencing uses the nav that was current when the
+    // frame was shot and a lagged-but-accepted frame doesn't null otherwise-valid
+    // nav just because delivery was slow.
+    const own = readOwnShip(app, cfg.ownNavMaxAgeS, evTs);
 
     // `targets` is optional in the wire contract (default empty list); guard so a
     // valid event that omits it can't throw in this per-frame hot path.

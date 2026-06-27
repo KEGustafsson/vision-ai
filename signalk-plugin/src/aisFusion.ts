@@ -29,7 +29,10 @@ const freshNum = (node: any, maxAgeMs: number, nowMs: number): number | null => 
   if (node && typeof node === 'object' && 'value' in node) {
     if (maxAgeMs > 0 && typeof node.timestamp === 'string') {
       const ageMs = nowMs - Date.parse(node.timestamp);
-      if (!Number.isFinite(ageMs) || ageMs > maxAgeMs) return null;
+      // Reject both too-old AND future-dated values (negative age, e.g. a
+      // transmitter/clock ahead of us): a future timestamp would otherwise read
+      // as "fresh" indefinitely. Fail closed on anything outside the window.
+      if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > maxAgeMs) return null;
     }
     return num(node.value);
   }
@@ -86,7 +89,10 @@ export function collectAisContacts(
     // Set aisMaxAgeS = 0 to disable (then timestamp-less contacts are kept).
     if (maxAgeMs > 0) {
       const ts = typeof posNode?.timestamp === 'string' ? Date.parse(posNode.timestamp) : NaN;
-      if (!Number.isFinite(ts) || nowMs - ts > maxAgeMs) continue;
+      const ageMs = nowMs - ts;
+      // Drop anything without a parseable timestamp, older than the window, or
+      // future-dated (negative age) — a future fix would otherwise stay "fresh".
+      if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > maxAgeMs) continue;
     }
     const pos: LatLon = { latitude: p.latitude, longitude: p.longitude };
     const range = haversine(own.position, pos);
