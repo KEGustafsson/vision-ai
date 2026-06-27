@@ -71,7 +71,10 @@ vision-service/scripts/build_yolo_parser.sh
 #    → vision-service/deepstream/libnvdsinfer_custom_impl_Yolo.so
 
 # 2. Export a raw (no end-to-end NMS) YOLOv8n ONNX — the build's export stage
-#    does this automatically; see config/deepstream.yaml for the manual command.
+#    does this automatically: it fetches the YOLOv8n weights itself (no need to
+#    pre-place models/yolov8n.pt). To build OFFLINE, drop the weights at
+#    vision-service/models/yolov8n.pt first (python3 scripts/download_models.py)
+#    and the build uses them as-is. See config/deepstream.yaml for the manual command.
 
 # 3. Run (nvinfer auto-builds the TRT engine next to the ONNX in the bind-mounted
 #    deepstream/ on first start, so it persists across container recreates).
@@ -102,6 +105,25 @@ engine rebuild only happens when the ONNX actually changes. An image rebuild is
 only needed to bake changes for a clean redeploy. ⚠ The Orin is NVMM-tight: stop
 the GPU overlay co-tenants before recreating the container, or buffer-pool
 allocation can OOM (`failed to activate bufferpool`); restart them after.
+
+**Runtime behaviour (DeepStream specifics):**
+
+- **Disable detection (master off):** unlike the CPU/Jetson backend (whose workers
+  release the camera capture device), DeepStream transitions the whole GStreamer
+  graph to **PAUSED** — decoders and `nvinfer` stop pulling data, so disabling
+  actually drops the GPU/thermal load. Re-enabling returns it to PLAYING. A
+  pipeline that recovers from a fault while disabled comes back PAUSED.
+- **Auto-recovery:** a fatal GStreamer error or EOS (e.g. a transient RTSP/decoder
+  glitch) no longer takes detection down until a manual container restart. A
+  supervisor rebuilds the pipeline with exponential backoff (2 s → 30 s) and keeps
+  retrying. `GET /health` reports `pipeline_restarts` and `pipeline_last_error` so
+  a flapping feed is visible; `status` goes `degraded` while restarts have occurred.
+- **Non-root:** the runtime image runs as a non-root user (UID 10001, in the
+  `video` group for GPU access). nvinfer writes the TRT engine into the
+  bind-mounted `deepstream/` and `models/`, so those host dirs must be writable by
+  UID 10001 (as the jetson image already requires for `models/`). If your nvidia
+  container runtime denies GPU access to non-root, set `user: root` on the
+  deepstream compose service as a documented exception.
 
 ## Detection model selection
 
