@@ -1,7 +1,7 @@
 // Thin REST client for controlling the vision container.
 
 export interface HealthInfo {
-  status: string;
+  status: string; // "ok" | "degraded"
   mode: string;
   backend: string;
   cameras: string[];
@@ -9,6 +9,12 @@ export interface HealthInfo {
   model_labels?: string[];
   detection_enabled: boolean;
   labels: string[] | null;
+  // Degradation detail (present on newer containers). camera_errors maps a
+  // camera name to its stall/init message; pipeline_restarts is DeepStream's
+  // auto-restart count and pipeline_last_error its last restart cause.
+  camera_errors?: Record<string, string>;
+  pipeline_restarts?: number;
+  pipeline_last_error?: string | null;
 }
 
 export interface ControlBody {

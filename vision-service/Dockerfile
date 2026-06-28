@@ -64,4 +64,11 @@ RUN useradd --create-home --uid 10001 appuser && chown -R appuser /opt/vision-se
 USER appuser
 
 EXPOSE 7000
+# Liveness: probe /health and report `unhealthy` on unreachable or degraded
+# (camera/RTSP stall). The start-period is generous because the first start may
+# build the TensorRT engine from the .pt/.onnx, which takes a while on the Orin
+# Nano; failing probes during start-period don't count against retries. See
+# scripts/healthcheck.py.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=3 \
+    CMD ["python3", "/opt/vision-service/scripts/healthcheck.py"]
 CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7000"]

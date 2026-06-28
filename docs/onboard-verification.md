@@ -47,14 +47,17 @@ export OUT=/tmp/vision-verify && mkdir -p $OUT
 ## 1. Environment discovery
 
 ```bash
-docker ps                                   # find vision-service + signalk containers
+docker ps                                   # find vision-service + signalk containers; STATUS shows (healthy)/(unhealthy)
 cat /etc/nv_tegra_release                    # L4T / JetPack version
 sudo nvpmodel -q                             # power mode (want MAXN / "Super")
 sudo jetson_clocks --show | head             # clocks pinned?
 tegrastats --interval 1000 | head -n 3       # baseline GPU/CPU/EMC/temp/power
 ```
-**PASS:** containers running; power mode is the high-performance one (else
-`sudo nvpmodel -m 0 && sudo jetson_clocks`). Record JetPack version for the report.
+**PASS:** containers running and `(healthy)` in `docker ps` (the image ships a
+`HEALTHCHECK` that polls `/health`; `(unhealthy)` means unreachable or
+`status:"degraded"` — go to 2.1. Allow the start-period to elapse first, as the
+first start may build the TensorRT engine); power mode is the high-performance
+one (else `sudo nvpmodel -m 0 && sudo jetson_clocks`). Record JetPack version for the report.
 
 ---
 
@@ -270,6 +273,9 @@ timeout 600 tegrastats --interval 2000 | tee $OUT/soak-tegrastats.log   # 10 min
 | `backend:"mock"` on Jetson | engine path / `VISION_MODEL_ENGINE` | build `.engine` with `scripts/export_engine.py` |
 | `camera_errors` set | RTSP URL, GStreamer | verify URL; test `MODE=cpu`; check L4T multimedia/`nvv4l2decoder` |
 | `vision.system.*` absent in SignalK | plugin `containerUrl`, reachability | fix URL; confirm WS connects |
+| `notifications.vision.containerDown` | container reachable on `containerUrl`? | container crashed/stopped or wrong URL — `docker ps` (look for non-`(healthy)`), restart it |
+| `notifications.vision.containerDegraded` | message detail (camera vs pipeline) | camera stall → 2.2; repeated `pipeline restarted Nx` → see `jetson-setup.md` |
+| container `(unhealthy)` in `docker ps` | `curl $NANO/health` | maps to `status:"degraded"`/unreachable — same as the two rows above |
 | `bearingTrue`/`position` null | own-ship heading/position | fix nav source; see 4.1 |
 | range mostly null / wild | `horizon_y`, `calibration_status` | calibrate (Phase 7) |
 | low FPS / hot | `nvpmodel`, both cameras full-rate | set MAXN+`jetson_clocks`; rely on context-camera prioritisation; prefer v8n |

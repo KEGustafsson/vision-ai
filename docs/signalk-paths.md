@@ -56,6 +56,8 @@ a location. SOG/COG let a chartplotter draw the vector and compute CPA natively;
 | `notifications.vision.labelMismatch` | `warn` | Selected labels not producible by the active model |
 | `notifications.vision.schemaMismatch` | `warn` | Vision container emits an incompatible event `schema_version` (major mismatch); events are ignored until it matches |
 | `notifications.vision.staleEvents` | `warn` | Detection events are arriving older than `eventMaxAgeS` and are being ignored (detection effectively offline — check the container, network link, and container/SignalK clock sync) |
+| `notifications.vision.containerDown` | `alarm` | The vision container is unreachable on its `/health` endpoint — the whole sensor is offline (no detections or video). Cleared automatically when it responds again |
+| `notifications.vision.containerDegraded` | `warn` | The container is up but reports `status: "degraded"` on `/health` — a camera/RTSP stall or a pipeline auto-restart. The message carries the per-camera error and restart count |
 
 Notifications are cleared (`value: null`) automatically when the condition
 resolves or the track ages out; MOB has a 60 s hold to ride out brief dropouts.
