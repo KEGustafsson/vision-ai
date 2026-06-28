@@ -70,11 +70,18 @@ jobs:
       # resolves and validates each compose stack without building or pulling.
       - name: Validate compose stacks
         run: |
-          for override in mock jetson deepstream; do
-            echo "::group::docker-compose.yml + docker-compose.$override.yml"
-            docker compose -f docker-compose.yml -f docker-compose.$override.yml config -q
+          # Production paths are self-contained — validate them the way they're
+          # run: a single -f, no base. (Each redefines the whole vision-service.)
+          for stack in docker-compose.jetson.yml docker-compose.deepstream.yml; do
+            echo "::group::$stack (standalone)"
+            docker compose -f "$stack" config -q
             echo "::endgroup::"
           done
+          # The dev full-stack demo LAYERS signalk-server onto the base, so it
+          # genuinely needs both files.
+          echo "::group::docker-compose.yml + docker-compose.mock.yml"
+          docker compose -f docker-compose.yml -f docker-compose.mock.yml config -q
+          echo "::endgroup::"
       # NB: a Dockerfile linter (hadolint) was intentionally NOT added here — its
       # parser rejects the valid BuildKit heredoc (`python3 - <<'PY'`) used in
       # vision-service/Dockerfile, which would fail the build on syntax it doesn't

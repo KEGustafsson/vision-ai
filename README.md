@@ -90,32 +90,82 @@ npm install && npm run build && npm test
 ```
 
 Then install the plugin into a SignalK server and point it at the container —
-see [`docs/dev-quickstart.md`](docs/dev-quickstart.md). Or bring the whole stack
-up with Docker:
+see [`docs/dev-quickstart.md`](docs/dev-quickstart.md). Or skip the manual setup
+and bring the whole stack up with Docker — see the `mock` mode under
+[Deployment modes](#deployment-modes) below.
+
+## Deployment modes
+
+Three run modes, selected by `VISION_MODE`; all emit the same `DetectionEvent`.
+Each has a **self-contained compose file** (a single `-f`, no base needed).
+`deepstream` builds and runs from a clean clone in one command — no prior image
+build, no manual model step. `jetson` needs one device-specific step first: build
+the TensorRT engine on the board (engines aren't portable), then run.
+
+| Mode | Where | Command |
+|------|-------|---------|
+| **`mock`** | any laptop, no GPU/cameras | `docker compose up` |
+| **`jetson`** | Jetson, TensorRT | build the engine once (below), then `docker compose -f docker-compose.jetson.yml up -d` |
+| **`deepstream`** | Jetson, full-GPU pipeline | `docker compose -f docker-compose.deepstream.yml up -d --build` |
+
+Set the camera URLs first for the GPU modes (`.env` or exported):
+
+```bash
+export VISION_CAMERA_FORWARD_URL="rtsp://user:pass@192.168.1.10:554/stream"
+export VISION_CAMERA_AFT_URL="rtsp://user:pass@192.168.1.11:554/stream"
+```
+
+### `mock` — laptop / dev (no GPU, no cameras)
+
+`docker compose up` runs the vision service alone on synthetic frames. For the
+full stack (vision service **+** a SignalK server with demo data + the plugin),
+layer the dev override — this is the only mode that needs two `-f` files:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.mock.yml up
 # SignalK:  http://localhost:3000     Captain view: http://localhost:3000/signalk-vision-ai/
 ```
 
-## GPU backends (Jetson)
+### `jetson` — Ultralytics YOLOv8 on TensorRT
 
-On the Jetson the detector runs on the GPU via one of two interchangeable
-backends, selected by `VISION_MODE` (both emit the same `DetectionEvent`):
+Decode in a GStreamer pipeline, inference + ByteTrack in Python. Optional
+`server.hw_jpeg` offloads the MJPEG encode to the Jetson NVJPG block
+(`nvjpegenc`) instead of CPU `cv2.imencode`. TensorRT engines are
+device-specific, so build the engine **on the Jetson** once before running:
 
-- **`jetson`** — Ultralytics YOLOv8 on **TensorRT**; decode in a GStreamer
-  pipeline, inference + ByteTrack in Python (`docker-compose.jetson.yml`).
-  Optional `server.hw_jpeg` offloads the MJPEG encode to the Jetson NVJPG block
-  (`nvjpegenc`) instead of CPU `cv2.imencode`.
-- **`deepstream`** — a fully GPU-resident **NVIDIA DeepStream** pipeline,
-  **end-to-end zero-copy in NVMM** — decode → inference → tracking → GPU overlay
-  → hardware JPEG (nvv4l2decoder → nvstreammux → nvinfer → nvtracker →
-  nvdsosd → nvjpegenc), with optional GPU lens correction (nvdewarper). The
-  annotated MJPEG is drawn on the GPU by `nvdsosd` and encoded on the NVJPG block
-  by `nvjpegenc`, so the CPU never touches a pixel — only the finished JPEG bytes
-  (`docker-compose.deepstream.yml`).
+```bash
+cd vision-service
+python3 scripts/download_models.py --model yolov8n.pt
+python3 scripts/export_engine.py --weights models/yolov8n.pt --imgsz 640  # → models/yolov8n.engine
+cd ..
+docker compose -f docker-compose.jetson.yml up -d
+```
 
-See [Jetson setup & deployment](docs/jetson-setup.md).
+### `deepstream` — fully GPU-resident NVIDIA DeepStream
+
+**End-to-end zero-copy in NVMM** — decode → inference → tracking → GPU overlay →
+hardware JPEG (nvv4l2decoder → nvstreammux → nvinfer → nvtracker → nvdsosd →
+nvjpegenc), with optional GPU lens correction (nvdewarper). The annotated MJPEG
+is drawn on the GPU by `nvdsosd` and encoded on the NVJPG block by `nvjpegenc`,
+so the CPU never touches a pixel — only the finished JPEG bytes. The image builds
+from scratch in one command (it exports the ONNX and bakes the committed parser
+itself; nvinfer builds the TensorRT engine on first start):
+
+```bash
+docker compose -f docker-compose.deepstream.yml up -d --build
+```
+
+For a reproducible / air-gapped build, pin the export base to a digest by
+exporting `VISION_JETSON_BASE` before the command (it feeds the `EXPORT_BASE`
+build arg — resolve the aarch64 digest on the board):
+
+```bash
+export VISION_JETSON_BASE="ultralytics/ultralytics@sha256:<digest>"
+docker compose -f docker-compose.deepstream.yml up -d --build
+```
+
+See [Jetson setup & deployment](docs/jetson-setup.md) for prerequisites,
+calibration, model selection, and tuning.
 
 ## Documentation
 

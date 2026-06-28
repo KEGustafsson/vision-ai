@@ -1,6 +1,9 @@
-# Jetson override: GPU runtime, TensorRT backend, real RTSP cameras.
+# Jetson deployment: GPU runtime, TensorRT backend, real RTSP cameras.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.jetson.yml up
+#   docker compose -f docker-compose.jetson.yml up -d
+#
+# Self-contained — runs with a SINGLE -f (no docker-compose.yml base needed; that
+# base only carries mock-mode defaults this file overrides anyway).
 #
 # Requires the NVIDIA Container Runtime (nvidia-docker) on the Jetson and a
 # TensorRT engine built with scripts/export_engine.py (mounted via ./models).

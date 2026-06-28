@@ -1,8 +1,12 @@
-# DeepStream override: GPU decode + inference + tracking via NVIDIA DeepStream.
+# DeepStream deployment: GPU decode + inference + tracking via NVIDIA DeepStream.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.deepstream.yml up -d
+#   docker compose -f docker-compose.deepstream.yml up -d --build
 #
-# This is the "more on GPU than main" path. Unlike the jetson override (TensorRT +
+# This file is self-contained — it defines the whole vision-service for this path,
+# so it runs with a SINGLE -f (no docker-compose.yml base needed; that base only
+# carries mock-mode defaults DeepStream overrides anyway).
+#
+# This is the "more on GPU than main" path. Unlike the jetson deployment (TensorRT +
 # CPU decode/track), here the whole pipeline runs on the GPU (see
 # app/pipeline_deepstream.py). It needs the NVIDIA Container Runtime and a
 # DeepStream-capable image (built from vision-service/Dockerfile.deepstream).
@@ -16,6 +20,13 @@ services:
     build:
       context: ./vision-service
       dockerfile: Dockerfile.deepstream
+      args:
+        # Stage-1 export base. Defaults (in the Dockerfile) to the public
+        # Ultralytics Jetson image, so this builds from a clean clone in one
+        # command. Pin a digest for a reproducible release the same way as the
+        # jetson override: resolve the aarch64 digest on the box and export
+        # VISION_JETSON_BASE=ultralytics/ultralytics@sha256:<digest>.
+        EXPORT_BASE: ${VISION_JETSON_BASE:-ultralytics/ultralytics:latest-jetson-jetpack6}
     image: vision-ai:deepstream
     container_name: vision-service-deepstream
     restart: unless-stopped
@@ -38,8 +49,11 @@ services:
       # .so, AND the TensorRT engine. nvinfer writes the built engine into THIS
       # dir (model-engine-file is relative to the pgie config), so mounting it
       # persists the engine across image rebuilds/recreates — avoiding a costly
-      # (RAM-tight) TRT rebuild. Host dir must hold every file the active model
-      # needs (the *.onnx are gitignored but present on the box).
+      # (RAM-tight) TRT rebuild. The default COCO ONNX (gitignored, so absent from
+      # a fresh clone) is seeded here automatically on first start by the image's
+      # entrypoint, so a from-scratch build needs no hand-placed model. For an
+      # ALTERNATIVE model the host dir must hold its ONNX (forward-watch /
+      # marine-surveillance — see docs/jetson-setup.md).
       - ./vision-service/deepstream:/opt/vision-service/deepstream
       # TensorRT-backend engines for the jetson (non-deepstream) path; harmless
       # here, kept so switching VISION_MODE doesn't lose the cached engine.

@@ -39,7 +39,7 @@ the depay/parse in `build_pipeline`. Calibrate `hfov_deg`, `height_m`,
 ```bash
 export VISION_CAMERA_FORWARD_URL="rtsp://user:pass@192.168.1.10:554/stream"
 export VISION_CAMERA_AFT_URL="rtsp://user:pass@192.168.1.11:554/stream"
-docker compose -f docker-compose.yml -f docker-compose.jetson.yml up -d
+docker compose -f docker-compose.jetson.yml up -d
 ```
 
 The service binds to `127.0.0.1:7000` on the boat network; the SignalK plugin
@@ -64,24 +64,29 @@ no per-frame pixel copy (the lone exception is throttled auto-horizon detection,
 `DetectionEvent` contract as the default backend. Built from
 `Dockerfile.deepstream`; needs JetPack 6 + **DeepStream 7.x** on the host.
 
+The image builds **from a clean clone in a single command** — no prior
+`vision-ai:jetson` build, no manual ONNX export, no parser-compile step:
+
 ```bash
-# 1. Build the deepstream-yolo nvinfer parser ON THE HOST (the DS samples image
-#    has no nvcc). Needs host nvcc + the DS 7.1 SDK at the same versions.
-vision-service/scripts/build_yolo_parser.sh
-#    → vision-service/deepstream/libnvdsinfer_custom_impl_Yolo.so
-
-# 2. Export a raw (no end-to-end NMS) YOLOv8n ONNX — the build's export stage
-#    does this automatically: it fetches the YOLOv8n weights itself (no need to
-#    pre-place models/yolov8n.pt). To build OFFLINE, drop the weights at
-#    vision-service/models/yolov8n.pt first (python3 scripts/download_models.py)
-#    and the build uses them as-is. See config/deepstream.yaml for the manual command.
-
-# 3. Run (nvinfer auto-builds the TRT engine next to the ONNX in the bind-mounted
-#    deepstream/ on first start, so it persists across container recreates).
 export VISION_CAMERA_FORWARD_URL="rtsp://user:pass@192.168.1.10:554/stream"
 export VISION_CAMERA_AFT_URL="rtsp://user:pass@192.168.1.11:554/stream"
-docker compose -f docker-compose.yml -f docker-compose.deepstream.yml up -d
+docker compose -f docker-compose.deepstream.yml up -d --build
 ```
+
+What the single build does for you:
+
+- **ONNX export** — the build's stage-1 `export` runs on the public Ultralytics
+  Jetson base (the same base the jetson path uses, so it's already cached if you
+  built that image first; otherwise it's pulled fresh) and fetches the YOLOv8n
+  weights itself. To build OFFLINE, drop the weights at
+  `vision-service/models/yolov8n.pt` first (`python3 scripts/download_models.py`)
+  and the build uses them as-is.
+- **Custom parser** — `deepstream/libnvdsinfer_custom_impl_Yolo.so` is committed
+  and baked in, so no compile step is required. Rebuild it only when the
+  DeepStream version changes: `vision-service/scripts/build_yolo_parser.sh` (needs
+  host nvcc + the DS 7.1 SDK at the same versions; the DS samples image has none).
+- **TRT engine** — nvinfer auto-builds it next to the ONNX in the bind-mounted
+  `deepstream/` on first start, so it persists across container recreates.
 
 Tuning lives in `config/deepstream.yaml` (bind-mounted, takes effect on restart):
 
