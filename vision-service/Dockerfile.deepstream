@@ -146,7 +146,7 @@ COPY --from=export /export/yolov8n_ds.onnx ./deepstream-default/yolov8n_ds.onnx
 # (forward-watch / marine-surveillance) are still dropped in per docs/jetson-setup.md.
 RUN cat > /usr/local/bin/deepstream-entrypoint.sh <<'SH' && chmod +x /usr/local/bin/deepstream-entrypoint.sh
 #!/bin/sh
-set -e
+set -eu
 seed=/opt/vision-service/deepstream-default/yolov8n_ds.onnx
 dest=/opt/vision-service/deepstream/yolov8n_ds.onnx
 if [ ! -f "$dest" ] && [ -f "$seed" ]; then

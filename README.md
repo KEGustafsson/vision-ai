@@ -155,6 +155,15 @@ itself; nvinfer builds the TensorRT engine on first start):
 docker compose -f docker-compose.deepstream.yml up -d --build
 ```
 
+For a reproducible / air-gapped build, pin the export base to a digest by
+exporting `VISION_JETSON_BASE` before the command (it feeds the `EXPORT_BASE`
+build arg — resolve the aarch64 digest on the board):
+
+```bash
+export VISION_JETSON_BASE="ultralytics/ultralytics@sha256:<digest>"
+docker compose -f docker-compose.deepstream.yml up -d --build
+```
+
 See [Jetson setup & deployment](docs/jetson-setup.md) for prerequisites,
 calibration, model selection, and tuning.
 

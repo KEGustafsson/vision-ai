@@ -76,8 +76,9 @@ docker compose -f docker-compose.deepstream.yml up -d --build
 What the single build does for you:
 
 - **ONNX export** — the build's stage-1 `export` runs on the public Ultralytics
-  Jetson base (the same image the jetson path uses, so it's already cached) and
-  fetches the YOLOv8n weights itself. To build OFFLINE, drop the weights at
+  Jetson base (the same base the jetson path uses, so it's already cached if you
+  built that image first; otherwise it's pulled fresh) and fetches the YOLOv8n
+  weights itself. To build OFFLINE, drop the weights at
   `vision-service/models/yolov8n.pt` first (`python3 scripts/download_models.py`)
   and the build uses them as-is.
 - **Custom parser** — `deepstream/libnvdsinfer_custom_impl_Yolo.so` is committed
