@@ -115,6 +115,10 @@ RUN pip3 install --no-cache-dir -c constraints.txt -r requirements-deepstream.tx
 
 COPY app ./app
 COPY config ./config
+# scripts/ carries healthcheck.py, invoked by the HEALTHCHECK below (the cpu and
+# jetson images copy it too); without this the probe file is missing and the
+# container goes permanently unhealthy after the start period.
+COPY scripts ./scripts
 # deepstream/ carries the host-compiled parser (libnvdsinfer_custom_impl_Yolo.so,
 # exporting NvDsInferParseYolo — see pgie_yolov8n.txt) plus the nvinfer/tracker
 # configs and labels. Rebuild the .so with scripts/build_yolo_parser.sh if the
@@ -156,4 +160,12 @@ RUN useradd --create-home --uid 10001 --groups video appuser \
 USER appuser
 
 EXPOSE 7000
+# Liveness: probe /health and report `unhealthy` on unreachable or degraded.
+# DeepStream surfaces its auto-restart count in /health (pipeline_restarts), so a
+# wedged GPU pipeline that has exhausted self-restarts shows up here. The
+# start-period is the longest of the three images: nvinfer builds the TRT engine
+# from the ONNX on first run, which can take several minutes on the Orin Nano.
+# See scripts/healthcheck.py.
+HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
+    CMD ["python3", "/opt/vision-service/scripts/healthcheck.py"]
 CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7000"]

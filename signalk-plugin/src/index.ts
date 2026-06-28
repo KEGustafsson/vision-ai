@@ -264,15 +264,69 @@ export = function (app: ServerApp): Plugin {
   }
 
   let lastMismatchSig: string | null = null;
+  // Transition tracking for the container health notifications so we emit on
+  // change only, not every 5s poll cycle.
+  let containerDownActive = false;
+  let lastDegradedSig: string | null = null;
 
-  async function checkModelLabels(): Promise<void> {
+  async function checkHealth(): Promise<void> {
     if (!client || !notifier) return;
     let info: HealthInfo;
     try {
       info = await client.health();
-    } catch {
-      return; // container unreachable — will be retried on next sync cycle
+    } catch (e) {
+      // Container unreachable supersedes any status-derived alert: clear a
+      // previously-latched degraded/label warning so it can't linger
+      // contradicting the containerDown alarm through a sustained outage.
+      if (lastDegradedSig !== null) {
+        lastDegradedSig = null;
+        notifier.clearContainerDegraded();
+      }
+      if (lastMismatchSig !== null) {
+        lastMismatchSig = null;
+        notifier.clearLabelMismatch();
+      }
+      // Container unreachable: the vision sensor is offline. Raise once on the
+      // down transition; the poll keeps running and clears it on recovery.
+      if (!containerDownActive) {
+        containerDownActive = true;
+        const msg = `Vision container unreachable at ${cfg.containerUrl} (${e}). No detections or video.`;
+        notifier.setContainerDown(msg);
+        app.error(`vision-ai: ${msg}`);
+      }
+      return;
     }
+    if (containerDownActive) {
+      containerDownActive = false;
+      notifier.clearContainerDown();
+      app.debug('vision-ai: container reachable again');
+    }
+
+    // Degraded: container is up but reporting a camera stall or pipeline
+    // restart (app/api/rest.py sets status="degraded"). Surface the detail.
+    if (info.status === 'degraded') {
+      const parts: string[] = [];
+      const errs = info.camera_errors ?? {};
+      for (const [cam, err] of Object.entries(errs)) parts.push(`${cam}: ${err}`);
+      if (info.pipeline_restarts) {
+        parts.push(
+          `pipeline restarted ${info.pipeline_restarts}x` +
+            (info.pipeline_last_error ? ` (${info.pipeline_last_error})` : '')
+        );
+      }
+      const detail = parts.length ? parts.join('; ') : 'unspecified';
+      const sig = detail;
+      if (sig !== lastDegradedSig) {
+        lastDegradedSig = sig;
+        const msg = `Vision container degraded — ${detail}.`;
+        notifier.setContainerDegraded(msg);
+        app.error(`vision-ai: ${msg}`);
+      }
+    } else if (lastDegradedSig !== null) {
+      lastDegradedSig = null;
+      notifier.clearContainerDegraded();
+    }
+
     const modelLabels = info.model_labels;
     if (!modelLabels || modelLabels.length === 0) {
       if (lastMismatchSig !== null) {
@@ -365,12 +419,13 @@ export = function (app: ServerApp): Plugin {
       processTimer = setInterval(processCycle, cfg.processIntervalMs);
       // Always sync (the object-type selection must reach the container even
       // when context control is off); push once now, then keep it in sync.
-      // The label check runs once on start and then every sync cycle.
+      // The container health check (reachability, degraded status, model
+      // labels) runs once on start and then every sync cycle.
       void syncContainer();
-      void checkModelLabels();
+      void checkHealth();
       syncTimer = setInterval(() => {
         void syncContainer();
-        void checkModelLabels();
+        void checkHealth();
       }, 5000);
       app.debug(`vision-ai: started, container=${cfg.containerUrl}`);
     },
@@ -393,6 +448,8 @@ export = function (app: ServerApp): Plugin {
       maxTargets = cfg.maxTargets;
       lastStatsAt = 0;
       lastMismatchSig = null;
+      containerDownActive = false;
+      lastDegradedSig = null;
       stream = null;
     },
 
