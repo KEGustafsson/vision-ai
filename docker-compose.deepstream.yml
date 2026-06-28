@@ -1,8 +1,12 @@
-# DeepStream override: GPU decode + inference + tracking via NVIDIA DeepStream.
+# DeepStream deployment: GPU decode + inference + tracking via NVIDIA DeepStream.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.deepstream.yml up -d
+#   docker compose -f docker-compose.deepstream.yml up -d --build
 #
-# This is the "more on GPU than main" path. Unlike the jetson override (TensorRT +
+# This file is self-contained — it defines the whole vision-service for this path,
+# so it runs with a SINGLE -f (no docker-compose.yml base needed; that base only
+# carries mock-mode defaults DeepStream overrides anyway).
+#
+# This is the "more on GPU than main" path. Unlike the jetson deployment (TensorRT +
 # CPU decode/track), here the whole pipeline runs on the GPU (see
 # app/pipeline_deepstream.py). It needs the NVIDIA Container Runtime and a
 # DeepStream-capable image (built from vision-service/Dockerfile.deepstream).

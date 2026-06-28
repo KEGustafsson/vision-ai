@@ -39,7 +39,7 @@ the depay/parse in `build_pipeline`. Calibrate `hfov_deg`, `height_m`,
 ```bash
 export VISION_CAMERA_FORWARD_URL="rtsp://user:pass@192.168.1.10:554/stream"
 export VISION_CAMERA_AFT_URL="rtsp://user:pass@192.168.1.11:554/stream"
-docker compose -f docker-compose.yml -f docker-compose.jetson.yml up -d
+docker compose -f docker-compose.jetson.yml up -d
 ```
 
 The service binds to `127.0.0.1:7000` on the boat network; the SignalK plugin
@@ -70,7 +70,7 @@ The image builds **from a clean clone in a single command** — no prior
 ```bash
 export VISION_CAMERA_FORWARD_URL="rtsp://user:pass@192.168.1.10:554/stream"
 export VISION_CAMERA_AFT_URL="rtsp://user:pass@192.168.1.11:554/stream"
-docker compose -f docker-compose.yml -f docker-compose.deepstream.yml up -d --build
+docker compose -f docker-compose.deepstream.yml up -d --build
 ```
 
 What the single build does for you:

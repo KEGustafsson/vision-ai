@@ -10,7 +10,7 @@
 # Build ON the Jetson (needs the nvidia container runtime + network for the bases).
 # This builds FROM SCRATCH in a SINGLE command — no prior `vision-ai:jetson` build
 # and no manual ONNX/parser step is required:
-#   docker compose -f docker-compose.yml -f docker-compose.deepstream.yml up -d --build
+#   docker compose -f docker-compose.deepstream.yml up -d --build
 #   # or just the image:
 #   docker build -f Dockerfile.deepstream -t vision-ai:deepstream .
 #
