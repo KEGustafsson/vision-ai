@@ -30,8 +30,13 @@ def health(request: Request) -> HealthResponse:
     restart_info = p.restart_info() if hasattr(p, "restart_info") else {}
     restarts = int(restart_info.get("restarts", 0))
     last_error = restart_info.get("last_error")
+    # A restart only degrades health while it's recent (the pipeline is actively
+    # recovering/flapping). A single restart that has since stayed up shouldn't
+    # latch the container unhealthy for its whole life — the cumulative count is
+    # still surfaced below as pipeline_restarts for diagnostics.
+    restart_degraded = bool(restart_info.get("recent")) if restart_info else restarts > 0
     return HealthResponse(
-        status="degraded" if (errors or restarts) else "ok",
+        status="degraded" if (errors or restart_degraded) else "ok",
         mode=p.settings.mode,
         backend=backend,
         cameras=[c.name for c in p.settings.cameras],

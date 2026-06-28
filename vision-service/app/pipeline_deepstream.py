@@ -119,6 +119,12 @@ _GST_CLOCK_TIME_NONE = 0xFFFF_FFFF_FFFF_FFFF  # GStreamer "invalid timestamp" se
 # error are surfaced in /health so a flapping feed is visible.
 _RESTART_BACKOFF_INITIAL_S = 2.0
 _RESTART_BACKOFF_MAX_S = 30.0
+# Window after a rebuild during which /health still reports "degraded". Once a
+# restart is older than this and the pipeline has stayed up, health returns to
+# "ok" — a single recovered restart shouldn't mark the container unhealthy for
+# its whole life. Comfortably longer than the max backoff so a flapping pipeline
+# (which restarts again before the window closes) keeps reading degraded.
+_RESTART_DEGRADED_WINDOW_S = 120.0
 _DEEPSTREAM_DIR = Path(__file__).resolve().parent.parent / "deepstream"
 _TRACKER_LIB = "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"
 _TRACKER_CFG_STOCK = Path(
@@ -239,6 +245,10 @@ class DeepStreamPipeline:
         self._stopping = threading.Event()
         self._restart_count = 0
         self._last_error: Optional[str] = None
+        # Monotonic timestamp of the most recent rebuild, so /health can treat a
+        # restart as "degraded" only while it is recent (actively recovering)
+        # rather than latching on the cumulative count for the container's life.
+        self._last_restart_ts: Optional[float] = None
 
         # Holds generated nvdewarper config files; cleaned up on stop().
         self._dewarp_tmp: Optional[tempfile.TemporaryDirectory] = None
@@ -384,6 +394,7 @@ class DeepStreamPipeline:
                 break
 
             self._restart_count += 1
+            self._last_restart_ts = time.monotonic()
             self._log.error(
                 "DeepStream pipeline exited (restart #%d, last_error=%s); "
                 "rebuilding in %.0fs", self._restart_count, self._last_error, backoff)
@@ -393,8 +404,15 @@ class DeepStreamPipeline:
 
     def restart_info(self) -> Dict[str, object]:
         """Auto-restart telemetry for /health: how many times the GStreamer
-        pipeline has been rebuilt after a fault, and the last error seen."""
-        return {"restarts": self._restart_count, "last_error": self._last_error}
+        pipeline has been rebuilt after a fault, the last error seen, and whether
+        the most recent rebuild is recent enough to still count as degraded."""
+        ts = self._last_restart_ts
+        recent = ts is not None and (time.monotonic() - ts) < _RESTART_DEGRADED_WINDOW_S
+        return {
+            "restarts": self._restart_count,
+            "last_error": self._last_error,
+            "recent": recent,
+        }
 
     def stop(self) -> None:
         self._stopping.set()
