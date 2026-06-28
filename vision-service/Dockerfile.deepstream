@@ -115,6 +115,10 @@ RUN pip3 install --no-cache-dir -c constraints.txt -r requirements-deepstream.tx
 
 COPY app ./app
 COPY config ./config
+# scripts/ carries healthcheck.py, invoked by the HEALTHCHECK below (the cpu and
+# jetson images copy it too); without this the probe file is missing and the
+# container goes permanently unhealthy after the start period.
+COPY scripts ./scripts
 # deepstream/ carries the host-compiled parser (libnvdsinfer_custom_impl_Yolo.so,
 # exporting NvDsInferParseYolo — see pgie_yolov8n.txt) plus the nvinfer/tracker
 # configs and labels. Rebuild the .so with scripts/build_yolo_parser.sh if the

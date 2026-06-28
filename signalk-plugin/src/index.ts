@@ -275,6 +275,17 @@ export = function (app: ServerApp): Plugin {
     try {
       info = await client.health();
     } catch (e) {
+      // Container unreachable supersedes any status-derived alert: clear a
+      // previously-latched degraded/label warning so it can't linger
+      // contradicting the containerDown alarm through a sustained outage.
+      if (lastDegradedSig !== null) {
+        lastDegradedSig = null;
+        notifier.clearContainerDegraded();
+      }
+      if (lastMismatchSig !== null) {
+        lastMismatchSig = null;
+        notifier.clearLabelMismatch();
+      }
       // Container unreachable: the vision sensor is offline. Raise once on the
       // down transition; the poll keeps running and clears it on recovery.
       if (!containerDownActive) {
