@@ -7,26 +7,34 @@
 # which bundles the nv* GStreamer plugins, the NvDCF tracker lib and the pyds
 # wheel at exactly the paths pipeline_deepstream.py expects.
 #
-# Build ON the Jetson (needs the nvidia container runtime + network for the bases):
+# Build ON the Jetson (needs the nvidia container runtime + network for the bases).
+# This builds FROM SCRATCH in a SINGLE command — no prior `vision-ai:jetson` build
+# and no manual ONNX/parser step is required:
+#   docker compose -f docker-compose.yml -f docker-compose.deepstream.yml up -d --build
+#   # or just the image:
 #   docker build -f Dockerfile.deepstream -t vision-ai:deepstream .
-#   # or via compose:
-#   docker compose -f docker-compose.yml -f docker-compose.deepstream.yml build
 #
 # Two stages:
-#   1. export  — uses the LOCAL ultralytics image (already on the box, no re-pull)
-#                to produce a deepstream-yolo-compatible YOLOv8n ONNX. Using the
-#                marcoslucianops export script GUARANTEES the ONNX layout matches
-#                the custom nvinfer parser built in stage 2 (the Ultralytics
+#   1. export  — pulls the public Ultralytics Jetson image (the SAME base the
+#                jetson Dockerfile uses, so it's already cached after a jetson
+#                build) and produces a deepstream-yolo-compatible YOLOv8n ONNX.
+#                Using the marcoslucianops export script GUARANTEES the ONNX layout
+#                matches the custom nvinfer parser baked in stage 2 (the Ultralytics
 #                default export is NOT compatible with that parser).
-#   2. runtime — the DeepStream base; builds the custom parser, installs pyds +
-#                the web stack, and copies the exported ONNX in.
+#   2. runtime — the DeepStream base; installs pyds + the web stack, bakes the
+#                committed custom parser (deepstream/libnvdsinfer_custom_impl_Yolo.so)
+#                and copies the exported ONNX in.
 
 # ── Stage 1: export a deepstream-yolo-compatible ONNX ─────────────────────────
-# EXPORT_BASE defaults to the image already built on this Jetson, so this stage
-# pulls nothing. Override if you keep ultralytics under a different tag.
+# EXPORT_BASE defaults to the public Ultralytics Jetson base — the SAME image the
+# jetson Dockerfile builds on — so the DeepStream image builds from a clean clone
+# in one command without first building `vision-ai:jetson`. On a box that already
+# ran a jetson build the layers are cached, so this pulls nothing extra. Override
+# (--build-arg EXPORT_BASE=... or via docker-compose.deepstream.yml) to reuse a
+# local ultralytics image or pin a digest.
 # Both base-image ARGs are declared here, before the first FROM, so BuildKit
 # honours their defaults wherever they are referenced in a FROM below.
-ARG EXPORT_BASE=vision-ai:jetson
+ARG EXPORT_BASE=ultralytics/ultralytics:latest-jetson-jetpack6
 # DS_BASE: DeepStream 7.1 (paired with JetPack 6.1/6.2; this box is JP6.2).
 # samples-multiarch is the lean Jetson base (the -triton variant bundles a Triton
 # server we don't use — we go straight to nvinfer/TensorRT). nvcc + CUDA headers
@@ -36,8 +44,10 @@ ARG DS_BASE=nvcr.io/nvidia/deepstream:7.1-samples-multiarch
 
 FROM ${EXPORT_BASE} AS export
 
-# The export base (vision-ai:jetson) now ends on a non-root USER; this build-only
-# stage needs root to pip-install build deps and write the exported ONNX.
+# The Ultralytics base already runs as root, but pin it explicitly: if EXPORT_BASE
+# is overridden with an image that drops privileges (e.g. a local vision-ai:jetson,
+# which ends on a non-root USER), this build-only stage still needs root to
+# pip-install build deps and write the exported ONNX.
 USER root
 WORKDIR /export
 # Acquire the YOLOv8n weights deterministically. A clean checkout has NO
@@ -120,11 +130,35 @@ COPY config ./config
 # configs and labels. Rebuild the .so with scripts/build_yolo_parser.sh if the
 # DeepStream version changes.
 COPY deepstream ./deepstream
-# The deepstream-yolo-compatible ONNX lives in deepstream/ (NOT models/, which is
-# bind-mounted at runtime and would shadow a baked file). nvinfer builds the TRT
-# engine from it on first run and writes the engine to ../models (bind-mounted, so
-# it persists across container recreations). See pgie_yolov8n.txt.
+# The deepstream-yolo-compatible ONNX is baked into deepstream/ so a bare
+# `docker run` (no bind mount) works standalone. But compose ALSO bind-mounts
+# deepstream/ from the host (to persist the built engine and allow model swaps),
+# which shadows this baked copy — and the *.onnx is gitignored, so a fresh clone's
+# host deepstream/ has none. So ALSO stage a copy outside the mount; the entrypoint
+# below seeds it into the bind-mounted deepstream/ on first run. nvinfer then
+# builds the TRT engine next to it (persisted via the mount). See pgie_yolov8n.txt.
 COPY --from=export /export/yolov8n_ds.onnx ./deepstream/yolov8n_ds.onnx
+COPY --from=export /export/yolov8n_ds.onnx ./deepstream-default/yolov8n_ds.onnx
+
+# Entrypoint: seed the default COCO ONNX into the (bind-mounted, possibly empty)
+# deepstream/ dir when it's absent, so `docker compose ... up --build` works from a
+# clean clone in ONE command — no hand-placed ONNX. Alternative models
+# (forward-watch / marine-surveillance) are still dropped in per docs/jetson-setup.md.
+RUN cat > /usr/local/bin/deepstream-entrypoint.sh <<'SH' && chmod +x /usr/local/bin/deepstream-entrypoint.sh
+#!/bin/sh
+set -e
+seed=/opt/vision-service/deepstream-default/yolov8n_ds.onnx
+dest=/opt/vision-service/deepstream/yolov8n_ds.onnx
+if [ ! -f "$dest" ] && [ -f "$seed" ]; then
+    if cp "$seed" "$dest" 2>/dev/null; then
+        echo "deepstream-entrypoint: seeded default ONNX -> $dest"
+    else
+        echo "deepstream-entrypoint: WARN could not write $dest — make the host" \
+             "deepstream/ dir writable by UID 10001, or place the ONNX yourself" >&2
+    fi
+fi
+exec "$@"
+SH
 
 # Only ONE detection model runs at a time (detector.model in deepstream.yaml).
 # The COCO model (yolov8n_ds.onnx, above) is the default. To run the alternative
@@ -156,4 +190,5 @@ RUN useradd --create-home --uid 10001 --groups video appuser \
 USER appuser
 
 EXPOSE 7000
+ENTRYPOINT ["/usr/local/bin/deepstream-entrypoint.sh"]
 CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7000"]
