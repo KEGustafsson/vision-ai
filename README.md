@@ -71,6 +71,30 @@ alerts.
 
 ![The full detection process: the container decodes a camera frame, detects and tracks objects with YOLOv8 + ByteTrack, computes a relative bearing from the pixel column and a range from the horizon depression or known size, then filters and emits a DetectionEvent; the plugin enriches it to a true bearing and lat/lon, fuses it with AIS, estimates CPA/TCPA, raises notifications, and publishes synthetic AIS vessels and vision.* paths to SignalK.](docs/images/detection-process.svg)
 
+### Bearing & range from one camera
+
+This is what makes it a *radar* rather than a video feed: with a known field of
+view, mounting height, and horizon row, a single camera measures **where** an
+object is, not just **that** it's there.
+
+- **Bearing** — a detection's horizontal pixel position maps linearly to an
+  angle off the optical axis. Dead centre is straight ahead; the image edges are
+  ±½ the horizontal field of view. Add the camera's mount offset and the boat's
+  heading and you have a true bearing.
+- **Range** — an object's waterline sits *below the horizon* by a small angle
+  that shrinks with distance. Since the camera height is known, `range = height /
+  tan(angle)`. With no usable horizon, a known object width gives a coarser
+  fallback.
+
+![Top-down view of relative bearing: a detection at pixel column px lies at an angle off the camera's optical axis, scaled by the horizontal field of view.](docs/images/geometry-bearing.svg)
+
+![Side view of range by horizon depression: an object's waterline sits below the horizon by an angle theta, and range equals camera height divided by tan(theta).](docs/images/geometry-range-horizon.svg)
+
+Monocular range is deliberately **coarse** — it's gated by a confidence value and
+treated as an aid, not a survey instrument. See
+[Geometry & calibration](docs/geometry.md) for the full derivation, the
+known-size fallback, and the calibration procedure.
+
 ## Quick start (no GPU, no cameras)
 
 Everything runs in a **mock mode** with synthetic frames and a deterministic
