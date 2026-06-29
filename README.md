@@ -4,16 +4,7 @@ A **"visual radar"** for boats: two cameras (forward + aft) feeding a YOLOv8
 detector on an **NVIDIA Jetson Orin Nano Super**, turned into georeferenced,
 AIS-fused, navigation-aware situational awareness inside **[SignalK](https://signalk.org)**.
 
-Example: 2x Cams (bow, aft), 10fps each, DeepStream
-
-WebUI
-![image](./docs/Marine_Vision-AI.png)
-
-Camera detected synthetic vessels on map
-![image](./docs/synthetic_vessels.png)
-
-nVidia jtop process views:
-![image](./docs/nVidia_Nano_jtop.png)
+## What it does
 
 The system doesn't just draw boxes on a video feed. It treats each camera as a
 bearing/range sensor and, using the boat's own position and heading from
@@ -34,7 +25,26 @@ SignalK, produces:
 - 🧭 **Context-aware control** — the plugin steers the container (active camera,
   confidence, day/night) based on the boat's speed and time of day.
 
-## Architecture
+## Demo
+
+Running on a Jetson Orin Nano Super — 2× cameras (bow + aft), 10 fps each, the
+DeepStream backend.
+
+**Captain webapp** — annotated live stream embedded in the SignalK UI:
+
+![Captain webapp: annotated live camera stream with detection boxes, a colour-coded target list, and own-ship readout.](./docs/Marine_Vision-AI.png)
+
+**Synthetic AIS vessels on the chart** — each detection georeferenced as a blip:
+
+![Chart view: camera-detected targets published as synthetic AIS vessels and drawn as blips on the map.](./docs/synthetic_vessels.png)
+
+**Jetson load** (`jtop`):
+
+![NVIDIA Jetson jtop view showing GPU, CPU, and memory utilisation while the pipeline runs.](./docs/nVidia_Nano_jtop.png)
+
+## How it works
+
+### Architecture
 
 ![System architecture: two cameras feed the vision-service container over RTSP; it emits DetectionEvent JSON over WebSocket (plus MJPEG video and a REST control channel) to the signalk-vision-ai plugin, which publishes vision.* deltas and notifications to the SignalK server for the MFD/chart and Captain view.](docs/images/architecture-overview.svg)
 
@@ -49,7 +59,7 @@ drift.
 | Vision service | [`vision-service/`](vision-service/) | Python, FastAPI, Ultralytics YOLOv8, OpenCV, TensorRT or DeepStream (Jetson) |
 | SignalK plugin | [`signalk-plugin/`](signalk-plugin/) | TypeScript, ws, ajv |
 
-## From pixels to targets
+### From pixels to targets
 
 Every detection runs the same pipeline: the camera frame is decoded and a
 YOLOv8 + ByteTrack pass yields a tracked bounding box; the container turns that
@@ -135,13 +145,10 @@ docker compose -f docker-compose.jetson.yml up -d
 
 ### `deepstream` — fully GPU-resident NVIDIA DeepStream
 
-**End-to-end zero-copy in NVMM** — decode → inference → tracking → GPU overlay →
-hardware JPEG (nvv4l2decoder → nvstreammux → nvinfer → nvtracker → nvdsosd →
-nvjpegenc), with optional GPU lens correction (nvdewarper). The annotated MJPEG
-is drawn on the GPU by `nvdsosd` and encoded on the NVJPG block by `nvjpegenc`,
-so the CPU never touches a pixel — only the finished JPEG bytes. The image builds
-from scratch in one command (it exports the ONNX and bakes the committed parser
-itself; nvinfer builds the TensorRT engine on first start):
+The most efficient backend — every stage runs on the GPU (see
+[DeepStream architecture](#deepstream-architecture) for the design). The image
+builds from a clean clone in one command (it exports the ONNX and bakes the
+committed parser itself; nvinfer builds the TensorRT engine on first start):
 
 ```bash
 docker compose -f docker-compose.deepstream.yml up -d --build
