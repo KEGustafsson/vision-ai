@@ -33,12 +33,7 @@
 
 ## Data flow
 
-```text
-camera → FrameSource.read() → Detector.detect_and_track() → RawTrack[]
-       → geometry (bearing + range) → operator filters (classes, min range)
-       → DetectionEvent
-       → EventBuffer (→ WebSocket)   and   annotate() → LatestFrame (→ MJPEG)
-```
+![Container data flow: the camera frame from FrameSource.read() goes to Detector.detect_and_track() producing RawTrack[], then geometry adds bearing and range, operator filters drop unwanted classes and out-of-range targets, and the result becomes a DetectionEvent. That event fans out to an EventBuffer (served over WebSocket) and to annotate() which writes the LatestFrame (served as MJPEG). Both are ring buffers, so slow clients never stall the camera loop.](images/dataflow.svg)
 
 ### Inference backends
 
@@ -53,11 +48,7 @@ chosen by `VISION_MODE`/`detector.backend`; all of them emit the identical
 - **`deepstream`** — a fully GPU-resident NVIDIA DeepStream pipeline
   (`pipeline_deepstream.py`). Frames stay in NVMM end to end:
 
-  ```text
-  rtspsrc → nvv4l2decoder → [nvdewarper] → nvstreammux → nvinfer (TRT)
-          → nvtracker (NvDCF) → nvvideoconvert(RGBA) → [pad probe] → nvstreamdemux
-          → per camera: nvdsosd → nvvideoconvert(I420) → nvjpegenc → appsink → LatestFrame
-  ```
+  ![DeepStream GStreamer pipeline, fully GPU-resident in NVMM: rtspsrc → nvv4l2decoder → optional nvdewarper → nvstreammux (batches both cameras) → nvinfer (TensorRT) → nvtracker (NvDCF); then per camera after nvstreamdemux: nvvideoconvert (RGBA) → a pad probe that reads metadata only → nvstreamdemux → nvdsosd (GPU overlay) → nvjpegenc (I420 to JPEG) → appsink → LatestFrame. Detection metadata also feeds the bearing/range geometry into the DetectionEvent without copying any pixels.](images/deepstream-pipeline.svg)
 
   Both cameras are batched by `nvstreammux`; inference + GPU tracking run on the
   batch in one pass. `nvstreammux` outputs the native camera resolution (display
@@ -74,17 +65,9 @@ chosen by `VISION_MODE`/`detector.backend`; all of them emit the identical
   pixel access is auto-horizon detection, throttled to ~1/s per camera and skipped
   entirely when a camera has an explicit `horizon_y` calibration.
 
-On the plugin side, each `DetectionEvent` is:
+On the plugin side, each `DetectionEvent` is enriched in stages:
 
-```text
-enrichTarget()       relative bearing + own heading → true bearing
-                     own position + bearing + range → target lat/lon
-collectAisContacts() enumerate vessels.* with positions
-fuse()               correlate visual vs AIS → aisCorrelated | darkTarget
-CpaEstimator.update() per-track ground velocity → CPA / TCPA → threatLevel
-NotificationManager  MOB / dark-target / collision (set & clear, hysteresis)
-Publisher            synthetic AIS vessels (vessels.*) + vision.fusion.* + vision.system.*
-```
+![Plugin-side enrichment of each DetectionEvent: enrichTarget() combines the relative bearing with own heading for a true bearing and own position + bearing + range for the target lat/lon; collectAisContacts() enumerates vessels.* with positions; fuse() correlates visual versus AIS into aisCorrelated or darkTarget; CpaEstimator.update() turns per-track ground velocity into CPA/TCPA and a threatLevel; then the NotificationManager raises MOB / dark-target / collision alerts (set and clear with hysteresis) and the Publisher emits synthetic AIS vessels (vessels.*) plus vision.fusion.* and vision.system.* paths.](images/plugin-enrichment.svg)
 
 ## Why "visual radar"?
 

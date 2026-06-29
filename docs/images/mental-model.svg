@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="860" height="230" viewBox="0 0 860 230" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <rect width="860" height="230" fill="#ffffff"/>
+  <text x="430" y="30" text-anchor="middle" font-size="18" font-weight="700" fill="#0f172a">Two processes connected by one JSON contract</text>
+
+  <!-- cameras -->
+  <rect x="20" y="70" width="120" height="80" rx="8" fill="#e2e8f0" stroke="#475569"/>
+  <text x="80" y="105" text-anchor="middle" font-size="14" font-weight="600" fill="#1e293b">cameras</text>
+  <text x="80" y="126" text-anchor="middle" font-size="11" fill="#475569">fwd + aft</text>
+
+  <!-- vision-service -->
+  <rect x="245" y="62" width="230" height="96" rx="8" fill="#dbeafe" stroke="#2563eb"/>
+  <text x="360" y="90" text-anchor="middle" font-size="14" font-weight="700" fill="#1e3a8a">vision-service (Python)</text>
+  <text x="360" y="112" text-anchor="middle" font-size="11.5" fill="#1e40af">GPU &#183; pixels &#183; geometry</text>
+  <text x="360" y="130" text-anchor="middle" font-size="11.5" fill="#1e40af">emits DetectionEvent</text>
+  <text x="360" y="148" text-anchor="middle" font-size="11" fill="#64748b">no heading / position</text>
+
+  <!-- plugin -->
+  <rect x="575" y="62" width="230" height="96" rx="8" fill="#d1fae5" stroke="#059669"/>
+  <text x="690" y="90" text-anchor="middle" font-size="14" font-weight="700" fill="#065f46">signalk-plugin (TS)</text>
+  <text x="690" y="112" text-anchor="middle" font-size="11.5" fill="#047857">nav-relative math</text>
+  <text x="690" y="130" text-anchor="middle" font-size="11.5" fill="#047857">fusion &#183; alerts</text>
+  <text x="690" y="148" text-anchor="middle" font-size="11" fill="#64748b">owns live SignalK state</text>
+
+  <!-- arrows -->
+  <line x1="140" y1="110" x2="243" y2="110" stroke="#475569" stroke-width="2" marker-end="url(#m)"/>
+  <text x="191" y="102" text-anchor="middle" font-size="11" font-weight="600" fill="#475569">RTSP</text>
+  <line x1="475" y1="110" x2="573" y2="110" stroke="#1d4ed8" stroke-width="2" marker-end="url(#m2)"/>
+  <text x="524" y="102" text-anchor="middle" font-size="10.5" fill="#1d4ed8">WS / MJPEG / REST</text>
+
+  <!-- to signalk -->
+  <text x="690" y="190" text-anchor="middle" font-size="12" font-weight="600" fill="#5b21b6">&#8595; SignalK server</text>
+
+  <defs>
+    <marker id="m" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#475569"/></marker>
+    <marker id="m2" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M0,0 L9,4.5 L0,9 z" fill="#1d4ed8"/></marker>
+  </defs>
+</svg>

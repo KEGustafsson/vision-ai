@@ -36,27 +36,7 @@ SignalK, produces:
 
 ## Architecture
 
-```text
-  ┌─────────────┐  RTSP   ┌─────────────────────────────────┐
-  │ fwd camera  ├────────►│  vision-service (Python)        │
-  ├─────────────┤  RTSP   │  YOLOv8 + ByteTrack             │
-  │ aft camera  ├────────►│  + monocular geometry           │
-  └─────────────┘         │  (bearing / range)              │
-                          └───────────┬──────────────┬──────┘
-            WebSocket events          │  MJPEG       │ REST control
-            (DetectionEvent JSON)     ▼              ▼
-                          ┌─────────────────────────────────┐
-                          │  signalk-vision-ai plugin (TS)  │
-                          │  enrich · AIS fusion · CPA/TCPA │
-                          │  notifications · publisher      │
-                          └───────────┬──────────────┬──────┘
-                  vision.* deltas +   │              │  webapp + MJPEG proxy
-                  notifications.*     ▼              ▼
-                          ┌──────────────────────────────────┐
-                          │  SignalK server  →  MFD / chart  │
-                          │                  →  Captain view │
-                          └──────────────────────────────────┘
-```
+![System architecture: two cameras feed the vision-service container over RTSP; it emits DetectionEvent JSON over WebSocket (plus MJPEG video and a REST control channel) to the signalk-vision-ai plugin, which publishes vision.* deltas and notifications to the SignalK server for the MFD/chart and Captain view.](docs/images/architecture-overview.svg)
 
 Two processes, one contract. The container owns the GPU/pixels/geometry and
 emits a single JSON event schema (`docs/event-schema.md`). The plugin owns all
@@ -68,6 +48,18 @@ drift.
 |-----------|------|-------|
 | Vision service | [`vision-service/`](vision-service/) | Python, FastAPI, Ultralytics YOLOv8, OpenCV, TensorRT or DeepStream (Jetson) |
 | SignalK plugin | [`signalk-plugin/`](signalk-plugin/) | TypeScript, ws, ajv |
+
+## From pixels to targets
+
+Every detection runs the same pipeline: the camera frame is decoded and a
+YOLOv8 + ByteTrack pass yields a tracked bounding box; the container turns that
+box's **pixel column** into a relative **bearing** and its **waterline row**
+into a **range** (monocular geometry — see [Geometry & calibration](docs/geometry.md));
+the plugin then fuses in the boat's own heading and position to georeference the
+target, correlates it against AIS, and raises any MOB / collision / dark-target
+alerts.
+
+![The full detection process: the container decodes a camera frame, detects and tracks objects with YOLOv8 + ByteTrack, computes a relative bearing from the pixel column and a range from the horizon depression or known size, then filters and emits a DetectionEvent; the plugin enriches it to a true bearing and lat/lon, fuses it with AIS, estimates CPA/TCPA, raises notifications, and publishes synthetic AIS vessels and vision.* paths to SignalK.](docs/images/detection-process.svg)
 
 ## Quick start (no GPU, no cameras)
 

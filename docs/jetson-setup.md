@@ -55,9 +55,11 @@ policy) and enable the plugin in the SignalK admin UI.
 ## 6. DeepStream GPU pipeline (alternative backend)
 
 `VISION_MODE=deepstream` runs a fully GPU-resident pipeline instead of the
-Python/TensorRT one: frames stay in NVMM end to end — `nvv4l2decoder →
-[nvdewarper] → nvstreammux → nvinfer (TRT) → nvtracker (NvDCF) → nvdsosd →
-nvjpegenc`. Overlays are drawn on the GPU (`nvdsosd`) and the MJPEG is encoded on
+Python/TensorRT one: frames stay in NVMM end to end.
+
+![DeepStream GStreamer pipeline, fully GPU-resident in NVMM: rtspsrc → nvv4l2decoder → optional nvdewarper → nvstreammux (batches both cameras) → nvinfer (TensorRT) → nvtracker (NvDCF); then per camera after nvstreamdemux: nvvideoconvert (RGBA) → a pad probe that reads metadata only → nvstreamdemux → nvdsosd (GPU overlay) → nvjpegenc (I420 to JPEG) → appsink → LatestFrame. Detection metadata also feeds the bearing/range geometry into the DetectionEvent without copying any pixels.](images/deepstream-pipeline.svg)
+
+Overlays are drawn on the GPU (`nvdsosd`) and the MJPEG is encoded on
 the NVJPG block (`nvjpegenc`), so the CPU only handles the finished JPEG bytes —
 no per-frame pixel copy (the lone exception is throttled auto-horizon detection,
 ~1/s, skipped when `horizon_y` is calibrated). It exposes the same API and

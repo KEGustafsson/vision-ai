@@ -1,0 +1,53 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="480" viewBox="0 0 760 480" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <rect width="760" height="480" fill="#ffffff"/>
+  <text x="380" y="30" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Relative bearing — top-down view</text>
+  <text x="380" y="52" text-anchor="middle" font-size="13" fill="#475569">A detection's pixel column maps to an angle off the camera's optical axis</text>
+
+  <!-- field-of-view cone -->
+  <polygon points="380,380 210,110 550,110" fill="#dbeafe" fill-opacity="0.6" stroke="none"/>
+  <line x1="380" y1="380" x2="210" y2="110" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="6 4"/>
+  <line x1="380" y1="380" x2="550" y2="110" stroke="#2563eb" stroke-width="1.5" stroke-dasharray="6 4"/>
+
+  <!-- optical axis -->
+  <line x1="380" y1="380" x2="380" y2="80" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="2 4"/>
+  <text x="372" y="300" text-anchor="end" font-size="12" fill="#64748b">optical axis</text>
+
+  <!-- image sensor plane (width W) -->
+  <line x1="232" y1="150" x2="528" y2="150" stroke="#0f172a" stroke-width="3"/>
+  <line x1="232" y1="144" x2="232" y2="156" stroke="#0f172a" stroke-width="2"/>
+  <line x1="528" y1="144" x2="528" y2="156" stroke="#0f172a" stroke-width="2"/>
+  <text x="380" y="172" text-anchor="middle" font-size="12" fill="#0f172a">image width  W  (pixels)</text>
+
+  <!-- pixel column of detection -->
+  <line x1="455" y1="150" x2="455" y2="135" stroke="#dc2626" stroke-width="2"/>
+  <text x="461" y="142" font-size="12" fill="#dc2626">px</text>
+
+  <!-- ray to object -->
+  <line x1="380" y1="380" x2="470" y2="95" stroke="#dc2626" stroke-width="2"/>
+
+  <!-- bearing arc between axis and object ray -->
+  <path d="M 380 250 A 130 130 0 0 0 421 254" fill="none" stroke="#b45309" stroke-width="2"/>
+  <text x="405" y="240" font-size="13" font-weight="600" fill="#b45309">&#952;</text>
+
+  <!-- object (boat) -->
+  <g transform="translate(470,88)">
+    <path d="M -14 0 L 14 0 L 9 9 L -9 9 Z" fill="#0f172a"/>
+    <rect x="-3" y="-9" width="3" height="9" fill="#0f172a"/>
+  </g>
+  <text x="490" y="92" font-size="12" fill="#0f172a">detected object</text>
+
+  <!-- camera -->
+  <g transform="translate(380,380)">
+    <rect x="-22" y="-2" width="44" height="22" rx="3" fill="#1e293b"/>
+    <circle cx="0" cy="9" r="6" fill="#38bdf8"/>
+  </g>
+  <text x="380" y="422" text-anchor="middle" font-size="12" fill="#0f172a">camera (HFOV)</text>
+
+  <!-- port / starboard labels -->
+  <text x="262" y="320" font-size="12" fill="#64748b">&#8592; port (&#8722;)</text>
+  <text x="498" y="320" font-size="12" fill="#64748b">starboard (+) &#8594;</text>
+
+  <!-- formula -->
+  <rect x="150" y="442" width="460" height="28" rx="6" fill="#eff6ff" stroke="#bfdbfe"/>
+  <text x="380" y="461" text-anchor="middle" font-size="13" fill="#1e3a8a" font-family="monospace">relative_bearing = (HFOV/2) &#215; (2&#183;px/W &#8722; 1) + mount offset</text>
+</svg>
