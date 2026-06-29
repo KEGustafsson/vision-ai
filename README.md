@@ -32,15 +32,15 @@ DeepStream backend.
 
 **Captain webapp** — annotated live stream embedded in the SignalK UI:
 
-![Captain webapp: annotated live camera stream with detection boxes, a colour-coded target list, and own-ship readout.](./docs/images/Marine_Vision-AI.png)
+![Captain webapp: annotated live camera stream with detection boxes, a colour-coded target list, and own-ship readout.](docs/images/Marine_Vision-AI.png)
 
 **Synthetic AIS vessels on the chart** — each detection georeferenced as a blip:
 
-![Chart view: camera-detected targets published as synthetic AIS vessels and drawn as blips on the map.](./docs/images/synthetic_vessels.png)
+![Chart view: camera-detected targets published as synthetic AIS vessels and drawn as blips on the map.](docs/images/synthetic_vessels.png)
 
 **Jetson load** (`jtop`):
 
-![NVIDIA Jetson jtop view showing GPU, CPU, and memory utilisation while the pipeline runs.](./docs/images/nVidia_Nano_jtop.png)
+![NVIDIA Jetson jtop view showing GPU, CPU, and memory utilisation while the pipeline runs.](docs/images/nVidia_Nano_jtop.png)
 
 ## How it works
 
