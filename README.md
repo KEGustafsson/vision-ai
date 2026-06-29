@@ -227,6 +227,7 @@ for the build, model selection, and tuning.
 
 - [Architecture & data flow](docs/architecture.md)
 - [Detection event contract](docs/event-schema.md)
+- [Vision container API](docs/container-api.md)
 - [SignalK `vision.*` paths](docs/signalk-paths.md)
 - [Geometry & calibration](docs/geometry.md)
 - [Jetson setup & deployment](docs/jetson-setup.md)

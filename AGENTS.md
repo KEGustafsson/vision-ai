@@ -41,6 +41,7 @@ Essential docs to consult before changing the relevant area:
 
 - `docs/architecture.md` — data flow and component responsibilities
 - `docs/event-schema.md` — the `DetectionEvent` contract (the boundary)
+- `docs/container-api.md` — the container's REST/WS/MJPEG endpoints
 - `docs/signalk-paths.md` — the `vision.*` and `notifications.*` paths produced
 - `docs/geometry.md` — monocular bearing/range model & calibration
 - `docs/jetson-setup.md` — `jetson` and `deepstream` GPU backends
