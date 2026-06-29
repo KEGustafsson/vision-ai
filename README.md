@@ -159,6 +159,39 @@ docker compose -f docker-compose.deepstream.yml up -d --build
 See [Jetson setup & deployment](docs/jetson-setup.md) for prerequisites,
 calibration, model selection, and tuning.
 
+## DeepStream architecture
+
+On a Jetson the `deepstream` backend replaces the Python decode/inference/track
+loop with a **single GStreamer graph that lives entirely in GPU memory (NVMM)**.
+Both cameras are batched once and run through inference and tracking in one pass;
+the CPU never touches a pixel — it only ever receives the finished JPEG bytes.
+
+![DeepStream GStreamer pipeline, fully GPU-resident in NVMM: rtspsrc → nvv4l2decoder → optional nvdewarper → nvstreammux (batches both cameras) → nvinfer (TensorRT) → nvtracker (NvDCF); then per camera after nvstreamdemux: nvvideoconvert (RGBA) → a pad probe that reads metadata only → nvstreamdemux → nvdsosd (GPU overlay) → nvjpegenc (I420 to JPEG) → appsink → LatestFrame. Detection metadata also feeds the bearing/range geometry into the DetectionEvent without copying any pixels.](docs/images/deepstream-pipeline.svg)
+
+**One batched front end, two zero-copy outputs.** `nvstreammux` batches both
+camera streams so `nvinfer` (TensorRT) and `nvtracker` (NvDCF) run on the batch
+in a single pass at the camera's native resolution (inference rescales to `imgsz`
+internally on the GPU). A pad probe then reads the detection metadata **without
+copying pixels** and the graph forks:
+
+- **Geometry / event path** — the probe turns each track's box into a
+  bearing/range and emits the `DetectionEvent` (host side, metadata only). This
+  is the same contract every other backend produces, so the plugin is unchanged.
+- **Display path** — the probe attaches GPU overlay metadata; a per-camera
+  `nvdsosd` burns the boxes/labels/HUD onto the NVMM surface and `nvjpegenc`
+  encodes the JPEG on the NVJPG block, delivered via `appsink` → `LatestFrame`
+  for MJPEG.
+
+**GPU lens correction** (`nvdewarper`, optional) applies barrel + rotation before
+inference. The lone host-side pixel access is auto-horizon detection, throttled to
+~1/s per camera and skipped entirely when a camera has an explicit `horizon_y`
+calibration. A per-camera PTS guard in the probe drops `nvstreammux` frame repeats
+so output never exceeds the camera's input rate.
+
+See [Architecture & data flow](docs/architecture.md#inference-backends) for how
+this fits the wider system and [Jetson setup & deployment](docs/jetson-setup.md)
+for the build, model selection, and tuning.
+
 ## Documentation
 
 - [Architecture & data flow](docs/architecture.md)
