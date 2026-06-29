@@ -16,11 +16,7 @@ before touching code.
 
 The system is **two processes connected by one JSON contract**.
 
-```text
-cameras ──RTSP──► vision-service (Python)      ──WS/MJPEG/REST──►  signalk-plugin (TypeScript)  ──► SignalK server
-                  GPU · pixels · geometry                          nav-relative math · fusion · alerts
-                  emits DetectionEvent                             owns live SignalK state
-```
+![Mental model: cameras feed the vision-service (Python) over RTSP — it owns the GPU, pixels and geometry and emits a DetectionEvent but knows no heading or position; over WS/MJPEG/REST it reaches the signalk-plugin (TypeScript), which owns nav-relative math, fusion and alerts and the live SignalK state, then publishes to the SignalK server.](docs/images/mental-model.svg)
 
 Two rules that explain almost every design decision in the repo:
 
@@ -45,6 +41,7 @@ Essential docs to consult before changing the relevant area:
 
 - `docs/architecture.md` — data flow and component responsibilities
 - `docs/event-schema.md` — the `DetectionEvent` contract (the boundary)
+- `docs/container-api.md` — the container's REST/WS/MJPEG endpoints
 - `docs/signalk-paths.md` — the `vision.*` and `notifications.*` paths produced
 - `docs/geometry.md` — monocular bearing/range model & calibration
 - `docs/jetson-setup.md` — `jetson` and `deepstream` GPU backends

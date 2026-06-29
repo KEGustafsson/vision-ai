@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="780" height="470" viewBox="0 0 780 470" font-family="Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+  <rect width="780" height="470" fill="#ffffff"/>
+  <text x="390" y="30" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">Range by known size — fallback (no horizon)</text>
+  <text x="390" y="52" text-anchor="middle" font-size="13" fill="#475569">A pinhole projection: known real width and apparent pixel width give distance</text>
+
+  <!-- optical axis -->
+  <line x1="120" y1="220" x2="700" y2="220" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="2 4"/>
+  <text x="694" y="352" text-anchor="end" font-size="11" fill="#64748b">optical axis</text>
+
+  <!-- rays from pinhole to object extents -->
+  <line x1="120" y1="220" x2="600" y2="120" stroke="#dc2626" stroke-width="1.5"/>
+  <line x1="120" y1="220" x2="600" y2="320" stroke="#dc2626" stroke-width="1.5"/>
+
+  <!-- image plane at focal length -->
+  <line x1="220" y1="100" x2="220" y2="340" stroke="#0f172a" stroke-width="2"/>
+  <text x="220" y="92" text-anchor="middle" font-size="11" fill="#0f172a">image plane</text>
+  <!-- pixel width on sensor -->
+  <line x1="208" y1="179" x2="208" y2="261" stroke="#2563eb" stroke-width="3"/>
+  <text x="200" y="224" text-anchor="end" font-size="12" font-weight="600" fill="#2563eb">pixel</text>
+  <text x="200" y="240" text-anchor="end" font-size="12" font-weight="600" fill="#2563eb">width</text>
+
+  <!-- focal length f -->
+  <line x1="120" y1="360" x2="220" y2="360" stroke="#7c3aed" stroke-width="1.5"/>
+  <line x1="120" y1="354" x2="120" y2="366" stroke="#7c3aed" stroke-width="1.5"/>
+  <line x1="220" y1="354" x2="220" y2="366" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="170" y="380" text-anchor="middle" font-size="12" font-weight="600" fill="#7c3aed">focal_px</text>
+
+  <!-- range -->
+  <line x1="120" y1="395" x2="600" y2="395" stroke="#0f766e" stroke-width="1.5"/>
+  <line x1="120" y1="389" x2="120" y2="401" stroke="#0f766e" stroke-width="1.5"/>
+  <line x1="600" y1="389" x2="600" y2="401" stroke="#0f766e" stroke-width="1.5"/>
+  <text x="360" y="413" text-anchor="middle" font-size="13" font-weight="600" fill="#0f766e">range</text>
+
+  <!-- real object width -->
+  <line x1="600" y1="120" x2="600" y2="320" stroke="#0f172a" stroke-width="3"/>
+  <text x="618" y="150" font-size="12" font-weight="600" fill="#0f172a">real width</text>
+  <text x="618" y="167" font-size="12" font-weight="600" fill="#0f172a">(m)</text>
+  <!-- object boat -->
+  <g transform="translate(600,220)">
+    <path d="M -22 -10 L 22 -10 L 14 6 L -14 6 Z" fill="#0f172a" fill-opacity="0.15" stroke="#0f172a"/>
+  </g>
+
+  <!-- pinhole / camera -->
+  <g transform="translate(120,220)">
+    <rect x="-26" y="-13" width="34" height="26" rx="3" fill="#1e293b"/>
+    <circle cx="0" cy="0" r="5" fill="#38bdf8"/>
+  </g>
+  <text x="120" y="262" text-anchor="middle" font-size="11" fill="#0f172a">camera</text>
+
+  <!-- formula block -->
+  <rect x="120" y="424" width="540" height="38" rx="6" fill="#f5f3ff" stroke="#ddd6fe"/>
+  <text x="390" y="442" text-anchor="middle" font-size="12.5" fill="#5b21b6" font-family="monospace">focal_px = (W/2) / tan(HFOV/2)</text>
+  <text x="390" y="458" text-anchor="middle" font-size="12.5" fill="#5b21b6" font-family="monospace">range = focal_px &#215; real_width_m / pixel_width   (low fixed confidence)</text>
+</svg>

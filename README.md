@@ -4,16 +4,7 @@ A **"visual radar"** for boats: two cameras (forward + aft) feeding a YOLOv8
 detector on an **NVIDIA Jetson Orin Nano Super**, turned into georeferenced,
 AIS-fused, navigation-aware situational awareness inside **[SignalK](https://signalk.org)**.
 
-Example: 2x Cams (bow, aft), 10fps each, DeepStream
-
-WebUI
-![image](./docs/Marine_Vision-AI.png)
-
-Camera detected synthetic vessels on map
-![image](./docs/synthetic_vessels.png)
-
-nVidia jtop process views:
-![image](./docs/nVidia_Nano_jtop.png)
+## What it does
 
 The system doesn't just draw boxes on a video feed. It treats each camera as a
 bearing/range sensor and, using the boat's own position and heading from
@@ -34,29 +25,28 @@ SignalK, produces:
 - 🧭 **Context-aware control** — the plugin steers the container (active camera,
   confidence, day/night) based on the boat's speed and time of day.
 
-## Architecture
+## Demo
 
-```text
-  ┌─────────────┐  RTSP   ┌─────────────────────────────────┐
-  │ fwd camera  ├────────►│  vision-service (Python)        │
-  ├─────────────┤  RTSP   │  YOLOv8 + ByteTrack             │
-  │ aft camera  ├────────►│  + monocular geometry           │
-  └─────────────┘         │  (bearing / range)              │
-                          └───────────┬──────────────┬──────┘
-            WebSocket events          │  MJPEG       │ REST control
-            (DetectionEvent JSON)     ▼              ▼
-                          ┌─────────────────────────────────┐
-                          │  signalk-vision-ai plugin (TS)  │
-                          │  enrich · AIS fusion · CPA/TCPA │
-                          │  notifications · publisher      │
-                          └───────────┬──────────────┬──────┘
-                  vision.* deltas +   │              │  webapp + MJPEG proxy
-                  notifications.*     ▼              ▼
-                          ┌──────────────────────────────────┐
-                          │  SignalK server  →  MFD / chart  │
-                          │                  →  Captain view │
-                          └──────────────────────────────────┘
-```
+Running on a Jetson Orin Nano Super — 2× cameras (bow + aft), 10 fps each, the
+DeepStream backend.
+
+**Captain webapp** — annotated live stream embedded in the SignalK UI:
+
+![Captain webapp: annotated live camera stream with detection boxes, a colour-coded target list, and own-ship readout.](docs/images/Marine_Vision-AI.png)
+
+**Synthetic AIS vessels on the chart** — each detection georeferenced as a blip:
+
+![Chart view: camera-detected targets published as synthetic AIS vessels and drawn as blips on the map.](docs/images/synthetic_vessels.png)
+
+**Jetson load** (`jtop`):
+
+![NVIDIA Jetson jtop view showing GPU, CPU, and memory utilisation while the pipeline runs.](docs/images/nVidia_Nano_jtop.png)
+
+## How it works
+
+### Architecture
+
+![System architecture: two cameras feed the vision-service container over RTSP; it emits DetectionEvent JSON over WebSocket (plus MJPEG video and a REST control channel) to the signalk-vision-ai plugin, which publishes vision.* deltas and notifications to the SignalK server for the MFD/chart and Captain view.](docs/images/architecture-overview.svg)
 
 Two processes, one contract. The container owns the GPU/pixels/geometry and
 emits a single JSON event schema (`docs/event-schema.md`). The plugin owns all
@@ -68,6 +58,42 @@ drift.
 |-----------|------|-------|
 | Vision service | [`vision-service/`](vision-service/) | Python, FastAPI, Ultralytics YOLOv8, OpenCV, TensorRT or DeepStream (Jetson) |
 | SignalK plugin | [`signalk-plugin/`](signalk-plugin/) | TypeScript, ws, ajv |
+
+### From pixels to targets
+
+Every detection runs the same pipeline: the camera frame is decoded and a
+YOLOv8 + ByteTrack pass yields a tracked bounding box; the container turns that
+box's **pixel column** into a relative **bearing** and its **waterline row**
+into a **range** (monocular geometry — see [Geometry & calibration](docs/geometry.md));
+the plugin then fuses in the boat's own heading and position to georeference the
+target, correlates it against AIS, and raises any MOB / collision / dark-target
+alerts.
+
+![The full detection process: the container decodes a camera frame, detects and tracks objects with YOLOv8 + ByteTrack, computes a relative bearing from the pixel column and a range from the horizon depression or known size, then filters and emits a DetectionEvent; the plugin enriches it to a true bearing and lat/lon, fuses it with AIS, estimates CPA/TCPA, raises notifications, and publishes synthetic AIS vessels and vision.* paths to SignalK.](docs/images/detection-process.svg)
+
+### Bearing & range from one camera
+
+This is what makes it a *radar* rather than a video feed: with a known field of
+view, mounting height, and horizon row, a single camera measures **where** an
+object is, not just **that** it's there.
+
+- **Bearing** — a detection's horizontal pixel position maps linearly to an
+  angle off the optical axis. Dead centre is straight ahead; the image edges are
+  ±½ the horizontal field of view. Add the camera's mount offset and the boat's
+  heading and you have a true bearing.
+- **Range** — an object's waterline sits *below the horizon* by a small angle
+  that shrinks with distance. Since the camera height is known, `range = height /
+  tan(angle)`. With no usable horizon, a known object width gives a coarser
+  fallback.
+
+![Top-down view of relative bearing: a detection at pixel column px lies at an angle off the camera's optical axis, scaled by the horizontal field of view.](docs/images/geometry-bearing.svg)
+
+![Side view of range by horizon depression: an object's waterline sits below the horizon by an angle theta, and range equals camera height divided by tan(theta).](docs/images/geometry-range-horizon.svg)
+
+Monocular range is deliberately **coarse** — it's gated by a confidence value and
+treated as an aid, not a survey instrument. See
+[Geometry & calibration](docs/geometry.md) for the full derivation, the
+known-size fallback, and the calibration procedure.
 
 ## Quick start (no GPU, no cameras)
 
@@ -143,13 +169,10 @@ docker compose -f docker-compose.jetson.yml up -d
 
 ### `deepstream` — fully GPU-resident NVIDIA DeepStream
 
-**End-to-end zero-copy in NVMM** — decode → inference → tracking → GPU overlay →
-hardware JPEG (nvv4l2decoder → nvstreammux → nvinfer → nvtracker → nvdsosd →
-nvjpegenc), with optional GPU lens correction (nvdewarper). The annotated MJPEG
-is drawn on the GPU by `nvdsosd` and encoded on the NVJPG block by `nvjpegenc`,
-so the CPU never touches a pixel — only the finished JPEG bytes. The image builds
-from scratch in one command (it exports the ONNX and bakes the committed parser
-itself; nvinfer builds the TensorRT engine on first start):
+The most efficient backend — every stage runs on the GPU (see
+[DeepStream architecture](#deepstream-architecture) for the design). The image
+builds from a clean clone in one command (it exports the ONNX and bakes the
+committed parser itself; nvinfer builds the TensorRT engine on first start):
 
 ```bash
 docker compose -f docker-compose.deepstream.yml up -d --build
@@ -167,10 +190,44 @@ docker compose -f docker-compose.deepstream.yml up -d --build
 See [Jetson setup & deployment](docs/jetson-setup.md) for prerequisites,
 calibration, model selection, and tuning.
 
+## DeepStream architecture
+
+On a Jetson the `deepstream` backend replaces the Python decode/inference/track
+loop with a **single GStreamer graph that lives entirely in GPU memory (NVMM)**.
+Both cameras are batched once and run through inference and tracking in one pass;
+the CPU never touches a pixel — it only ever receives the finished JPEG bytes.
+
+![DeepStream GStreamer pipeline, fully GPU-resident in NVMM: rtspsrc → nvv4l2decoder → optional nvdewarper → nvstreammux (batches both cameras) → nvinfer (TensorRT) → nvtracker (NvDCF); then per camera after nvstreamdemux: nvvideoconvert (RGBA) → a pad probe that reads metadata only → nvstreamdemux → nvdsosd (GPU overlay) → nvjpegenc (I420 to JPEG) → appsink → LatestFrame. Detection metadata also feeds the bearing/range geometry into the DetectionEvent without copying any pixels.](docs/images/deepstream-pipeline.svg)
+
+**One batched front end, two zero-copy outputs.** `nvstreammux` batches both
+camera streams so `nvinfer` (TensorRT) and `nvtracker` (NvDCF) run on the batch
+in a single pass at the camera's native resolution (inference rescales to `imgsz`
+internally on the GPU). A pad probe then reads the detection metadata **without
+copying pixels** and the graph forks:
+
+- **Geometry / event path** — the probe turns each track's box into a
+  bearing/range and emits the `DetectionEvent` (host side, metadata only). This
+  is the same contract every other backend produces, so the plugin is unchanged.
+- **Display path** — the probe attaches GPU overlay metadata; a per-camera
+  `nvdsosd` burns the boxes/labels/HUD onto the NVMM surface and `nvjpegenc`
+  encodes the JPEG on the NVJPG block, delivered via `appsink` → `LatestFrame`
+  for MJPEG.
+
+**GPU lens correction** (`nvdewarper`, optional) applies barrel + rotation before
+inference. The lone host-side pixel access is auto-horizon detection, throttled to
+~1/s per camera and skipped entirely when a camera has an explicit `horizon_y`
+calibration. A per-camera PTS guard in the probe drops `nvstreammux` frame repeats
+so output never exceeds the camera's input rate.
+
+See [Architecture & data flow](docs/architecture.md#inference-backends) for how
+this fits the wider system and [Jetson setup & deployment](docs/jetson-setup.md)
+for the build, model selection, and tuning.
+
 ## Documentation
 
 - [Architecture & data flow](docs/architecture.md)
 - [Detection event contract](docs/event-schema.md)
+- [Vision container API](docs/container-api.md)
 - [SignalK `vision.*` paths](docs/signalk-paths.md)
 - [Geometry & calibration](docs/geometry.md)
 - [Jetson setup & deployment](docs/jetson-setup.md)
