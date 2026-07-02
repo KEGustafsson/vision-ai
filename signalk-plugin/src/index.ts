@@ -170,11 +170,15 @@ export = function (app: ServerApp): Plugin {
     const own = readOwnShip(app, cfg.ownNavMaxAgeS, now);
 
     // Age out stale tracks first so downstream sees only live targets. When
-    // visual radar is on, retain at least blipHoldS so a held chart blip's
-    // target survives the detection gap it is masking (MOB/notification logic
-    // already guards against retained-but-stale tracks re-counting).
-    const timeoutMs =
-      Math.max(cfg.trackTimeoutS, cfg.enableVisualRadar ? cfg.blipHoldS : 0) * 1000;
+    // visual radar is on, retain at least the publisher's blip hold window —
+    // blipHoldS with the same two-process-cycle floor as publisher activeMs —
+    // so a held chart blip's target survives the detection gap it is masking
+    // (MOB/notification logic already guards against retained-but-stale
+    // tracks re-counting).
+    const timeoutMs = Math.max(
+      cfg.trackTimeoutS * 1000,
+      cfg.enableVisualRadar ? Math.max(cfg.blipHoldS * 1000, cfg.processIntervalMs * 2) : 0
+    );
     for (const [key, t] of [...targets]) {
       if (now - t.lastSeen > timeoutMs) targets.delete(key);
     }
