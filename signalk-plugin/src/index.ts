@@ -63,6 +63,17 @@ export = function (app: ServerApp): Plugin {
     },
     setDetection(on: boolean) {
       detectionEnabled = on;
+      if (!on) {
+        // Detection switched OFF by the operator: the chart must not keep
+        // showing vision contacts nobody is watching anymore. Retract and
+        // delete every synthetic AIS blip immediately (reset() nulls all
+        // leaves and removes the vessel contexts) instead of letting them
+        // age out through blipHoldS, and drop the target list so the REST
+        // API / captain webapp agree. Detection back ON simply repopulates
+        // from fresh events.
+        targets.clear();
+        if (publisher) publisher.reset();
+      }
       // Push immediately so the webapp toggle takes effect without waiting for
       // the next periodic sync.
       void syncContainer();
@@ -89,6 +100,11 @@ export = function (app: ServerApp): Plugin {
   // persistence) EXCEPT untracked person-in-water, which is a man-overboard
   // candidate too important to discard (see below).
   function handleEvent(ev: DetectionEvent): void {
+    // Detection is off: drop events entirely. The container tears its pipeline
+    // down when disabled, but frames already in flight (or arriving before the
+    // /control push lands) must not repopulate a target — setDetection(false)
+    // just wiped the map and retracted every chart blip.
+    if (!detectionEnabled) return;
     // eventStream already rejected invalid/over-age timestamps; here we enforce
     // monotonic per-camera ordering so a buffered burst of older-but-not-stale
     // frames can't rewind a track's position into CPA/fusion history. Use the
@@ -153,8 +169,16 @@ export = function (app: ServerApp): Plugin {
     const now = Date.now();
     const own = readOwnShip(app, cfg.ownNavMaxAgeS, now);
 
-    // Age out stale tracks first so downstream sees only live targets.
-    const timeoutMs = cfg.trackTimeoutS * 1000;
+    // Age out stale tracks first so downstream sees only live targets. When
+    // visual radar is on, retain at least the publisher's blip hold window —
+    // blipHoldS with the same two-process-cycle floor as publisher activeMs —
+    // so a held chart blip's target survives the detection gap it is masking
+    // (MOB/notification logic already guards against retained-but-stale
+    // tracks re-counting).
+    const timeoutMs = Math.max(
+      cfg.trackTimeoutS * 1000,
+      cfg.enableVisualRadar ? Math.max(cfg.blipHoldS * 1000, cfg.processIntervalMs * 2) : 0
+    );
     for (const [key, t] of [...targets]) {
       if (now - t.lastSeen > timeoutMs) targets.delete(key);
     }

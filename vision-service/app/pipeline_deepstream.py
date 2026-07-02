@@ -96,6 +96,13 @@ from .schemas import (
 from .util import EventBuffer, LatestFrame
 
 _STALL_TIMEOUT_S = 5.0  # mirror pipeline.py: flag a camera with no frames this long
+# Self-heal threshold: if EVERY camera has been silent this long while detection
+# is enabled, the fault is pipeline-level (stale RTSP sessions, stuck muxer —
+# cases where the bus posts no ERROR so the supervisor won't act on its own).
+# The watchdog quits the loop so the supervisor rebuilds with fresh RTSP
+# connections. Comfortably above the RTSP preroll time so a slow start can't
+# trigger a rebuild storm.
+_STALL_REBUILD_S = 20.0
 # Zero-copy keeps pixels in NVMM, so auto-horizon (which needs host pixels) is
 # refreshed by mapping the RGBA surface at most this often per camera — rare
 # enough that the per-frame path stays copy-free, frequent enough to track a
@@ -245,6 +252,15 @@ class DeepStreamPipeline:
         self._stopping = threading.Event()
         self._restart_count = 0
         self._last_error: Optional[str] = None
+        # Why the GLib loop was quit deliberately (detection toggle, watchdog
+        # stall rebuild) — None when it exited on its own (bus ERROR/EOS).
+        # Written by _quit_loop / consumed once by _supervise.
+        self._exit_reason: Optional[str] = None
+        # Gates supervisor rebuilds: cleared while detection is disabled so the
+        # pipeline stays fully torn down (a live RTSP pipeline can't sit PAUSED
+        # — the sessions go stale and never deliver frames again on resume).
+        self._enabled_evt = threading.Event()
+        self._enabled_evt.set()
         # Monotonic timestamp of the most recent rebuild, so /health can treat a
         # restart as "degraded" only while it is recent (actively recovering)
         # rather than latching on the cumulative count for the container's life.
@@ -274,25 +290,6 @@ class DeepStreamPipeline:
         Gst.init(None)
         self._stopping.clear()
 
-        d = self.settings.detector
-        for i, cam in enumerate(self.settings.cameras):
-            self._src_idx_to_name[i] = cam.name
-            stab = TrackStabilizer(
-                confirm_frames=d.stabilize_confirm_frames,
-                max_coast_frames=d.stabilize_max_coast_frames,
-                hysteresis_ratio=d.stabilize_hysteresis_ratio,
-                ema_alpha=d.stabilize_ema_alpha,
-                coast_velocity_factor=d.stabilize_coast_velocity_factor,
-                person_confirm_frames=d.stabilize_person_confirm_frames,
-            ) if d.stabilize else None
-            self._states[cam.name] = _StreamState(
-                cam=cam, settings=self.settings, stabilizer=stab,
-                confidence=self._confidence, allowed_labels=self._allowed_labels,
-                min_target_range_m=self._min_target_range_m,
-                vel=VelocityTracker(id_min=_DISPLAY_ID_MIN,
-                                    id_max=_display_id_max(self._max_det)),
-            )
-
         # First bring-up happens synchronously so a hard misconfiguration (bad
         # RTSP URL, missing plugin) still fails fast at startup. Subsequent
         # failures are recovered by the supervisor instead of going dark.
@@ -304,6 +301,37 @@ class DeepStreamPipeline:
     def _bring_up(self, Gst, GLib) -> None:
         """Build the pipeline, set it PLAYING, and create (but do not run) the
         GLib loop + stall watchdog. Raises on a hard state-change failure."""
+        # FRESH per-stream inference state on every (re)build — never carry it
+        # across pipelines. A rebuilt nvtracker restarts track IDs from scratch,
+        # so stale TrackStabilizer state would hand a NEW track that reuses an
+        # old ID the dead track's identity: already past the confirm debounce,
+        # hysteresis latched ON (emits below the confidence gate), EMA seeded by
+        # the old boat, stale coast velocity (observed live after a detection
+        # off/on toggle: 0.19-0.29 confidence targets streaming immediately).
+        # last_pts must reset too or the dup-frame guard can drop every frame of
+        # a new pipeline whose PTS restarts lower. Runtime /control values are
+        # preserved via their mirrors (self._confidence & co). Safe to swap
+        # wholesale: no probe is running here (old pipeline is torn down).
+        d = self.settings.detector
+        for i, cam in enumerate(self.settings.cameras):
+            self._src_idx_to_name[i] = cam.name
+            stab = TrackStabilizer(
+                confirm_frames=d.stabilize_confirm_frames,
+                max_coast_frames=d.stabilize_max_coast_frames,
+                hysteresis_ratio=d.stabilize_hysteresis_ratio,
+                ema_alpha=d.stabilize_ema_alpha,
+                coast_velocity_factor=d.stabilize_coast_velocity_factor,
+                person_confirm_frames=d.stabilize_person_confirm_frames,
+            ) if d.stabilize else None
+            with self._lock:
+                self._states[cam.name] = _StreamState(
+                    cam=cam, settings=self.settings, stabilizer=stab,
+                    confidence=self._confidence, allowed_labels=self._allowed_labels,
+                    min_target_range_m=self._min_target_range_m,
+                    vel=VelocityTracker(id_min=_DISPLAY_ID_MIN,
+                                        id_max=_display_id_max(self._max_det)),
+                )
+
         self._gst = self._build_pipeline(Gst)
 
         bus = self._gst.get_bus()
@@ -367,6 +395,12 @@ class DeepStreamPipeline:
         first = True
         while not self._stopping.is_set():
             if not first:
+                # Stay fully torn down while detection is disabled; enable sets
+                # the event and we rebuild with fresh RTSP sessions.
+                while not self._stopping.is_set() and not self._enabled_evt.wait(timeout=1.0):
+                    pass
+                if self._stopping.is_set():
+                    break
                 try:
                     self._bring_up(Gst, GLib)
                     backoff = _RESTART_BACKOFF_INITIAL_S
@@ -389,10 +423,23 @@ class DeepStreamPipeline:
                     self._last_error = str(exc)
                     self._log.error("DeepStream loop error: %s", exc)
 
+            reason = self._exit_reason
+            self._exit_reason = None
             self._tear_down(Gst)
             if self._stopping.is_set():
                 break
 
+            if reason in ("detection disabled", "detection re-enabled"):
+                # Deliberate teardown from the /control toggle: not a fault. No
+                # restart count, no error, no backoff — the loop top gates on
+                # _enabled_evt and rebuilds as soon as detection is enabled.
+                self._log.info("DeepStream pipeline torn down (%s)", reason)
+                continue
+
+            if reason:
+                # Watchdog-initiated rebuild (silent stall): surface it in
+                # /health like any other pipeline fault.
+                self._last_error = reason
             self._restart_count += 1
             self._last_restart_ts = time.monotonic()
             self._log.error(
@@ -479,29 +526,42 @@ class DeepStreamPipeline:
             self.active_camera = name
 
     def set_enabled(self, value: bool) -> None:
+        # /control re-POSTs the current state every plugin cycle — only act on a
+        # real transition, otherwise we'd tear the pipeline down once a second.
+        if value == self.enabled:
+            return
         self.enabled = value
+        # Disable must NOT merely PAUSE the pipeline: rtspsrc stops pulling from
+        # the sockets, the domes' live sessions go stale, and on resume the
+        # pipeline never delivers another frame (both cameras stall permanently
+        # — observed live). Instead the supervisor tears the pipeline fully down
+        # (NULL: decoders + nvinfer off the GPU, RTSP sessions closed — the
+        # power/thermal saving PAUSED was after) and rebuilds it from scratch
+        # with fresh RTSP connections on enable.
         if value:
             self.frames.resume()
+            self._enabled_evt.set()
+            # If a pipeline is somehow still up (e.g. disable landed mid-rebuild
+            # and left a PAUSED graph), recycle it too rather than resume stale.
+            self._quit_loop("detection re-enabled")
         else:
             self.frames.pause()
-        # Unlike the CPU/Jetson pipeline (whose workers release the capture device
-        # when disabled), the DeepStream graph would otherwise keep decoding and
-        # running nvinfer on the GPU even while "off" — burning power/thermal
-        # budget on the Jetson for nothing. So transition the whole pipeline to
-        # PAUSED on disable (decoders + nvinfer stop pulling data) and back to
-        # PLAYING on enable. The probe's `if not self.enabled` guard and the
-        # frame-store pause above still apply as before.
-        gst = self._gst
-        if gst is None:
+            self._enabled_evt.clear()
+            self._quit_loop("detection disabled")
+
+    def _quit_loop(self, reason: str) -> None:
+        """Ask the supervisor to tear down the current pipeline: record why and
+        quit the GLib loop. No-op (including the reason) when no loop is up —
+        a reason recorded with nothing to quit would linger and mislabel the
+        NEXT genuine crash as a deliberate teardown, skipping its backoff."""
+        loop = self._loop
+        if loop is None:
             return
+        self._exit_reason = reason
         try:
-            import gi
-            gi.require_version("Gst", "1.0")
-            from gi.repository import Gst
-            gst.set_state(Gst.State.PLAYING if value else Gst.State.PAUSED)
-        except Exception as exc:  # pragma: no cover - hardware dependent
-            self._log.warning(
-                "DeepStream set_enabled(%s) state change failed: %s", value, exc)
+            loop.quit()
+        except Exception:  # pragma: no cover - hardware dependent
+            pass
 
     def camera_errors(self) -> Dict[str, str]:
         return {name: p.error for name, p in self.workers.items() if p.error}
@@ -514,14 +574,30 @@ class DeepStreamPipeline:
         """
         if self._loop is None or not self._loop.is_running():
             return False
+        if not self.enabled:
+            # Detection disabled: the pipeline is being torn down (or sits in a
+            # brief PAUSED window if the disable raced a rebuild) — silence is
+            # expected, don't flag cameras or self-heal.
+            return True
         now = time.time()
-        for proxy in self.workers.values():
-            stalled = now - proxy.last_frame_at
-            if stalled > _STALL_TIMEOUT_S:
+        stalls = {name: now - p.last_frame_at for name, p in self.workers.items()}
+        for name, proxy in self.workers.items():
+            if stalls[name] > _STALL_TIMEOUT_S:
                 # Don't clobber a hard GStreamer error already recorded on the bus.
                 if not proxy.error or proxy.error.startswith("no frames"):
-                    proxy.error = (f"no frames for {int(stalled)}s "
+                    proxy.error = (f"no frames for {int(stalls[name])}s "
                                    "(camera/RTSP stalled)")
+        # Self-heal: EVERY camera silent at once is a pipeline-level fault the
+        # bus never reported (stale RTSP sessions, stuck muxer) — the supervisor
+        # would otherwise wait forever. Quit the loop so it rebuilds with fresh
+        # RTSP connections. A single stalled camera stays flagged only:
+        # rebuilding both streams won't revive a dead dome.
+        if self.workers and all(s > _STALL_REBUILD_S for s in stalls.values()):
+            self._log.error(
+                "DeepStream watchdog: all cameras stalled > %.0fs — rebuilding pipeline",
+                _STALL_REBUILD_S)
+            self._quit_loop(f"all cameras stalled > {int(_STALL_REBUILD_S)}s")
+            return False
         return True
 
     def _dewarper_config_for(self, cam: CameraConfig, w: int, h: int) -> Optional[str]:

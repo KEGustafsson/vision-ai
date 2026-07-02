@@ -36,6 +36,7 @@ export interface PluginConfig {
   mobPersistFrames: number;
   underwaySogMs: number; // SOG above which we consider "underway"
   trackTimeoutS: number; // age out a visual track after this idle time
+  blipHoldS: number; // keep drawing a synthetic AIS blip this long after last detection
   eventMaxAgeS: number; // reject detection events whose timestamp is older than this (replay/buffer guard); 0 => off
   processIntervalMs: number; // cadence of the fusion/CPA/notify/publish cycle
 }
@@ -69,6 +70,7 @@ export const DEFAULT_CONFIG: PluginConfig = {
   mobPersistFrames: 3,
   underwaySogMs: 1.0,
   trackTimeoutS: 5,
+  blipHoldS: 15,
   eventMaxAgeS: 10,
   processIntervalMs: 1000,
 };
@@ -217,6 +219,13 @@ export function schema(): object {
       mobPersistFrames: { type: 'number', title: 'MOB persistence (frames)', default: 3 },
       underwaySogMs: { type: 'number', title: 'Underway SOG threshold (m/s)', default: 1.0 },
       trackTimeoutS: { type: 'number', title: 'Track age-out timeout (s)', default: 5 },
+      blipHoldS: {
+        type: 'number',
+        title: 'Chart blip hold (s)',
+        description: 'Keep drawing a synthetic AIS blip this long after its track was last detected, so brief detection gaps (waves, occlusion) don’t blink the contact off the chart and strip its name label. Real AIS reports every 10–30 s, so a held blip with a slightly stale position is in character for a chartplotter.',
+        default: 15,
+        minimum: 1,
+      },
       eventMaxAgeS: {
         type: 'number',
         title: 'Detection event max age (s)',
@@ -281,6 +290,7 @@ export function withDefaults(partial: Partial<PluginConfig> | undefined): Plugin
   cfg.containerUrl = validContainerUrl(cfg.containerUrl);
   cfg.processIntervalMs = clampMin(cfg.processIntervalMs, 200, DEFAULT_CONFIG.processIntervalMs);
   cfg.trackTimeoutS = clampMin(cfg.trackTimeoutS, 0.1, DEFAULT_CONFIG.trackTimeoutS);
+  cfg.blipHoldS = clampMin(cfg.blipHoldS, 1, DEFAULT_CONFIG.blipHoldS);
   cfg.collisionCpaM = clampMin(cfg.collisionCpaM, 0, DEFAULT_CONFIG.collisionCpaM);
   cfg.darkTargetRangeM = clampMin(cfg.darkTargetRangeM, 0, DEFAULT_CONFIG.darkTargetRangeM);
   cfg.aisMaxAgeS = clampMin(cfg.aisMaxAgeS, 0, DEFAULT_CONFIG.aisMaxAgeS);

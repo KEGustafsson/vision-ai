@@ -6,6 +6,9 @@ import { EnrichedTarget } from '../src/types';
 
 class FakeApp implements ServerApp {
   deltas: Delta[] = [];
+  deleted: string[] = []; // contexts removed via the server's deleteContext hooks
+  signalk = { deleteContext: (key: string) => { this.deleted.push(key); } };
+  deltaCache = { deleteContext: (_key: string) => {} };
   handleMessage(_id: string, delta: Delta): void { this.deltas.push(delta); }
   getSelfPath(): any { return null; }
   getPath(): any { return null; }
@@ -50,12 +53,15 @@ const nameOf = (vals: Array<{ path: string; value: unknown }>): unknown =>
   (vals.find((v) => v.path === '')?.value as { name?: unknown } | undefined)?.name;
 
 describe('blipUrn', () => {
-  it('produces a spec-valid v4-format SignalK UUID urn, stable per camera/track', () => {
-    const re = /^urn:mrn:signalk:uuid:[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-4[0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$/;
-    expect(blipUrn('forward', 1)).toMatch(re);
+  it('produces a readable, deterministic context token per camera/track', () => {
+    // Deliberate spec deviation: a readable token in the uuid slot keeps a
+    // fully-retracted shell identifiable as ours (contexts cannot be deleted).
+    expect(blipUrn('forward', 1)).toBe('urn:mrn:signalk:uuid:VIS-forward-1');
     expect(blipUrn('forward', 1)).toBe(blipUrn('forward', 1)); // deterministic
     expect(blipUrn('forward', 1)).not.toBe(blipUrn('forward', 2));
     expect(blipUrn('forward', 1)).not.toBe(blipUrn('aft', 1));
+    // Free-form camera names are sanitized so they can't corrupt the context.
+    expect(blipUrn('bow cam.2', 7)).toBe('urn:mrn:signalk:uuid:VIS-bow_cam_2-7');
   });
 });
 
@@ -80,7 +86,7 @@ describe('Publisher', () => {
 
     const vals = app.valuesFor(VIS1);
     expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
-    expect(nameOf(vals)).toBe('VIS-vessel-1');
+    expect(nameOf(vals)).toBe('VIS-forward-1');
     // No vision.targets.* data tree on the own context anymore.
     expect(app.valuesFor('vessels.self')).toHaveLength(0);
   });
@@ -104,7 +110,7 @@ describe('Publisher', () => {
     // position + name are always real; the kinematics are emitted as explicit
     // null so a chartplotter clears any previously published vector.
     expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
-    expect(nameOf(vals)).toBe('VIS-vessel-1');
+    expect(nameOf(vals)).toBe('VIS-forward-1');
     expect(vals.find((v) => v.path === 'navigation.speedOverGround')!.value).toBeNull();
     expect(vals.find((v) => v.path === 'navigation.courseOverGroundTrue')!.value).toBeNull();
     expect(vals.find((v) => v.path === 'navigation.closestApproach')!.value).toBeNull();
@@ -146,7 +152,7 @@ describe('Publisher', () => {
     expect(app.blipContexts()).toHaveLength(0);
   });
 
-  it('ages out a departed blip by nulling every leaf', () => {
+  it('ages out a departed blip by nulling every data leaf', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', cfg);
     pub.publishTargets([tgt(1, { sog: 3, cog: 1, cpa: 40, tcpa: 90 })]);
     app.deltas = [];
@@ -158,17 +164,21 @@ describe('Publisher', () => {
       'navigation.courseOverGroundTrue', 'navigation.closestApproach']) {
       expect(vals.find((v) => v.path === path)!.value).toBeNull();
     }
+    // name is nulled too — a retracted shell carries no data and no name; its
+    // readable context token is what keeps it identifiable, and a revived
+    // track republishes the (context-derived) name every live cycle.
     expect(nameOf(vals)).toBeNull();
   });
 
-  it('draws only actively-detected vessels (prunes stale tracks)', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg); // activeMs = processIntervalMs*2
+  it('draws recently-detected vessels, holding through gaps up to blipHoldS', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg); // activeMs = blipHoldS (15 s)
     const now = Date.now();
     pub.publishTargets([
       tgt(1, { lastSeen: now }),               // active → drawn
-      tgt(2, { lastSeen: now - 10_000 }),      // stale (still retained for CPA) → not drawn
+      tgt(2, { lastSeen: now - 10_000 }),      // detection gap < hold → still drawn
+      tgt(3, { lastSeen: now - 20_000 }),      // beyond hold → not drawn
     ]);
-    expect(app.blipContexts()).toEqual([ctx('forward', 1)]);
+    expect(app.blipContexts().sort()).toEqual([ctx('forward', 1), ctx('forward', 2)].sort());
   });
 
   it('prunes a vessel once its detection stops', () => {
@@ -176,11 +186,70 @@ describe('Publisher', () => {
     const now = Date.now();
     pub.publishTargets([tgt(1, { lastSeen: now })]);
     app.deltas = [];
-    // Same track still retained in the map, but no longer actively detected.
-    pub.publishTargets([tgt(1, { lastSeen: now - 10_000 })]);
+    // Same track still retained in the map, but not detected for > blipHoldS.
+    pub.publishTargets([tgt(1, { lastSeen: now - 20_000 })]);
     const vals = app.valuesFor(VIS1);
     expect(vals.find((v) => v.path === 'navigation.position')!.value).toBeNull();
-    expect(nameOf(vals)).toBeNull();
+    expect(nameOf(vals)).toBeNull(); // fully nulled; context stays readable
+  });
+
+  it('brings the name back when data resumes after a full retraction', () => {
+    // INVARIANT: data is never published over a nulled blip without its name.
+    // Every live cycle carries name + data in the same update, so a revived
+    // track re-names its vessel in the very delta that resumes its data.
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    const now = Date.now();
+    pub.publishTargets([tgt(1, { lastSeen: now })]);
+    pub.publishTargets([tgt(1, { lastSeen: now - 20_000 })]); // gone → all null
+    app.deltas = [];
+    pub.publishTargets([tgt(1, { lastSeen: Date.now() })]); // track revives
+    const vals = app.valuesFor(VIS1);
+    expect(nameOf(vals)).toBe('VIS-forward-1');
+    expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
+    // name and position arrive in the SAME update — no window where a client
+    // can see data on a nameless vessel.
+    const revival = app.deltas.find((d) => d.context === VIS1)!;
+    const paths = revival.updates[0].values!.map((v) => v.path);
+    expect(paths).toContain('');
+    expect(paths).toContain('navigation.position');
+  });
+
+  it('deletes a retracted blip context one cycle after nulling it', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    const now = Date.now();
+    pub.publishTargets([tgt(1, { lastSeen: now })]);
+    pub.publishTargets([]); // retraction cycle: all-null delta, no delete yet
+    expect(app.deleted).toEqual([]);
+    pub.publishTargets([]); // next cycle: emptied shell removed from the model
+    expect(app.deleted).toEqual([VIS1]);
+  });
+
+  it('does not delete a context whose track revives before the deferred delete', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    const now = Date.now();
+    pub.publishTargets([tgt(1, { lastSeen: now })]);
+    pub.publishTargets([]); // retracted, delete pending
+    pub.publishTargets([tgt(1, { lastSeen: Date.now() })]); // revived in time
+    expect(app.deleted).toEqual([]);
+  });
+
+  it('deletes all blip contexts on reset', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1)]);
+    pub.reset();
+    expect(app.deleted).toEqual([VIS1]);
+  });
+
+  it('survives a server without the deleteContext internals', () => {
+    // The hooks are undocumented server internals; if a future signalk-server
+    // renames them the shell must just linger for the prune sweep, not crash.
+    (app as any).signalk = undefined;
+    (app as any).deltaCache = undefined;
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1)]);
+    pub.publishTargets([]);
+    expect(() => pub.publishTargets([])).not.toThrow();
+    expect(() => pub.reset()).not.toThrow();
   });
 
   it('caps blips to maxTargets, keeping the closest', () => {
