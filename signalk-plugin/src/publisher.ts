@@ -3,57 +3,55 @@
 // per georeferenced target. A blip is never published without a real position,
 // and departed blips are fully retracted.
 
-import { createHash } from 'crypto';
 import { PluginConfig } from './config';
 import { ServerApp } from './skapp';
 import { EnrichedTarget } from './types';
 
-// The SignalK spec constrains vessels.* keys to `urn:mrn:imo:mmsi:<9 digits>`
-// or `urn:mrn:signalk:uuid:<UUID v4>` (version-4/variant bits enforced by the
-// schema regex), so a readable token like "vision-forward-3" is rejected by
-// strict consumers. Hash the camera/track key into an RFC-4122-shaped UUID
-// instead: deterministic, so the same track always maps to the same context
-// and a retraction always finds the blip it published.
+// The blip identity token: readable, deterministic, unique (track IDs count
+// per camera). Doubles as the vessel display name, so context and name can
+// never diverge. Camera names are free-form config strings; sanitize the
+// segment so a dot/space can't corrupt the context key.
+export function blipName(camera: string, trackId: number | string): string {
+  return `VIS-${String(camera).replace(/[^a-zA-Z0-9]/g, '_')}-${trackId}`;
+}
+
+// DELIBERATE spec deviation (owner's call): the SignalK spec wants vessels.*
+// keys to be `urn:mrn:imo:mmsi:<9 digits>` or `urn:mrn:signalk:uuid:<UUID v4>`,
+// but an opaque hashed UUID makes every retracted blip an anonymous shell in
+// vessel lists — a context can never be deleted, so after full retraction the
+// uuid is all a client has left to show. A readable token in the uuid slot
+// keeps every shell identifiable as ours, is deterministic (the same
+// camera/track always maps back to the same context, so a retraction always
+// finds the blip it published and a revived track gets its name back), and is
+// accepted end-to-end by signalk-server + Freeboard (ran in production before
+// and verified live). Strict spec-validating consumers may reject these
+// contexts; readability won.
 export function blipUrn(camera: string, trackId: number | string): string {
-  // sha256 (not sha1/md5) purely to stay off SAST weak-hash lists; this is
-  // non-cryptographic ID derivation and only the first 16 bytes are used.
-  const h = createHash('sha256').update(`signalk-vision-ai:${camera}:${trackId}`).digest();
-  h[6] = (h[6] & 0x0f) | 0x40; // version nibble = 4 (required by the spec regex)
-  h[8] = (h[8] & 0x3f) | 0x80; // RFC 4122 variant
-  const x = h.subarray(0, 16).toString('hex');
-  return (
-    'urn:mrn:signalk:uuid:' +
-    `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20, 32)}`
-  );
+  return `urn:mrn:signalk:uuid:${blipName(camera, trackId)}`;
 }
 
 export class Publisher {
   private metaSent = new Set<string>();
   private publishedBlips = new Set<string>();
 
-  // Every DATA leaf a synthetic vessel carries, built value-or-null in one
-  // place so a live blip, a lost-estimate blip and a full retraction always
-  // cover the same set and no kinematics linger stale. `name` is identity, not
-  // data: it is set on every live cycle and NEVER nulled, exactly like a real
-  // AIS contact that stops transmitting — it keeps its name at its last
-  // position until the chartplotter ages it out (Freeboard ignores
-  // position:null and removes targets only via aisMaxAge, default 9 min).
-  // Nulling the name instead leaves anonymous uuid shells in vessel lists (a
-  // SignalK context can never be deleted), which reads as a nameless vessel
-  // receiving data whenever its track revives. Blip flicker that once made
-  // name-kept ghosts litter the chart is gone since blipHoldS. `name` rides
-  // the empty path (root merge) per the SignalK delta convention for
-  // vessel-root attributes, so vessel.name stays the plain string consumers
-  // expect in the full model. CPA/TCPA go in the spec's
-  // navigation.closestApproach container ({ distance, timeTo }) so
-  // chartplotters/MFDs pick them up natively.
+  // Every leaf a synthetic vessel carries, built value-or-null in one place so
+  // a live blip, a lost-estimate blip and a full retraction always cover the
+  // same set and nothing lingers stale — including `name`: a fully-retracted
+  // blip carries no data and no name, just its readable context (blipUrn),
+  // which is what keeps the shell identifiable (a SignalK context can never be
+  // deleted; Freeboard ignores position:null and removes targets only via
+  // aisMaxAge). When the track revives, every live cycle republishes the name
+  // (derived from the same camera/track token as the context), so the name
+  // becomes visible again by itself. `name` rides the empty path (root merge)
+  // per the SignalK delta convention for vessel-root attributes, so
+  // vessel.name stays the plain string consumers expect in the full model.
+  // CPA/TCPA go in the spec's navigation.closestApproach container
+  // ({ distance, timeTo }) so chartplotters/MFDs pick them up natively.
   private static blipValues(t: EnrichedTarget | null): Array<{ path: string; value: unknown }> {
     const hasCpa = t !== null && t.cpa !== null && t.tcpa !== null;
     return [
       { path: 'navigation.position', value: t ? t.position : null },
-      // Track IDs count independently per camera, so the camera (not the class
-      // label) is what makes the display name unique on the chart.
-      ...(t ? [{ path: '', value: { name: `VIS-${t.camera}-${t.track_id}` } }] : []),
+      { path: '', value: { name: t ? blipName(t.camera, t.track_id as number) : null } },
       { path: 'navigation.speedOverGround', value: t ? t.sog : null },
       { path: 'navigation.courseOverGroundTrue', value: t ? t.cog : null },
       {

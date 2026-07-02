@@ -50,12 +50,15 @@ const nameOf = (vals: Array<{ path: string; value: unknown }>): unknown =>
   (vals.find((v) => v.path === '')?.value as { name?: unknown } | undefined)?.name;
 
 describe('blipUrn', () => {
-  it('produces a spec-valid v4-format SignalK UUID urn, stable per camera/track', () => {
-    const re = /^urn:mrn:signalk:uuid:[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-4[0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$/;
-    expect(blipUrn('forward', 1)).toMatch(re);
+  it('produces a readable, deterministic context token per camera/track', () => {
+    // Deliberate spec deviation: a readable token in the uuid slot keeps a
+    // fully-retracted shell identifiable as ours (contexts cannot be deleted).
+    expect(blipUrn('forward', 1)).toBe('urn:mrn:signalk:uuid:VIS-forward-1');
     expect(blipUrn('forward', 1)).toBe(blipUrn('forward', 1)); // deterministic
     expect(blipUrn('forward', 1)).not.toBe(blipUrn('forward', 2));
     expect(blipUrn('forward', 1)).not.toBe(blipUrn('aft', 1));
+    // Free-form camera names are sanitized so they can't corrupt the context.
+    expect(blipUrn('bow cam.2', 7)).toBe('urn:mrn:signalk:uuid:VIS-bow_cam_2-7');
   });
 });
 
@@ -158,10 +161,10 @@ describe('Publisher', () => {
       'navigation.courseOverGroundTrue', 'navigation.closestApproach']) {
       expect(vals.find((v) => v.path === path)!.value).toBeNull();
     }
-    // name is identity, never nulled: like a real AIS contact that stops
-    // transmitting, the blip keeps its name at its last position until the
-    // chartplotter ages it out. The retraction delta omits the name entry.
-    expect(nameOf(vals)).toBeUndefined();
+    // name is nulled too — a retracted shell carries no data and no name; its
+    // readable context token is what keeps it identifiable, and a revived
+    // track republishes the (context-derived) name every live cycle.
+    expect(nameOf(vals)).toBeNull();
   });
 
   it('draws recently-detected vessels, holding through gaps up to blipHoldS', () => {
@@ -184,7 +187,7 @@ describe('Publisher', () => {
     pub.publishTargets([tgt(1, { lastSeen: now - 20_000 })]);
     const vals = app.valuesFor(VIS1);
     expect(vals.find((v) => v.path === 'navigation.position')!.value).toBeNull();
-    expect(nameOf(vals)).toBeUndefined(); // name kept, only data nulled
+    expect(nameOf(vals)).toBeNull(); // fully nulled; context stays readable
   });
 
   it('caps blips to maxTargets, keeping the closest', () => {
@@ -204,7 +207,7 @@ describe('Publisher', () => {
     app.deltas = [];
     pub.reset();
     expect(app.valuesFor(VIS1).find((v) => v.path === 'navigation.position')!.value).toBeNull();
-    expect(nameOf(app.valuesFor(VIS1))).toBeUndefined(); // name kept on reset
+    expect(nameOf(app.valuesFor(VIS1))).toBeNull();
   });
 
   it('never writes a synthetic vessel that lacks a real position', () => {
