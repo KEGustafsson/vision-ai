@@ -43,7 +43,7 @@ describe('aisFusion', () => {
     const pos = destinationPoint(own.position, deg2rad(90), 600);
     const vessels = {
       // Our own synthetic blip: UUID context, position + name, no MMSI/class.
-      'urn:mrn:signalk:uuid:vision-forward-1': { navigation: { position: { value: pos } }, name: { value: 'VIS-vessel-1' } },
+      'urn:mrn:signalk:uuid:0b0e91f2-8f3a-4c6d-9a1e-1c2d3e4f5a6b': { navigation: { position: { value: pos } }, name: 'VIS-vessel-1' },
       // Real MMSI context but no AIS class — still rejected.
       'urn:mrn:imo:mmsi:999999999': { navigation: { position: { value: pos } } },
       // 'mmsi:' prefix but a malformed (non-9-digit) identity — rejected.

@@ -3,26 +3,53 @@
 // per georeferenced target. A blip is never published without a real position,
 // and departed blips are fully retracted.
 
+import { createHash } from 'crypto';
 import { PluginConfig } from './config';
 import { ServerApp } from './skapp';
 import { EnrichedTarget } from './types';
+
+// The SignalK spec constrains vessels.* keys to `urn:mrn:imo:mmsi:<9 digits>`
+// or `urn:mrn:signalk:uuid:<UUID v4>` (version-4/variant bits enforced by the
+// schema regex), so a readable token like "vision-forward-3" is rejected by
+// strict consumers. Hash the camera/track key into an RFC-4122-shaped UUID
+// instead: deterministic, so the same track always maps to the same context
+// and a retraction always finds the blip it published.
+export function blipUrn(camera: string, trackId: number | string): string {
+  const h = createHash('sha1').update(`signalk-vision-ai:${camera}:${trackId}`).digest();
+  h[6] = (h[6] & 0x0f) | 0x40; // version nibble = 4 (required by the spec regex)
+  h[8] = (h[8] & 0x3f) | 0x80; // RFC 4122 variant
+  const x = h.subarray(0, 16).toString('hex');
+  return (
+    'urn:mrn:signalk:uuid:' +
+    `${x.slice(0, 8)}-${x.slice(8, 12)}-${x.slice(12, 16)}-${x.slice(16, 20)}-${x.slice(20, 32)}`
+  );
+}
 
 export class Publisher {
   private metaSent = new Set<string>();
   private publishedBlips = new Set<string>();
 
-  // Every leaf a synthetic vessel can carry; used to fully retract a departed
-  // blip so none ever lingers without a real location. position + name identify
-  // the contact; the kinematics are published value-or-null each cycle so they
-  // never go stale on a live blip.
-  private static readonly BLIP_LEAVES = [
-    'navigation.position',
-    'name',
-    'navigation.speedOverGround',
-    'navigation.courseOverGroundTrue',
-    'navigation.cpa',
-    'navigation.tcpa',
-  ];
+  // Every leaf a synthetic vessel carries, built value-or-null in one place so a
+  // live blip, a lost-estimate blip and a full retraction always cover the same
+  // set and nothing lingers stale. position + name identify the contact; the
+  // kinematics are value-or-null each cycle. `name` rides the empty path (root
+  // merge) per the SignalK delta convention for vessel-root attributes, so
+  // vessel.name stays the plain string consumers expect in the full model.
+  // CPA/TCPA go in the spec's navigation.closestApproach container
+  // ({ distance, timeTo }) so chartplotters/MFDs pick them up natively.
+  private static blipValues(t: EnrichedTarget | null): Array<{ path: string; value: unknown }> {
+    const hasCpa = t !== null && t.cpa !== null && t.tcpa !== null;
+    return [
+      { path: 'navigation.position', value: t ? t.position : null },
+      { path: '', value: { name: t ? `VIS-${t.label}-${t.track_id}` : null } },
+      { path: 'navigation.speedOverGround', value: t ? t.sog : null },
+      { path: 'navigation.courseOverGroundTrue', value: t ? t.cog : null },
+      {
+        path: 'navigation.closestApproach',
+        value: hasCpa ? { distance: t.cpa, timeTo: t.tcpa } : null,
+      },
+    ];
+  }
 
   constructor(
     private app: ServerApp,
@@ -92,7 +119,10 @@ export class Publisher {
       }
     }
     for (const [cam, count] of Object.entries(stats.perCameraCounts ?? {})) {
-      values.push({ path: `vision.${cam}.targetCount`, value: count });
+      // Camera names are free-form on the wire; a dot/space would corrupt the
+      // SignalK path structure, so sanitize the segment like notification keys.
+      const seg = cam.replace(/[^a-zA-Z0-9]/g, '_');
+      values.push({ path: `vision.${seg}.targetCount`, value: count });
     }
     this.emit(values, meta);
   }
@@ -117,26 +147,18 @@ export class Publisher {
       .sort((a, b) => (a.geometry.range_m ?? Infinity) - (b.geometry.range_m ?? Infinity))
       .slice(0, this.cfg.maxTargets);
     for (const t of eligible) {
-      const uuid = `urn:mrn:signalk:uuid:vision-${t.camera}-${t.track_id}`;
+      const uuid = blipUrn(t.camera, t.track_id as number);
       current.add(uuid);
-      // position + name always identify the contact. The four kinematics are
-      // written value-or-null every cycle: emitting an explicit null when an
-      // estimate is lost clears any previously published value, so a live chart
-      // contact never carries a stale SOG/COG vector or CPA.
-      const values: Array<{ path: string; value: unknown }> = [
-        { path: 'navigation.position', value: t.position },
-        { path: 'name', value: `VIS-${t.label}-${t.track_id}` },
-        { path: 'navigation.speedOverGround', value: t.sog },
-        { path: 'navigation.courseOverGroundTrue', value: t.cog },
-        { path: 'navigation.cpa', value: t.cpa },
-        { path: 'navigation.tcpa', value: t.tcpa },
-      ];
-      this.emitVessel(uuid, ts, values);
+      // position + name always identify the contact. The kinematics are written
+      // value-or-null every cycle: emitting an explicit null when an estimate is
+      // lost clears any previously published value, so a live chart contact
+      // never carries a stale SOG/COG vector or CPA.
+      this.emitVessel(uuid, ts, Publisher.blipValues(t));
     }
     // Age out departed blips: null every leaf so none lingers without a location.
     for (const uuid of this.publishedBlips) {
       if (current.has(uuid)) continue;
-      this.emitVessel(uuid, ts, Publisher.BLIP_LEAVES.map((path) => ({ path, value: null })));
+      this.emitVessel(uuid, ts, Publisher.blipValues(null));
     }
     this.publishedBlips = current;
   }
@@ -153,7 +175,7 @@ export class Publisher {
   reset(): void {
     const ts = new Date().toISOString();
     for (const uuid of this.publishedBlips) {
-      this.emitVessel(uuid, ts, Publisher.BLIP_LEAVES.map((path) => ({ path, value: null })));
+      this.emitVessel(uuid, ts, Publisher.blipValues(null));
     }
     this.metaSent.clear();
     this.publishedBlips.clear();

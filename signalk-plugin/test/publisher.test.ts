@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Publisher } from '../src/publisher';
+import { Publisher, blipUrn } from '../src/publisher';
 import { withDefaults } from '../src/config';
 import { Delta, ServerApp } from '../src/skapp';
 import { EnrichedTarget } from '../src/types';
@@ -24,7 +24,7 @@ class FakeApp implements ServerApp {
   blipContexts(): string[] {
     return [...new Set(this.deltas
       .map((d) => d.context)
-      .filter((c) => c.startsWith('vessels.urn:mrn:signalk:uuid:vision-')))];
+      .filter((c) => c !== 'vessels.self' && c.startsWith('vessels.urn:mrn:signalk:uuid:')))];
   }
 }
 
@@ -42,7 +42,22 @@ function tgt(id: number, partial: Partial<EnrichedTarget> = {}): EnrichedTarget 
   };
 }
 
-const VIS1 = 'vessels.urn:mrn:signalk:uuid:vision-forward-1';
+const ctx = (camera: string, id: number) => `vessels.${blipUrn(camera, id)}`;
+const VIS1 = ctx('forward', 1);
+// The name rides the empty path (root merge) per the SignalK convention for
+// vessel-root attributes, so match on the object value.
+const nameOf = (vals: Array<{ path: string; value: unknown }>): unknown =>
+  (vals.find((v) => v.path === '')?.value as { name?: unknown } | undefined)?.name;
+
+describe('blipUrn', () => {
+  it('produces a spec-valid v4-format SignalK UUID urn, stable per camera/track', () => {
+    const re = /^urn:mrn:signalk:uuid:[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-4[0-9A-Fa-f]{3}-[89ABab][0-9A-Fa-f]{3}-[0-9A-Fa-f]{12}$/;
+    expect(blipUrn('forward', 1)).toMatch(re);
+    expect(blipUrn('forward', 1)).toBe(blipUrn('forward', 1)); // deterministic
+    expect(blipUrn('forward', 1)).not.toBe(blipUrn('forward', 2));
+    expect(blipUrn('forward', 1)).not.toBe(blipUrn('aft', 1));
+  });
+});
 
 describe('Publisher', () => {
   let app: FakeApp;
@@ -65,34 +80,34 @@ describe('Publisher', () => {
 
     const vals = app.valuesFor(VIS1);
     expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
-    expect(vals.find((v) => v.path === 'name')!.value).toBe('VIS-vessel-1');
+    expect(nameOf(vals)).toBe('VIS-vessel-1');
     // No vision.targets.* data tree on the own context anymore.
     expect(app.valuesFor('vessels.self')).toHaveLength(0);
   });
 
-  it('enriches the blip with SOG / COG / CPA when available', () => {
+  it('enriches the blip with SOG / COG / closestApproach when available', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', cfg);
     pub.publishTargets([tgt(1, { sog: 3.2, cog: 1.1, cpa: 50, tcpa: 120 })]);
 
     const vals = app.valuesFor(VIS1);
     expect(vals.find((v) => v.path === 'navigation.speedOverGround')!.value).toBe(3.2);
     expect(vals.find((v) => v.path === 'navigation.courseOverGroundTrue')!.value).toBe(1.1);
-    expect(vals.find((v) => v.path === 'navigation.cpa')!.value).toBe(50);
-    expect(vals.find((v) => v.path === 'navigation.tcpa')!.value).toBe(120);
+    // CPA/TCPA go in the spec's navigation.closestApproach container.
+    expect(vals.find((v) => v.path === 'navigation.closestApproach')!.value)
+      .toEqual({ distance: 50, timeTo: 120 });
   });
 
   it('writes kinematics as null when unavailable so stale values never linger', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', cfg);
     pub.publishTargets([tgt(1)]); // sog/cog/cpa all null
     const vals = app.valuesFor(VIS1);
-    // position + name are always real; the four kinematics are emitted as
-    // explicit null so a chartplotter clears any previously published vector.
+    // position + name are always real; the kinematics are emitted as explicit
+    // null so a chartplotter clears any previously published vector.
     expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
-    expect(vals.find((v) => v.path === 'name')!.value).toBe('VIS-vessel-1');
+    expect(nameOf(vals)).toBe('VIS-vessel-1');
     expect(vals.find((v) => v.path === 'navigation.speedOverGround')!.value).toBeNull();
     expect(vals.find((v) => v.path === 'navigation.courseOverGroundTrue')!.value).toBeNull();
-    expect(vals.find((v) => v.path === 'navigation.cpa')!.value).toBeNull();
-    expect(vals.find((v) => v.path === 'navigation.tcpa')!.value).toBeNull();
+    expect(vals.find((v) => v.path === 'navigation.closestApproach')!.value).toBeNull();
   });
 
   it('clears a stale kinematic when a live blip loses its estimate', () => {
@@ -105,8 +120,13 @@ describe('Publisher', () => {
     expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
     expect(vals.find((v) => v.path === 'navigation.speedOverGround')!.value).toBeNull();
     expect(vals.find((v) => v.path === 'navigation.courseOverGroundTrue')!.value).toBeNull();
-    expect(vals.find((v) => v.path === 'navigation.cpa')!.value).toBeNull();
-    expect(vals.find((v) => v.path === 'navigation.tcpa')!.value).toBeNull();
+    expect(vals.find((v) => v.path === 'navigation.closestApproach')!.value).toBeNull();
+  });
+
+  it('publishes half a CPA pair as unresolved (never a partial closestApproach)', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1, { cpa: 50, tcpa: null })]);
+    expect(app.valuesFor(VIS1).find((v) => v.path === 'navigation.closestApproach')!.value).toBeNull();
   });
 
   it('publishes fusion summary counts', () => {
@@ -131,10 +151,11 @@ describe('Publisher', () => {
 
     const vals = app.valuesFor(VIS1);
     // No synthetic vessel lingers carrying any data without a location.
-    for (const path of ['navigation.position', 'name', 'navigation.speedOverGround',
-      'navigation.courseOverGroundTrue', 'navigation.cpa', 'navigation.tcpa']) {
+    for (const path of ['navigation.position', 'navigation.speedOverGround',
+      'navigation.courseOverGroundTrue', 'navigation.closestApproach']) {
       expect(vals.find((v) => v.path === path)!.value).toBeNull();
     }
+    expect(nameOf(vals)).toBeNull();
   });
 
   it('draws only actively-detected vessels (prunes stale tracks)', () => {
@@ -144,7 +165,7 @@ describe('Publisher', () => {
       tgt(1, { lastSeen: now }),               // active → drawn
       tgt(2, { lastSeen: now - 10_000 }),      // stale (still retained for CPA) → not drawn
     ]);
-    expect(app.blipContexts()).toEqual(['vessels.urn:mrn:signalk:uuid:vision-forward-1']);
+    expect(app.blipContexts()).toEqual([ctx('forward', 1)]);
   });
 
   it('prunes a vessel once its detection stops', () => {
@@ -156,7 +177,7 @@ describe('Publisher', () => {
     pub.publishTargets([tgt(1, { lastSeen: now - 10_000 })]);
     const vals = app.valuesFor(VIS1);
     expect(vals.find((v) => v.path === 'navigation.position')!.value).toBeNull();
-    expect(vals.find((v) => v.path === 'name')!.value).toBeNull();
+    expect(nameOf(vals)).toBeNull();
   });
 
   it('caps blips to maxTargets, keeping the closest', () => {
@@ -166,11 +187,8 @@ describe('Publisher', () => {
     pub.publishTargets([near(1, 300), near(2, 100), near(3, 200)]);
 
     // Only the two closest (ids 2 @100m and 3 @200m) get a vessel context.
-    expect(app.blipContexts().sort()).toEqual([
-      'vessels.urn:mrn:signalk:uuid:vision-forward-2',
-      'vessels.urn:mrn:signalk:uuid:vision-forward-3',
-    ]);
-    expect(app.valuesFor('vessels.urn:mrn:signalk:uuid:vision-forward-1')).toHaveLength(0);
+    expect(app.blipContexts().sort()).toEqual([ctx('forward', 2), ctx('forward', 3)].sort());
+    expect(app.valuesFor(ctx('forward', 1))).toHaveLength(0);
   });
 
   it('retracts all blips on reset', () => {
@@ -179,7 +197,7 @@ describe('Publisher', () => {
     app.deltas = [];
     pub.reset();
     expect(app.valuesFor(VIS1).find((v) => v.path === 'navigation.position')!.value).toBeNull();
-    expect(app.valuesFor(VIS1).find((v) => v.path === 'name')!.value).toBeNull();
+    expect(nameOf(app.valuesFor(VIS1))).toBeNull();
   });
 
   it('never writes a synthetic vessel that lacks a real position', () => {
@@ -192,7 +210,7 @@ describe('Publisher', () => {
     // Every non-null navigation.position ever written to a vision blip context
     // must carry a real lat/lon — a blip is never created location-less.
     for (const d of app.deltas) {
-      if (!d.context.startsWith('vessels.urn:mrn:signalk:uuid:vision-')) continue;
+      if (d.context === 'vessels.self' || !d.context.startsWith('vessels.urn:mrn:signalk:uuid:')) continue;
       for (const u of d.updates) {
         for (const v of u.values || []) {
           if (v.path !== 'navigation.position' || v.value === null) continue;
@@ -202,6 +220,6 @@ describe('Publisher', () => {
       }
     }
     // Target 2 (never positioned) gets no context at all.
-    expect(app.valuesFor('vessels.urn:mrn:signalk:uuid:vision-forward-2')).toHaveLength(0);
+    expect(app.valuesFor(ctx('forward', 2))).toHaveLength(0);
   });
 });
