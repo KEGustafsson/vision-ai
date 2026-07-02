@@ -80,7 +80,7 @@ describe('Publisher', () => {
 
     const vals = app.valuesFor(VIS1);
     expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
-    expect(nameOf(vals)).toBe('VIS-vessel-1');
+    expect(nameOf(vals)).toBe('VIS-forward-1');
     // No vision.targets.* data tree on the own context anymore.
     expect(app.valuesFor('vessels.self')).toHaveLength(0);
   });
@@ -104,7 +104,7 @@ describe('Publisher', () => {
     // position + name are always real; the kinematics are emitted as explicit
     // null so a chartplotter clears any previously published vector.
     expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
-    expect(nameOf(vals)).toBe('VIS-vessel-1');
+    expect(nameOf(vals)).toBe('VIS-forward-1');
     expect(vals.find((v) => v.path === 'navigation.speedOverGround')!.value).toBeNull();
     expect(vals.find((v) => v.path === 'navigation.courseOverGroundTrue')!.value).toBeNull();
     expect(vals.find((v) => v.path === 'navigation.closestApproach')!.value).toBeNull();

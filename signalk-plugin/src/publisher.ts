@@ -47,7 +47,9 @@ export class Publisher {
     const hasCpa = t !== null && t.cpa !== null && t.tcpa !== null;
     return [
       { path: 'navigation.position', value: t ? t.position : null },
-      ...(t ? [{ path: '', value: { name: `VIS-${t.label}-${t.track_id}` } }] : []),
+      // Track IDs count independently per camera, so the camera (not the class
+      // label) is what makes the display name unique on the chart.
+      ...(t ? [{ path: '', value: { name: `VIS-${t.camera}-${t.track_id}` } }] : []),
       { path: 'navigation.speedOverGround', value: t ? t.sog : null },
       { path: 'navigation.courseOverGroundTrue', value: t ? t.cog : null },
       {
