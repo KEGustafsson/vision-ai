@@ -31,19 +31,23 @@ export class Publisher {
   private metaSent = new Set<string>();
   private publishedBlips = new Set<string>();
 
-  // Every leaf a synthetic vessel carries, built value-or-null in one place so a
-  // live blip, a lost-estimate blip and a full retraction always cover the same
-  // set and nothing lingers stale. position + name identify the contact; the
-  // kinematics are value-or-null each cycle. `name` rides the empty path (root
-  // merge) per the SignalK delta convention for vessel-root attributes, so
-  // vessel.name stays the plain string consumers expect in the full model.
-  // CPA/TCPA go in the spec's navigation.closestApproach container
+  // Every data leaf a synthetic vessel carries, built value-or-null in one
+  // place so a live blip, a lost-estimate blip and a full retraction always
+  // cover the same set and nothing lingers stale. The kinematics are
+  // value-or-null each cycle. `name` is identity, not kinematics: it is set on
+  // live updates but NEVER nulled on retraction — chart removal is
+  // position:null, and clients cache vessel names from REST snapshots, so a
+  // null-name window during a brief track dropout would leave them showing an
+  // anonymous vessel that later resumes kinematics. `name` rides the empty
+  // path (root merge) per the SignalK delta convention for vessel-root
+  // attributes, so vessel.name stays the plain string consumers expect in the
+  // full model. CPA/TCPA go in the spec's navigation.closestApproach container
   // ({ distance, timeTo }) so chartplotters/MFDs pick them up natively.
   private static blipValues(t: EnrichedTarget | null): Array<{ path: string; value: unknown }> {
     const hasCpa = t !== null && t.cpa !== null && t.tcpa !== null;
     return [
       { path: 'navigation.position', value: t ? t.position : null },
-      { path: '', value: { name: t ? `VIS-${t.label}-${t.track_id}` : null } },
+      ...(t ? [{ path: '', value: { name: `VIS-${t.label}-${t.track_id}` } }] : []),
       { path: 'navigation.speedOverGround', value: t ? t.sog : null },
       { path: 'navigation.courseOverGroundTrue', value: t ? t.cog : null },
       {
