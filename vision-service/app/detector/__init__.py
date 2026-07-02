@@ -36,14 +36,16 @@ def create_detector(settings: Settings) -> Detector:
                                  confidence=floor, imgsz=det.imgsz,
                                  tracker_cfg=det.tracker, backend_name=backend,
                                  batch_cameras=det.batch_cameras,
-                                 batch_wait_ms=det.batch_wait_ms)
+                                 batch_wait_ms=det.batch_wait_ms,
+                                 model_name=det.model)
 
     if backend == "tensorrt":
         from .yolo_trt import YoloTrtDetector
         return YoloTrtDetector(_resolve(det.model_engine), confidence=floor,
                                imgsz=det.imgsz, tracker_cfg=det.tracker,
                                batch_cameras=det.batch_cameras,
-                               batch_wait_ms=det.batch_wait_ms)
+                               batch_wait_ms=det.batch_wait_ms,
+                               model_name=det.model)
 
     raise ValueError(f"unknown detector backend: {backend}")
 

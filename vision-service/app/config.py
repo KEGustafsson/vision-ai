@@ -147,8 +147,12 @@ class DetectorConfig(BaseModel):
     batch_cameras: bool = False
     # How long a camera waits to rendezvous with the other before inferring solo.
     batch_wait_ms: int = 20
-    # DeepStream only: which detection model to run. Exactly ONE model runs at a
-    # time (never both). Selects both the nvinfer config and the class map:
+    # Which detection model is loaded. Exactly ONE model runs at a time (never
+    # both). Selects the class map used to decode raw class ids on EVERY
+    # backend (raw ids collide across models: forward-watch 0 = ship, COCO 0 =
+    # person, so decoding with the wrong table mislabels every detection) and,
+    # on DeepStream, also the nvinfer config. On torch/tensorrt backends this
+    # must match the weights loaded via model_pt/model_engine:
     #   "coco"                -> COCO YOLOv8n, 80 classes (person/vessel/buoy/...)
     #   "forward-watch"       -> forward-watch marine model, 6 classes
     #                            (ship/boat/debris/buoy/kayak/log)

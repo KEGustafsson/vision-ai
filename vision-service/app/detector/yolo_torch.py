@@ -21,7 +21,7 @@ from typing import Dict, List, Optional
 
 from ..camera.base import Frame
 from .base import Detector, RawTrack
-from .classmap import label_for
+from .classmap import label_for_model
 from .tracker import VelocityTracker
 
 
@@ -93,11 +93,18 @@ class YoloTorchDetector(Detector):
     def __init__(self, weights: str, device: str = "cpu", confidence: float = 0.35,
                  imgsz: int = 640, tracker_cfg: str = "bytetrack.yaml",
                  backend_name: str = "torch-cpu", batch_cameras: bool = False,
-                 batch_wait_ms: int = 20, batch_size: int = 2):
+                 batch_wait_ms: int = 20, batch_size: int = 2,
+                 model_name: str = "coco"):
         from ultralytics import YOLO  # imported lazily so mock mode needs no torch
 
         self.backend = backend_name
         self._model = YOLO(weights)
+        # Which class map the weights use ("coco" | "forward-watch" |
+        # "marine-surveillance"). Must match the loaded weights: raw class ids
+        # collide across models (forward-watch 0 = ship, COCO 0 = person), so
+        # decoding with the wrong table mislabels every detection — a "ship"
+        # read as "person" below the horizon becomes a phantom man-overboard.
+        self._model_name = model_name
         self._device = device
         self._conf = confidence
         self._imgsz = imgsz
@@ -194,12 +201,15 @@ class YoloTorchDetector(Detector):
             return out
         active = set()
         for b in boxes:
-            cls = int(b.cls[0])
+            raw_cls = int(b.cls[0])
             conf = float(b.conf[0])
             x1, y1, x2, y2 = (float(v) for v in b.xyxy[0].tolist())
             w, h = x2 - x1, y2 - y1
             tid: Optional[int] = int(b.id[0]) if b.id is not None else None
-            label = label_for(cls)
+            # Decode through the active model's class map (and remap non-COCO raw
+            # ids into their wire-safe synthetic band), same as the DeepStream
+            # pipeline, so `coco_class` on the wire is unambiguous.
+            label, cls = label_for_model(self._model_name, raw_cls)
             vx = vy = 0.0
             age = 0
             disp = tid
