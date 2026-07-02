@@ -31,17 +31,18 @@ export class Publisher {
   private metaSent = new Set<string>();
   private publishedBlips = new Set<string>();
 
-  // Every data leaf a synthetic vessel carries, built value-or-null in one
-  // place so a live blip, a lost-estimate blip and a full retraction always
-  // cover the same set and nothing lingers stale. The kinematics are
-  // value-or-null each cycle. `name` is identity, not kinematics: it is set on
-  // live updates but NEVER nulled on retraction — chart removal is
-  // position:null, and clients cache vessel names from REST snapshots, so a
-  // null-name window during a brief track dropout would leave them showing an
-  // anonymous vessel that later resumes kinematics. `name` rides the empty
-  // path (root merge) per the SignalK delta convention for vessel-root
-  // attributes, so vessel.name stays the plain string consumers expect in the
-  // full model. CPA/TCPA go in the spec's navigation.closestApproach container
+  // Every leaf a synthetic vessel carries, built value-or-null in one place so
+  // a live blip, a lost-estimate blip and a full retraction always cover the
+  // same set and nothing lingers stale — including `name`: chartplotters
+  // (Freeboard) ignore position:null and only remove a target by age
+  // (aisMaxAge, default 9 min), so a retracted blip's marker lingers at its
+  // last position regardless. Nulling the name strips its label so the ghost
+  // draws anonymously (clients fall back to the UUID, which is acceptable).
+  // The brief anonymous window during a track dropout self-heals because the
+  // name is republished every live cycle. `name` rides the empty path (root
+  // merge) per the SignalK delta convention for vessel-root attributes, so
+  // vessel.name stays the plain string consumers expect in the full model.
+  // CPA/TCPA go in the spec's navigation.closestApproach container
   // ({ distance, timeTo }) so chartplotters/MFDs pick them up natively.
   private static blipValues(t: EnrichedTarget | null): Array<{ path: string; value: unknown }> {
     const hasCpa = t !== null && t.cpa !== null && t.tcpa !== null;
@@ -49,7 +50,7 @@ export class Publisher {
       { path: 'navigation.position', value: t ? t.position : null },
       // Track IDs count independently per camera, so the camera (not the class
       // label) is what makes the display name unique on the chart.
-      ...(t ? [{ path: '', value: { name: `VIS-${t.camera}-${t.track_id}` } }] : []),
+      { path: '', value: { name: t ? `VIS-${t.camera}-${t.track_id}` : null } },
       { path: 'navigation.speedOverGround', value: t ? t.sog : null },
       { path: 'navigation.courseOverGroundTrue', value: t ? t.cog : null },
       {
