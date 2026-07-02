@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -161,7 +161,10 @@ class DetectorConfig(BaseModel):
     #                            NO person -> no man-overboard. Train on-box via
     #                            training/train_marine_surveillance.py.
     # See app/detector/classmap.py (MODEL_PGIE_CONFIG) for the registry.
-    model: str = "coco"
+    # Constrained to the known registry keys so a typo fails fast at config
+    # load instead of silently falling back to the COCO class map and
+    # mislabeling every detection at runtime.
+    model: Literal["coco", "forward-watch", "marine-surveillance"] = "coco"
 
 
 class ServerConfig(BaseModel):

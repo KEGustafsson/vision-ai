@@ -127,6 +127,9 @@ describe('Publisher', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', cfg);
     pub.publishTargets([tgt(1, { cpa: 50, tcpa: null })]);
     expect(app.valuesFor(VIS1).find((v) => v.path === 'navigation.closestApproach')!.value).toBeNull();
+    app.deltas = [];
+    pub.publishTargets([tgt(1, { cpa: null, tcpa: 120 })]);
+    expect(app.valuesFor(VIS1).find((v) => v.path === 'navigation.closestApproach')!.value).toBeNull();
   });
 
   it('publishes fusion summary counts', () => {

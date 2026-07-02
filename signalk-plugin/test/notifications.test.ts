@@ -38,7 +38,8 @@ function mobTarget(lastSeen: number, partial: Partial<EnrichedTarget> = {}): Enr
 
 describe('NotificationManager — MOB persistence', () => {
   let app: FakeApp;
-  const cfg = withDefaults({}); // mobPersistFrames: 3
+  // Opt into the hazardous alert explicitly rather than relying on defaults.
+  const cfg = withDefaults({ enableMob: true, mobPersistFrames: 3 });
 
   beforeEach(() => {
     app = new FakeApp();
@@ -50,6 +51,18 @@ describe('NotificationManager — MOB persistence', () => {
     // while several process cycles pass without any new sighting.
     const t = mobTarget(1_000);
     for (const now of [1_100, 2_100, 3_100, 4_100]) n.evaluate([t], new Set(), now);
+    expect(app.valueFor('notifications.mob')).toBeUndefined();
+  });
+
+  it('restarts the count when a track stops qualifying as a MOB candidate', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
+    // Two qualifying sightings...
+    n.evaluate([mobTarget(1_000)], new Set(), 1_100);
+    n.evaluate([mobTarget(2_000)], new Set(), 2_100);
+    // ...then the same track is reclassified out of the water (still tracked).
+    n.evaluate([mobTarget(3_000, { is_person_in_water: false })], new Set(), 3_100);
+    // A later single qualifying frame must NOT complete the old count.
+    n.evaluate([mobTarget(4_000)], new Set(), 4_100);
     expect(app.valueFor('notifications.mob')).toBeUndefined();
   });
 

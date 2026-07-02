@@ -118,9 +118,11 @@ export class NotificationManager {
   private evaluateMob(targets: EnrichedTarget[], nowMs: number, want: Set<string>): void {
     const path = 'notifications.mob';
     let fire = false;
+    const qualifying = new Set<string>();
 
     for (const t of targets) {
       if (!t.is_person_in_water || t.confidence < this.cfg.mobMinConfidence) continue;
+      qualifying.add(t.key);
       // Targets outlive their detections (retained trackTimeoutS after the last
       // frame), so only count when lastSeen has actually advanced — otherwise a
       // SINGLE sighting lingering in the map would count itself once per process
@@ -150,10 +152,14 @@ export class NotificationManager {
       }
     }
 
-    // Decay counters for tracks that have left the target map.
-    const seen = new Set(targets.map((t) => t.key));
+    // Decay counters for tracks that no longer QUALIFY as a MOB candidate —
+    // not merely tracks that left the map. A retained track whose latest frame
+    // stopped qualifying (reclassified out of the water, or confidence dropped)
+    // must restart its persistence count: otherwise an old partial count could
+    // sit dormant on a non-qualifying track and later fire the alarm off a
+    // single fresh qualifying frame.
     for (const key of [...this.mobCounters.keys()]) {
-      if (!seen.has(key)) {
+      if (!qualifying.has(key)) {
         this.mobCounters.delete(key);
         this.mobLastCounted.delete(key);
       }

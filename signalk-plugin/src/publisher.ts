@@ -15,7 +15,9 @@ import { EnrichedTarget } from './types';
 // instead: deterministic, so the same track always maps to the same context
 // and a retraction always finds the blip it published.
 export function blipUrn(camera: string, trackId: number | string): string {
-  const h = createHash('sha1').update(`signalk-vision-ai:${camera}:${trackId}`).digest();
+  // sha256 (not sha1/md5) purely to stay off SAST weak-hash lists; this is
+  // non-cryptographic ID derivation and only the first 16 bytes are used.
+  const h = createHash('sha256').update(`signalk-vision-ai:${camera}:${trackId}`).digest();
   h[6] = (h[6] & 0x0f) | 0x40; // version nibble = 4 (required by the spec regex)
   h[8] = (h[8] & 0x3f) | 0x80; // RFC 4122 variant
   const x = h.subarray(0, 16).toString('hex');
