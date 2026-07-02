@@ -190,6 +190,27 @@ describe('Publisher', () => {
     expect(nameOf(vals)).toBeNull(); // fully nulled; context stays readable
   });
 
+  it('brings the name back when data resumes after a full retraction', () => {
+    // INVARIANT: data is never published over a nulled blip without its name.
+    // Every live cycle carries name + data in the same update, so a revived
+    // track re-names its vessel in the very delta that resumes its data.
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    const now = Date.now();
+    pub.publishTargets([tgt(1, { lastSeen: now })]);
+    pub.publishTargets([tgt(1, { lastSeen: now - 20_000 })]); // gone → all null
+    app.deltas = [];
+    pub.publishTargets([tgt(1, { lastSeen: Date.now() })]); // track revives
+    const vals = app.valuesFor(VIS1);
+    expect(nameOf(vals)).toBe('VIS-forward-1');
+    expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
+    // name and position arrive in the SAME update — no window where a client
+    // can see data on a nameless vessel.
+    const revival = app.deltas.find((d) => d.context === VIS1)!;
+    const paths = revival.updates[0].values!.map((v) => v.path);
+    expect(paths).toContain('');
+    expect(paths).toContain('navigation.position');
+  });
+
   it('caps blips to maxTargets, keeping the closest', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', { ...cfg, maxTargets: 2 });
     const near = (id: number, range: number) =>
