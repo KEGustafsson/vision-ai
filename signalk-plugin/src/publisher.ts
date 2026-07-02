@@ -31,26 +31,29 @@ export class Publisher {
   private metaSent = new Set<string>();
   private publishedBlips = new Set<string>();
 
-  // Every leaf a synthetic vessel carries, built value-or-null in one place so
-  // a live blip, a lost-estimate blip and a full retraction always cover the
-  // same set and nothing lingers stale — including `name`: chartplotters
-  // (Freeboard) ignore position:null and only remove a target by age
-  // (aisMaxAge, default 9 min), so a retracted blip's marker lingers at its
-  // last position regardless. Nulling the name strips its label so the ghost
-  // draws anonymously (clients fall back to the UUID, which is acceptable).
-  // The brief anonymous window during a track dropout self-heals because the
-  // name is republished every live cycle. `name` rides the empty path (root
-  // merge) per the SignalK delta convention for vessel-root attributes, so
-  // vessel.name stays the plain string consumers expect in the full model.
-  // CPA/TCPA go in the spec's navigation.closestApproach container
-  // ({ distance, timeTo }) so chartplotters/MFDs pick them up natively.
+  // Every DATA leaf a synthetic vessel carries, built value-or-null in one
+  // place so a live blip, a lost-estimate blip and a full retraction always
+  // cover the same set and no kinematics linger stale. `name` is identity, not
+  // data: it is set on every live cycle and NEVER nulled, exactly like a real
+  // AIS contact that stops transmitting — it keeps its name at its last
+  // position until the chartplotter ages it out (Freeboard ignores
+  // position:null and removes targets only via aisMaxAge, default 9 min).
+  // Nulling the name instead leaves anonymous uuid shells in vessel lists (a
+  // SignalK context can never be deleted), which reads as a nameless vessel
+  // receiving data whenever its track revives. Blip flicker that once made
+  // name-kept ghosts litter the chart is gone since blipHoldS. `name` rides
+  // the empty path (root merge) per the SignalK delta convention for
+  // vessel-root attributes, so vessel.name stays the plain string consumers
+  // expect in the full model. CPA/TCPA go in the spec's
+  // navigation.closestApproach container ({ distance, timeTo }) so
+  // chartplotters/MFDs pick them up natively.
   private static blipValues(t: EnrichedTarget | null): Array<{ path: string; value: unknown }> {
     const hasCpa = t !== null && t.cpa !== null && t.tcpa !== null;
     return [
       { path: 'navigation.position', value: t ? t.position : null },
       // Track IDs count independently per camera, so the camera (not the class
       // label) is what makes the display name unique on the chart.
-      { path: '', value: { name: t ? `VIS-${t.camera}-${t.track_id}` : null } },
+      ...(t ? [{ path: '', value: { name: `VIS-${t.camera}-${t.track_id}` } }] : []),
       { path: 'navigation.speedOverGround', value: t ? t.sog : null },
       { path: 'navigation.courseOverGroundTrue', value: t ? t.cog : null },
       {

@@ -146,7 +146,7 @@ describe('Publisher', () => {
     expect(app.blipContexts()).toHaveLength(0);
   });
 
-  it('ages out a departed blip by nulling every leaf', () => {
+  it('ages out a departed blip by nulling every data leaf', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', cfg);
     pub.publishTargets([tgt(1, { sog: 3, cog: 1, cpa: 40, tcpa: 90 })]);
     app.deltas = [];
@@ -158,10 +158,10 @@ describe('Publisher', () => {
       'navigation.courseOverGroundTrue', 'navigation.closestApproach']) {
       expect(vals.find((v) => v.path === path)!.value).toBeNull();
     }
-    // name is nulled too: chartplotters ignore position:null and only age a
-    // ghost marker out, so stripping the label keeps it from wearing a stale
-    // VIS- name at its last position. Live cycles republish the name.
-    expect(nameOf(vals)).toBeNull();
+    // name is identity, never nulled: like a real AIS contact that stops
+    // transmitting, the blip keeps its name at its last position until the
+    // chartplotter ages it out. The retraction delta omits the name entry.
+    expect(nameOf(vals)).toBeUndefined();
   });
 
   it('draws recently-detected vessels, holding through gaps up to blipHoldS', () => {
@@ -184,7 +184,7 @@ describe('Publisher', () => {
     pub.publishTargets([tgt(1, { lastSeen: now - 20_000 })]);
     const vals = app.valuesFor(VIS1);
     expect(vals.find((v) => v.path === 'navigation.position')!.value).toBeNull();
-    expect(nameOf(vals)).toBeNull(); // label stripped along with the data
+    expect(nameOf(vals)).toBeUndefined(); // name kept, only data nulled
   });
 
   it('caps blips to maxTargets, keeping the closest', () => {
@@ -204,7 +204,7 @@ describe('Publisher', () => {
     app.deltas = [];
     pub.reset();
     expect(app.valuesFor(VIS1).find((v) => v.path === 'navigation.position')!.value).toBeNull();
-    expect(nameOf(app.valuesFor(VIS1))).toBeNull();
+    expect(nameOf(app.valuesFor(VIS1))).toBeUndefined(); // name kept on reset
   });
 
   it('never writes a synthetic vessel that lacks a real position', () => {
