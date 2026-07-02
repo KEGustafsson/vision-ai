@@ -144,11 +144,14 @@ export class Publisher {
     const now = Date.now();
     const ts = new Date(now).toISOString();
     const current = new Set<string>();
-    // Draw ONLY actively-detected vessels, so the chart matches the live video.
-    // A track retained longer for CPA/notification continuity (trackTimeoutS) is
-    // not drawn once it stops being seen; it's pruned within ~2 process cycles.
-    // The container coasts through brief flicker, so this won't blink contacts.
-    const activeMs = this.cfg.processIntervalMs * 2;
+    // Draw recently-detected vessels, holding each blip blipHoldS after its
+    // last detection. Detection gaps of several seconds are routine (waves,
+    // occlusion — measured 8-9 s on live water), and retracting on them blinks
+    // the contact and strips its name label right when a chartplotter user is
+    // looking at it. Real AIS reports every 10-30 s, so a held blip with a
+    // slightly stale position is in character for a chart. The floor of two
+    // process cycles keeps the gate sane if blipHoldS is misconfigured low.
+    const activeMs = Math.max(this.cfg.blipHoldS * 1000, this.cfg.processIntervalMs * 2);
     const eligible = targets
       .filter((t) => t.position && t.track_id !== null && now - t.lastSeen <= activeMs)
       // Cap the chart to maxTargets vessels, keeping the closest (most

@@ -153,8 +153,12 @@ export = function (app: ServerApp): Plugin {
     const now = Date.now();
     const own = readOwnShip(app, cfg.ownNavMaxAgeS, now);
 
-    // Age out stale tracks first so downstream sees only live targets.
-    const timeoutMs = cfg.trackTimeoutS * 1000;
+    // Age out stale tracks first so downstream sees only live targets. When
+    // visual radar is on, retain at least blipHoldS so a held chart blip's
+    // target survives the detection gap it is masking (MOB/notification logic
+    // already guards against retained-but-stale tracks re-counting).
+    const timeoutMs =
+      Math.max(cfg.trackTimeoutS, cfg.enableVisualRadar ? cfg.blipHoldS : 0) * 1000;
     for (const [key, t] of [...targets]) {
       if (now - t.lastSeen > timeoutMs) targets.delete(key);
     }

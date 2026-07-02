@@ -164,14 +164,15 @@ describe('Publisher', () => {
     expect(nameOf(vals)).toBeNull();
   });
 
-  it('draws only actively-detected vessels (prunes stale tracks)', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg); // activeMs = processIntervalMs*2
+  it('draws recently-detected vessels, holding through gaps up to blipHoldS', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg); // activeMs = blipHoldS (15 s)
     const now = Date.now();
     pub.publishTargets([
       tgt(1, { lastSeen: now }),               // active → drawn
-      tgt(2, { lastSeen: now - 10_000 }),      // stale (still retained for CPA) → not drawn
+      tgt(2, { lastSeen: now - 10_000 }),      // detection gap < hold → still drawn
+      tgt(3, { lastSeen: now - 20_000 }),      // beyond hold → not drawn
     ]);
-    expect(app.blipContexts()).toEqual([ctx('forward', 1)]);
+    expect(app.blipContexts().sort()).toEqual([ctx('forward', 1), ctx('forward', 2)].sort());
   });
 
   it('prunes a vessel once its detection stops', () => {
@@ -179,8 +180,8 @@ describe('Publisher', () => {
     const now = Date.now();
     pub.publishTargets([tgt(1, { lastSeen: now })]);
     app.deltas = [];
-    // Same track still retained in the map, but no longer actively detected.
-    pub.publishTargets([tgt(1, { lastSeen: now - 10_000 })]);
+    // Same track still retained in the map, but not detected for > blipHoldS.
+    pub.publishTargets([tgt(1, { lastSeen: now - 20_000 })]);
     const vals = app.valuesFor(VIS1);
     expect(vals.find((v) => v.path === 'navigation.position')!.value).toBeNull();
     expect(nameOf(vals)).toBeNull(); // label stripped along with the data
