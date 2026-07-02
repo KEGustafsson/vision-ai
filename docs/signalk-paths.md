@@ -8,25 +8,25 @@ themselves are published as separate synthetic vessels (see below), not as a
 ## Visual targets — synthetic AIS vessels (`enableVisualRadar`, default OFF)
 
 With **Publish targets as synthetic AIS vessels** on, each georeferenced target
-is published as its own vessel context
-`vessels.urn:mrn:signalk:uuid:vision-<camera>-<trackId>`, so it renders as a
-blip on any chartplotter that draws `vessels.*`. Off by default to avoid
+is published as its own vessel context `vessels.urn:mrn:signalk:uuid:<uuid>`,
+so it renders as a blip on any chartplotter that draws `vessels.*`. The UUID is
+a spec-valid v4-format identifier derived deterministically from
+`<camera>` + `<trackId>` (same track ⇒ same context). Off by default to avoid
 confusion with real AIS contacts.
 
 | Leaf | Units | Description |
 |------|-------|-------------|
 | `navigation.position` | — | `{ latitude, longitude }` georeferenced fix (always set on a live blip) |
-| `name` | — | `VIS-<label>-<trackId>` |
+| `name` | — | `VIS-<label>-<trackId>`, published via the root-merge delta (`path: ""`) so `vessel.name` is a plain string |
 | `navigation.speedOverGround` | m/s | Target ground speed (needs `enableCollision`) |
 | `navigation.courseOverGroundTrue` | rad | Target ground course `[0,2π)` (needs `enableCollision`) |
-| `navigation.cpa` | m | Closest point of approach (vision-AI estimate) |
-| `navigation.tcpa` | s | Time to CPA |
+| `navigation.closestApproach` | — | `{ distance (m), timeTo (s) }` — the standard SignalK CPA/TCPA container (vision-AI estimate); `null` when unresolved |
 
 A blip is **never** published without a real `navigation.position`. When a track
 disappears (ages out after `trackTimeoutS`), every leaf — position, name and all
 kinematics — is published as `null`, so no synthetic vessel ever lingers without
 a location. SOG/COG let a chartplotter draw the vector and compute CPA natively;
-`navigation.cpa`/`tcpa` are non-standard convenience paths for data browsers.
+`navigation.closestApproach` exposes our own estimate on the standard path.
 
 ## Fusion summary — `vision.fusion.*`
 

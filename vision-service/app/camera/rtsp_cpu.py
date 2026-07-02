@@ -126,6 +126,14 @@ class RtspCpuSource(FrameSource):
                 self._frame_ready.wait(timeout=max(0.0, deadline - time.monotonic()))
             if self._closed or self._latest_img is None:
                 return None
+            if self._latest_seq == self._last_delivered_seq:
+                # No fresh frame arrived within the wait window. Report the stall
+                # (None) instead of re-serving the previous frame: a re-served
+                # frame would be processed as live — the event gets a *current*
+                # timestamp — so a frozen feed would keep publishing stale scene
+                # data as fresh detections and the pipeline's stall detection
+                # (frame is None -> /health "degraded") would never trigger.
+                return None
             self._last_delivered_seq = self._latest_seq
             # Copy under the lock: the reader thread rebinds (and OpenCV may reuse
             # the underlying buffer for) ``_latest_img`` on the next frame, so the

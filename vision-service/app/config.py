@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 import yaml
 from pydantic import BaseModel, Field
@@ -147,8 +147,12 @@ class DetectorConfig(BaseModel):
     batch_cameras: bool = False
     # How long a camera waits to rendezvous with the other before inferring solo.
     batch_wait_ms: int = 20
-    # DeepStream only: which detection model to run. Exactly ONE model runs at a
-    # time (never both). Selects both the nvinfer config and the class map:
+    # Which detection model is loaded. Exactly ONE model runs at a time (never
+    # both). Selects the class map used to decode raw class ids on EVERY
+    # backend (raw ids collide across models: forward-watch 0 = ship, COCO 0 =
+    # person, so decoding with the wrong table mislabels every detection) and,
+    # on DeepStream, also the nvinfer config. On torch/tensorrt backends this
+    # must match the weights loaded via model_pt/model_engine:
     #   "coco"                -> COCO YOLOv8n, 80 classes (person/vessel/buoy/...)
     #   "forward-watch"       -> forward-watch marine model, 6 classes
     #                            (ship/boat/debris/buoy/kayak/log)
@@ -157,7 +161,10 @@ class DetectorConfig(BaseModel):
     #                            NO person -> no man-overboard. Train on-box via
     #                            training/train_marine_surveillance.py.
     # See app/detector/classmap.py (MODEL_PGIE_CONFIG) for the registry.
-    model: str = "coco"
+    # Constrained to the known registry keys so a typo fails fast at config
+    # load instead of silently falling back to the COCO class map and
+    # mislabeling every detection at runtime.
+    model: Literal["coco", "forward-watch", "marine-surveillance"] = "coco"
 
 
 class ServerConfig(BaseModel):

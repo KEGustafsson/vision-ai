@@ -249,7 +249,12 @@ export = function (app: ServerApp): Plugin {
       nextModeHint = underway ? 'underway' : 'docking';
       body.active_camera = nextCamera;
       body.mode_hint = nextModeHint;
-      body.confidence = night ? Math.max(0.25, cfg.minConfidence - 0.1) : cfg.minConfidence;
+      // Night: lower the threshold by 0.1 to catch dimmer targets, floored at
+      // 0.25 — but never RAISE it above the operator's day value (an operator
+      // who set e.g. 0.2 already asked for higher sensitivity than the floor).
+      body.confidence = night
+        ? Math.max(Math.min(cfg.minConfidence, 0.25), cfg.minConfidence - 0.1)
+        : cfg.minConfidence;
     }
     try {
       await client.control(body);
