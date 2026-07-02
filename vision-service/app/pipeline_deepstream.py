@@ -290,25 +290,6 @@ class DeepStreamPipeline:
         Gst.init(None)
         self._stopping.clear()
 
-        d = self.settings.detector
-        for i, cam in enumerate(self.settings.cameras):
-            self._src_idx_to_name[i] = cam.name
-            stab = TrackStabilizer(
-                confirm_frames=d.stabilize_confirm_frames,
-                max_coast_frames=d.stabilize_max_coast_frames,
-                hysteresis_ratio=d.stabilize_hysteresis_ratio,
-                ema_alpha=d.stabilize_ema_alpha,
-                coast_velocity_factor=d.stabilize_coast_velocity_factor,
-                person_confirm_frames=d.stabilize_person_confirm_frames,
-            ) if d.stabilize else None
-            self._states[cam.name] = _StreamState(
-                cam=cam, settings=self.settings, stabilizer=stab,
-                confidence=self._confidence, allowed_labels=self._allowed_labels,
-                min_target_range_m=self._min_target_range_m,
-                vel=VelocityTracker(id_min=_DISPLAY_ID_MIN,
-                                    id_max=_display_id_max(self._max_det)),
-            )
-
         # First bring-up happens synchronously so a hard misconfiguration (bad
         # RTSP URL, missing plugin) still fails fast at startup. Subsequent
         # failures are recovered by the supervisor instead of going dark.
@@ -320,6 +301,37 @@ class DeepStreamPipeline:
     def _bring_up(self, Gst, GLib) -> None:
         """Build the pipeline, set it PLAYING, and create (but do not run) the
         GLib loop + stall watchdog. Raises on a hard state-change failure."""
+        # FRESH per-stream inference state on every (re)build — never carry it
+        # across pipelines. A rebuilt nvtracker restarts track IDs from scratch,
+        # so stale TrackStabilizer state would hand a NEW track that reuses an
+        # old ID the dead track's identity: already past the confirm debounce,
+        # hysteresis latched ON (emits below the confidence gate), EMA seeded by
+        # the old boat, stale coast velocity (observed live after a detection
+        # off/on toggle: 0.19-0.29 confidence targets streaming immediately).
+        # last_pts must reset too or the dup-frame guard can drop every frame of
+        # a new pipeline whose PTS restarts lower. Runtime /control values are
+        # preserved via their mirrors (self._confidence & co). Safe to swap
+        # wholesale: no probe is running here (old pipeline is torn down).
+        d = self.settings.detector
+        for i, cam in enumerate(self.settings.cameras):
+            self._src_idx_to_name[i] = cam.name
+            stab = TrackStabilizer(
+                confirm_frames=d.stabilize_confirm_frames,
+                max_coast_frames=d.stabilize_max_coast_frames,
+                hysteresis_ratio=d.stabilize_hysteresis_ratio,
+                ema_alpha=d.stabilize_ema_alpha,
+                coast_velocity_factor=d.stabilize_coast_velocity_factor,
+                person_confirm_frames=d.stabilize_person_confirm_frames,
+            ) if d.stabilize else None
+            with self._lock:
+                self._states[cam.name] = _StreamState(
+                    cam=cam, settings=self.settings, stabilizer=stab,
+                    confidence=self._confidence, allowed_labels=self._allowed_labels,
+                    min_target_range_m=self._min_target_range_m,
+                    vel=VelocityTracker(id_min=_DISPLAY_ID_MIN,
+                                        id_max=_display_id_max(self._max_det)),
+                )
+
         self._gst = self._build_pipeline(Gst)
 
         bus = self._gst.get_bus()
