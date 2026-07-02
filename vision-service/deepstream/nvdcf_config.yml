@@ -28,13 +28,13 @@ TargetManagement:
   # Aligned with stabilizer.stabilize_confirm_frames (default 3).
   probationAge: 3
   # Shadow-track age: how many frames a lost target keeps its ID alive
-  # (inactive, not reported) before it is terminated. 120 frames ≈ 10 s at the
+  # (inactive, not reported) before it is terminated. 240 frames ≈ 20 s at the
   # pipeline's ~12 FPS, so a vessel occluded by waves/another boat for up to
-  # 10 s is re-acquired with the SAME track ID — which also keeps its SignalK
+  # 20 s is re-acquired with the SAME track ID — which also keeps its SignalK
   # blip identity (VIS-<camera>-<id>) stable. Drawing-side coasting is separate
   # and stays short (stabilizer.stabilize_max_coast_frames): shadow targets are
   # not drawn while lost, they just retain the number.
-  maxShadowTrackingAge: 120
+  maxShadowTrackingAge: 240
   # Stop tracking a target at this age if it never matched a detector bbox.
   earlyTerminationAge: 1
 
