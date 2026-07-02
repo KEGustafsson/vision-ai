@@ -6,6 +6,9 @@ import { EnrichedTarget } from '../src/types';
 
 class FakeApp implements ServerApp {
   deltas: Delta[] = [];
+  deleted: string[] = []; // contexts removed via the server's deleteContext hooks
+  signalk = { deleteContext: (key: string) => { this.deleted.push(key); } };
+  deltaCache = { deleteContext: (_key: string) => {} };
   handleMessage(_id: string, delta: Delta): void { this.deltas.push(delta); }
   getSelfPath(): any { return null; }
   getPath(): any { return null; }
@@ -209,6 +212,44 @@ describe('Publisher', () => {
     const paths = revival.updates[0].values!.map((v) => v.path);
     expect(paths).toContain('');
     expect(paths).toContain('navigation.position');
+  });
+
+  it('deletes a retracted blip context one cycle after nulling it', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    const now = Date.now();
+    pub.publishTargets([tgt(1, { lastSeen: now })]);
+    pub.publishTargets([]); // retraction cycle: all-null delta, no delete yet
+    expect(app.deleted).toEqual([]);
+    pub.publishTargets([]); // next cycle: emptied shell removed from the model
+    expect(app.deleted).toEqual([VIS1]);
+  });
+
+  it('does not delete a context whose track revives before the deferred delete', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    const now = Date.now();
+    pub.publishTargets([tgt(1, { lastSeen: now })]);
+    pub.publishTargets([]); // retracted, delete pending
+    pub.publishTargets([tgt(1, { lastSeen: Date.now() })]); // revived in time
+    expect(app.deleted).toEqual([]);
+  });
+
+  it('deletes all blip contexts on reset', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1)]);
+    pub.reset();
+    expect(app.deleted).toEqual([VIS1]);
+  });
+
+  it('survives a server without the deleteContext internals', () => {
+    // The hooks are undocumented server internals; if a future signalk-server
+    // renames them the shell must just linger for the prune sweep, not crash.
+    (app as any).signalk = undefined;
+    (app as any).deltaCache = undefined;
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1)]);
+    pub.publishTargets([]);
+    expect(() => pub.publishTargets([])).not.toThrow();
+    expect(() => pub.reset()).not.toThrow();
   });
 
   it('caps blips to maxTargets, keeping the closest', () => {

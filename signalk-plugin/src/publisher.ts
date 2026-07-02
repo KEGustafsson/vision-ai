@@ -33,6 +33,9 @@ export function blipUrn(camera: string, trackId: number | string): string {
 export class Publisher {
   private metaSent = new Set<string>();
   private publishedBlips = new Set<string>();
+  // Blips retracted last cycle whose (now all-null) context gets deleted this
+  // cycle — see publishBlips for why deletion is deferred by one cycle.
+  private pendingDelete = new Set<string>();
 
   // Every leaf a synthetic vessel carries, built value-or-null in one place so
   // a live blip, a lost-estimate blip and a full retraction always cover the
@@ -168,10 +171,20 @@ export class Publisher {
       // never carries a stale SOG/COG vector or CPA.
       this.emitVessel(uuid, ts, Publisher.blipValues(t));
     }
-    // Age out departed blips: null every leaf so none lingers without a location.
+    // Delete contexts retracted LAST cycle (unless the track revived since):
+    // one cycle in between guarantees the all-null retraction delta has been
+    // processed and forwarded to live subscribers before the vessel entry
+    // disappears from the model, regardless of handleMessage's internal timing.
+    for (const uuid of this.pendingDelete) {
+      if (!current.has(uuid)) this.deleteVessel(uuid);
+    }
+    this.pendingDelete.clear();
+    // Age out departed blips: null every leaf so none lingers without a
+    // location, then schedule the emptied shell for deletion next cycle.
     for (const uuid of this.publishedBlips) {
       if (current.has(uuid)) continue;
       this.emitVessel(uuid, ts, Publisher.blipValues(null));
+      this.pendingDelete.add(uuid);
     }
     this.publishedBlips = current;
   }
@@ -183,14 +196,34 @@ export class Publisher {
     });
   }
 
+  /** Remove the synthetic vessel's context entirely, the same way the server's
+   * own pruneContextsMinutes sweep does. Undocumented internals, so fail soft:
+   * if either hook is missing the shell just lingers (all-null, readable
+   * context) until the server age-prunes it — the pre-deletion behavior. */
+  private deleteVessel(uuid: string): void {
+    const key = `vessels.${uuid}`;
+    try {
+      this.app.signalk?.deleteContext?.(key);
+      this.app.deltaCache?.deleteContext?.(key);
+    } catch (e) {
+      this.app.debug(`deleteContext failed for ${key}: ${e}`);
+    }
+  }
+
   /** Retract all synthetic blips, then clear bookkeeping. Called on plugin stop
-   * so no stale synthetic vessel lingers. */
+   * so no stale synthetic vessel lingers. Contexts are deleted immediately —
+   * there is no next cycle to defer to; if the null delta lands after the
+   * delete and resurrects an all-null shell, the server's prune sweep is the
+   * backstop. */
   reset(): void {
     const ts = new Date().toISOString();
     for (const uuid of this.publishedBlips) {
       this.emitVessel(uuid, ts, Publisher.blipValues(null));
+      this.deleteVessel(uuid);
     }
+    for (const uuid of this.pendingDelete) this.deleteVessel(uuid);
     this.metaSent.clear();
     this.publishedBlips.clear();
+    this.pendingDelete.clear();
   }
 }
