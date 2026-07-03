@@ -69,14 +69,16 @@ def test_sticky_winner_keeps_the_same_track_id():
     assert [t.track_id for t in out] == [12]
 
 
-def test_loser_surfaces_when_winner_track_dies():
+def test_loser_surfaces_under_the_winners_number_when_it_dies():
     # The vessel itself can never be suppressed away: once the winning track is
-    # gone, the remaining track is emitted.
+    # gone, the remaining track is emitted — and it INHERITS the dead winner's
+    # published number (succession), so the chart blip continues instead of a
+    # new number appearing while the old one is still held downstream.
     d = TargetDeduper()
     hull, full = _sailing_pair()
     d.update([hull, full], seq=1)
     out = d.update([hull], seq=2)
-    assert [t.track_id for t in out] == [hull.track_id]
+    assert [t.track_id for t in out] == [full.track_id]
 
 
 def test_pairing_expires_after_hold_frames():
@@ -144,6 +146,86 @@ def test_untracked_boxes_merge_without_sticky_state():
     out = d.update([hull, full], seq=1)
     assert len(out) == 1
     assert not d._pairs
+
+
+def test_succession_keeps_the_number_across_tracker_churn():
+    # The tracker mints a new id when the box flips hull <-> hull+mast (IoU
+    # association breaks). The new track must be published under the vanished
+    # track's number so downstream keeps updating ONE blip.
+    d = TargetDeduper()
+    for seq in range(1, 6):
+        v = _target("vessel", 11, x=100, y=80, w=80, h=120, age=seq)
+        assert [t.track_id for t in d.update([v], seq)] == [11]
+    # id 11 gone for two frames; new id 15 appears on the same spot.
+    d.update([], seq=6)
+    d.update([], seq=7)
+    successor = _target("sailboat", 15, x=104, y=82, w=80, h=118, age=1)
+    out = d.update([successor], seq=8)
+    assert [t.track_id for t in out] == [11]
+    # ...and it keeps that number on later frames.
+    successor2 = _target("sailboat", 15, x=108, y=84, w=80, h=118, age=2)
+    assert [t.track_id for t in d.update([successor2], seq=9)] == [11]
+
+
+def test_succession_window_expires():
+    d = TargetDeduper(succession_frames=5)
+    v = _target("vessel", 11, x=100, y=80, w=80, h=120, age=3)
+    d.update([v], seq=1)
+    successor = _target("vessel", 15, x=100, y=80, w=80, h=120, age=1)
+    out = d.update([successor], seq=10)  # gap past the window: a new contact
+    assert [t.track_id for t in out] == [15]
+
+
+def test_churn_of_the_pair_winner_keeps_the_published_number():
+    # Steady sailing pair: hull track 11 + full track 12, published as 12.
+    # Track 12 churns into fresh track 15 while 11 coasts on: the frame's
+    # winner must still be published as 12 (succession alias), not 15 or 11.
+    d = TargetDeduper()
+    hull = _target("boat", 11, x=100, y=160, w=80, h=40, age=100)
+    full = _target("sailboat", 12, x=100, y=80, w=80, h=120, age=100)
+    assert [t.track_id for t in d.update([hull, full], seq=1)] == [12]
+    hull2 = _target("boat", 11, x=100, y=160, w=80, h=40, age=101)
+    fresh = _target("sailboat", 15, x=102, y=80, w=80, h=120, age=1)
+    out = d.update([hull2, fresh], seq=2)
+    assert [t.track_id for t in out] == [12]
+
+
+def test_alias_breaks_when_the_original_track_revives():
+    # If the number's original owner comes back as a live track elsewhere, the
+    # successor must stop impersonating it — never one number on two vessels.
+    d = TargetDeduper()
+    v = _target("vessel", 11, x=100, y=80, w=80, h=120, age=5)
+    d.update([v], seq=1)
+    successor = _target("vessel", 15, x=100, y=80, w=80, h=120, age=1)
+    assert [t.track_id for t in d.update([successor], seq=2)] == [11]
+    revived = _target("vessel", 11, x=500, y=80, w=80, h=120, age=6)
+    successor2 = _target("vessel", 15, x=100, y=80, w=80, h=120, age=2)
+    out = d.update([revived, successor2], seq=3)
+    assert {t.track_id for t in out} == {11, 15}
+
+
+def test_one_number_never_labels_two_separated_boxes():
+    # Two tracks whose aliases point at the same dead number and then separate:
+    # the younger claim reverts to its raw id.
+    d = TargetDeduper()
+    v = _target("vessel", 11, x=100, y=80, w=80, h=120, age=50)
+    d.update([v], seq=1)
+    # 15 succeeds to 11's number...
+    a = _target("vessel", 15, x=100, y=80, w=80, h=120, age=5)
+    assert [t.track_id for t in d.update([a], seq=2)] == [11]
+    # ...then fresh 16 beats the (coasting) veteran in a merge and inherits
+    # the number too — both raw tracks now claim 11.
+    a2 = _target("vessel", 15, x=100, y=80, w=80, h=120, age=6, coasting=True)
+    b = _target("vessel", 16, x=100, y=70, w=85, h=130, age=1)
+    assert [t.track_id for t in d.update([a2, b], seq=3)] == [11]
+    # The two raw tracks separate: exactly one keeps number 11.
+    a3 = _target("vessel", 15, x=100, y=80, w=80, h=120, age=7)
+    b2 = _target("vessel", 16, x=400, y=80, w=85, h=130, age=2)
+    out = d.update([a3, b2], seq=4)
+    ids = [t.track_id for t in out]
+    assert len(out) == 2
+    assert ids.count(11) == 1
+    assert 15 in ids or 16 in ids
 
 
 def test_three_way_pileup_collapses_to_one():

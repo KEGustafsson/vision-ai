@@ -11,6 +11,11 @@ publish threshold. This stage gives each track a short lifecycle instead:
   (flagged ``coasting``) using its last box advanced by its pixel velocity, for
   up to ``max_coast_frames``. This is the "keep drawing the box + info even when
   not detected every frame" behaviour.
+* **box smoothing** — a detected track's box geometry is EMA-smoothed against
+  its previous (smoothed) box, so a detection that alternates between a
+  hull-only and a hull+mast box draws one calmly sized box instead of
+  flickering. Both representations share the bottom edge (the waterline), so
+  the smoothed box preserves it and range estimation is unaffected.
 * **appearance debounce** — a new track must be seen ``confirm_frames`` times
   before it is shown, so a single-frame false positive never draws a box.
   ``person`` tracks use the (lower) ``person_confirm_frames`` instead: a person in
@@ -44,7 +49,8 @@ class TrackStabilizer:
     def __init__(self, confirm_frames: int = 3, max_coast_frames: int = 8,
                  hysteresis_ratio: float = 0.6, ema_alpha: float = 0.4,
                  coast_velocity_factor: float = 0.4,
-                 person_confirm_frames: int = 1):
+                 person_confirm_frames: int = 1,
+                 bbox_ema_alpha: float = 0.5):
         self.confirm_frames = max(1, confirm_frames)
         # MOB-critical: person tracks confirm faster (default: first frame).
         self.person_confirm_frames = max(1, person_confirm_frames)
@@ -56,6 +62,13 @@ class TrackStabilizer:
         # damped value keeps a coasted box near the object instead of letting a
         # noisy velocity estimate fling it away over several missed frames.
         self.coast_velocity_factor = max(0.0, coast_velocity_factor)
+        # EMA smoothing of the box GEOMETRY across detected frames. A sailing
+        # vessel's box flickers between hull-only and hull+mast as the sail/
+        # mast drops in and out of the detection; smoothing keeps one calmly
+        # sized box on the target instead. Both representations share the same
+        # bottom edge (the waterline), so the smoothed box preserves it and
+        # range/bearing estimation is unaffected. 1.0 disables (raw boxes).
+        self.bbox_alpha = min(max(bbox_ema_alpha, 0.0), 1.0)
         self._st: dict[int, _State] = {}
 
     def _confirm_for(self, label: str) -> int:
@@ -84,6 +97,16 @@ class TrackStabilizer:
                                            last_seq=seq, hits=1, confirmed=False)
             else:
                 s.conf = self.alpha * tr.confidence + (1 - self.alpha) * s.conf
+                # Smooth the box geometry against the previous (smoothed) box so
+                # a detection alternating hull-only / hull+mast doesn't flicker.
+                # Coasting stays consistent: s.track holds the smoothed box.
+                if self.bbox_alpha < 1.0:
+                    a, p = self.bbox_alpha, s.track
+                    tr = replace(tr,
+                                 x=a * tr.x + (1 - a) * p.x,
+                                 y=a * tr.y + (1 - a) * p.y,
+                                 w=a * tr.w + (1 - a) * p.w,
+                                 h=a * tr.h + (1 - a) * p.h)
                 s.track = tr
                 s.last_seq = seq
                 s.hits += 1

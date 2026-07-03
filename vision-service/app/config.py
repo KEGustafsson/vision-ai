@@ -147,6 +147,12 @@ class DetectorConfig(BaseModel):
     stabilize_hysteresis_ratio: float = 0.6
     # EMA smoothing factor for per-track confidence (higher = more reactive).
     stabilize_ema_alpha: float = 0.4
+    # EMA smoothing factor for per-track box GEOMETRY (x/y/w/h) across detected
+    # frames. A sailing vessel's box flickers between hull-only and hull+mast as
+    # the rig drops in and out of the detection; smoothing draws one calmly
+    # sized box instead. Both representations share the same bottom edge (the
+    # waterline), so range estimation is unaffected. 1.0 disables (raw boxes).
+    stabilize_bbox_ema_alpha: float = 0.5
     # Fraction of pixel velocity applied while coasting (0 = freeze the box at
     # its last spot, 1 = full extrapolation). Damps a noisy velocity so a
     # coasted (dashed) box doesn't drift fast off the object across dropouts.

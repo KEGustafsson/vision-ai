@@ -326,6 +326,7 @@ class DeepStreamPipeline:
                 ema_alpha=d.stabilize_ema_alpha,
                 coast_velocity_factor=d.stabilize_coast_velocity_factor,
                 person_confirm_frames=d.stabilize_person_confirm_frames,
+                bbox_ema_alpha=d.stabilize_bbox_ema_alpha,
             ) if d.stabilize else None
             with self._lock:
                 self._states[cam.name] = _StreamState(
