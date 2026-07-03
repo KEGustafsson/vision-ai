@@ -225,7 +225,13 @@ class VelocityTracker:
             dseq = max(seq - oseq, 1)
             vx = (cx - ocx) / dseq
             vy = (cy - ocy) / dseq
-        hist.append((seq, cx, cy))
+        # One sample per frame per canonical track: when re-id resolves a partial
+        # AND a full detection of the same vessel to one id in a single frame,
+        # the second call must not append a duplicate same-seq sample — that
+        # would shrink the effective velocity window and skew _last_velocity().
+        # First detection wins; velocity/age come out the same either way.
+        if not (hist and hist[-1][0] == seq):
+            hist.append((seq, cx, cy))
         age = seq - self._first_seq[track_id]
         return vx, vy, age
 

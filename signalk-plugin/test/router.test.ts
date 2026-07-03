@@ -130,22 +130,26 @@ function buildRouter(containerUrl: string): Map<string, Handler> {
   return routes;
 }
 
-function startFakeContainer(port: number, tag: string): Promise<http.Server> {
+interface FakeContainer extends http.Server {
+  /** Destroy all sockets mid-write — the exact failure mode of a container
+   * being taken down while streaming (the last part is truncated). */
+  killHard(): Promise<void>;
+}
+
+function startFakeContainer(port: number, tag: string): Promise<FakeContainer> {
   const sockets = new Set<any>();
   const server = http.createServer((_req, res) => {
     res.writeHead(200, { 'content-type': 'multipart/x-mixed-replace; boundary=frame' });
     const iv = setInterval(() => res.write(part('frame', `FRAME-${tag}`)), 25);
     res.on('close', () => clearInterval(iv));
-  });
+  }) as FakeContainer;
   server.on('connection', (s) => {
     sockets.add(s);
     s.on('close', () => sockets.delete(s));
   });
-  (server as any).killHard = () =>
+  server.killHard = () =>
     new Promise<void>((resolve) => {
       server.close(() => resolve());
-      // Destroy mid-write so the last part is truncated — the exact failure
-      // mode of a container being taken down while streaming.
       for (const s of sockets) s.destroy();
       sockets.clear();
     });
@@ -194,7 +198,7 @@ describe('proxyStream across a container restart', () => {
       expect(beforeKill.length).toBeGreaterThan(2);
       expect(beforeKill.every((b) => b === 'FRAME-GEN1')).toBe(true);
 
-      await (container as any).killHard();
+      await container.killHard();
       await sleep(200); // give a wrongly-ended response time to surface
       expect(ended).toBe(false); // browser connection must stay open
 
@@ -209,7 +213,7 @@ describe('proxyStream across a container restart', () => {
       expect(ended).toBe(false);
     } finally {
       clientReq.destroy();
-      await (container as any).killHard();
+      await container.killHard();
       await new Promise<void>((r) => plugin.close(() => r()));
     }
   }, 20000);
