@@ -19,6 +19,7 @@ from .camera import create_source
 from .config import CameraConfig, Settings
 from .detector import create_detector
 from .detector.classmap import is_person_in_water
+from .detector.dedup import TargetDeduper
 from .detector.stabilizer import TrackStabilizer
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
 from .schemas import (
@@ -38,36 +39,6 @@ from .util import EventBuffer, LatestFrame
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
-
-def _contained_fraction(inner: BBox, outer: BBox) -> float:
-    """Fraction of *inner*'s area that overlaps *outer* (0..1)."""
-    ix = max(inner.x, outer.x)
-    iy = max(inner.y, outer.y)
-    ax = min(inner.x + inner.w, outer.x + outer.w)
-    ay = min(inner.y + inner.h, outer.y + outer.h)
-    overlap = max(0.0, ax - ix) * max(0.0, ay - iy)
-    inner_area = inner.w * inner.h
-    return overlap / inner_area if inner_area > 0 else 0.0
-
-
-def _drop_contained_targets(targets: list, frac: float) -> list:
-    """Drop detections whose bbox lies largely inside a larger detection's bbox
-    (a buoy/person on a vessel's deck, a duplicate nested box). The larger
-    containing object is kept; a person-in-water is never dropped (MOB safety)."""
-    if frac >= 1.0 or len(targets) < 2:
-        return targets
-    keep = [True] * len(targets)
-    for i, outer in enumerate(targets):
-        for j, inner in enumerate(targets):
-            if i == j or not keep[i] or not keep[j] or inner.is_person_in_water:
-                continue
-            # `inner` must be the strictly smaller box of the pair.
-            if outer.bbox.w * outer.bbox.h <= inner.bbox.w * inner.bbox.h:
-                continue
-            if _contained_fraction(inner.bbox, outer.bbox) > frac:
-                keep[j] = False
-    return [t for k, t in enumerate(targets) if keep[k]]
 
 
 # A camera whose source returns no frames for this long is reported as an error
@@ -114,6 +85,14 @@ class CameraWorker(threading.Thread):
             coast_velocity_factor=d.stabilize_coast_velocity_factor,
             person_confirm_frames=d.stabilize_person_confirm_frames,
         ) if d.stabilize else None
+        # Per-camera same-vessel duplicate suppression (sticky loser→winner
+        # state, so it must not be shared across cameras). Hold pairings past
+        # the coast window so a briefly-coasted winner can't lose its claim.
+        self._deduper = TargetDeduper(
+            vessel_ios=d.duplicate_vessel_ios,
+            contained_frac=d.contained_frac,
+            hold_frames=2 * d.stabilize_max_coast_frames,
+        )
         # Runtime-adjustable via /control.
         self.confidence = settings.detector.confidence
         # Drop detections closer than this (m); seeded from config, owned by the
@@ -332,10 +311,10 @@ class CameraWorker(threading.Thread):
                 age_frames=tr.age_frames,
                 coasting=tr.coasting,
             ))
-        # Drop detections nested inside a larger detection's box (deck clutter,
-        # duplicate nested boxes) before ranking/capping.
-        targets = _drop_contained_targets(
-            targets, self._settings.detector.contained_frac)
+        # Collapse duplicate detections of one physical vessel (hull vs
+        # hull+mast double-fires) and drop boxes nested inside a larger
+        # detection (deck clutter), before ranking/capping.
+        targets = self._deduper.update(targets, frame.seq)
         targets = sorted(
             targets, key=lambda t: t.confidence, reverse=True
         )[:self._settings.detector.max_det]

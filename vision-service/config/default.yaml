@@ -25,6 +25,12 @@ detector:
   # Drop detections whose bbox exceeds this fraction of the frame (own hull /
   # very-near structure mis-detected as a vessel). 1.0 disables the filter.
   max_area_frac: 0.4
+  # Merge two heavily-overlapping vessel detections of the SAME physical vessel
+  # (e.g. a sailing vessel double-firing hull vs hull+mast, possibly under two
+  # class labels). Boxes whose intersection covers at least this fraction of
+  # the smaller box collapse to one target. Vessel-family labels only — an
+  # overlapping kayak/buoy/person is never merged away. 1.0 disables.
+  duplicate_vessel_ios: 0.55
   # Object types to surface (person | vessel | buoy). Omitted/empty => all.
   # The SignalK plugin overrides this at runtime from its admin UI.
   # classes: [person, vessel]

@@ -87,6 +87,15 @@ _MS_LABEL = {
 # marine-surveillance raw class id → synthetic id (87–93, after forward-watch).
 _MS_CLS_REMAP = {i: 87 + i for i in range(7)}
 
+# Canonical labels that denote a full-size vessel. Used by the duplicate
+# suppressor (detector/dedup.py): two heavily-overlapping boxes whose labels
+# BOTH fall in this family are treated as one physical vessel (a sailing
+# vessel double-firing hull vs hull+mast, boat/sailboat across classes).
+# Small-craft/object labels (kayak, buoy, person, debris, log) are deliberately
+# EXCLUDED — a kayak or buoy occluding a larger vessel is two real objects and
+# must never be merged away.
+VESSEL_FAMILY = frozenset({"vessel", "boat", "sailboat", "speedboat", "warship"})
+
 # Registry of non-COCO models: name -> (raw-id→label, raw-id→synthetic-id).
 _MODEL_TABLES = {
     MODEL_FORWARD_WATCH: (_FW_LABEL, _FW_CLS_REMAP),

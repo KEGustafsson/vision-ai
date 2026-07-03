@@ -77,10 +77,10 @@ from .detector.classmap import (
     is_person_in_water,
     label_for_model,
 )
+from .detector.dedup import TargetDeduper
 from .detector.stabilizer import TrackStabilizer
 from .detector.tracker import VelocityTracker
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
-from .pipeline import _drop_contained_targets  # shared geometry filter, same package
 from .schemas import (
     Backend,
     BBox,
@@ -196,6 +196,10 @@ class _StreamState:
     cam: CameraConfig
     settings: Settings
     stabilizer: Optional[TrackStabilizer]
+    # Same-vessel duplicate suppression; sticky per-camera state, so one
+    # instance per stream (rebuilt with the rest of the state on pipeline
+    # rebuilds, like the stabilizer/velocity tracker).
+    dedup: TargetDeduper
     vel: VelocityTracker = field(default_factory=VelocityTracker)
     seq: int = 0
     confidence: float = 0.35
@@ -326,6 +330,11 @@ class DeepStreamPipeline:
             with self._lock:
                 self._states[cam.name] = _StreamState(
                     cam=cam, settings=self.settings, stabilizer=stab,
+                    dedup=TargetDeduper(
+                        vessel_ios=d.duplicate_vessel_ios,
+                        contained_frac=d.contained_frac,
+                        hold_frames=2 * d.stabilize_max_coast_frames,
+                    ),
                     confidence=self._confidence, allowed_labels=self._allowed_labels,
                     min_target_range_m=self._min_target_range_m,
                     vel=VelocityTracker(id_min=_DISPLAY_ID_MIN,
@@ -1238,7 +1247,9 @@ class DeepStreamPipeline:
                 coasting=tr.coasting,
             ))
 
-        targets = _drop_contained_targets(targets, self.settings.detector.contained_frac)
+        # Collapse duplicate detections of one physical vessel (hull vs
+        # hull+mast double-fires) and drop nested boxes, before ranking/capping.
+        targets = state.dedup.update(targets, frame_num)
         targets = sorted(targets, key=lambda t: t.confidence, reverse=True)[:max_det]
 
         return DetectionEvent(

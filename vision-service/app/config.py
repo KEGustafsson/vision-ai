@@ -107,6 +107,16 @@ class DetectorConfig(BaseModel):
     # detection is dropped and the larger containing one is kept. A
     # person-in-water is never dropped (MOB safety). 1.0 disables.
     contained_frac: float = 0.8
+    # Merge two heavily-overlapping detections of the SAME physical vessel into
+    # one target (a sailing vessel double-firing: one box on the hull, another on
+    # hull+mast — often under two class labels, which per-class NMS never
+    # compares). Applies only when BOTH labels are in the vessel family
+    # (classmap.VESSEL_FAMILY; kayak/buoy/person are excluded so an occluding
+    # small craft is never merged away). Boxes whose intersection covers at
+    # least this fraction of the smaller box are collapsed to one; the merge is
+    # sticky across frames so the surviving track id doesn't flap (which would
+    # keep two chart blips alive downstream). 1.0 disables.
+    duplicate_vessel_ios: float = 0.55
     # Drop any detection whose estimated range is below this many metres (own-hull
     # artifacts / very-near clutter). Applied EARLY — before events and the
     # annotated overlay — so neither surfaces a too-close object. person is exempt
