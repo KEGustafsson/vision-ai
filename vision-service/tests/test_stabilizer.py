@@ -132,6 +132,68 @@ def test_smoothing_can_be_disabled():
         assert out[0].x == 100.0 + jitter  # raw box passes through untouched
 
 
+def test_low_confidence_outlier_moves_the_smoothed_box_less():
+    # Confidence-weighted smoothing (the NSA-Kalman idea): the same displaced
+    # in-gate box must perturb the shown average less when the detector was
+    # unsure about it than when it was confident.
+    def shift_after_outlier(conf):
+        s = TrackStabilizer(confirm_frames=1)
+        for seq in range(1, 6):
+            s.update([_box(100.0)], seq, 0.5)
+        out = s.update([_box(112.0, conf=conf)], 6, 0.5)
+        return out[0].x - 100.0
+
+    weak, strong = shift_after_outlier(0.1), shift_after_outlier(0.9)
+    assert 0.0 < weak < strong
+
+
+def test_conf_weighting_can_be_disabled():
+    # With conf_weight off the window is a plain unweighted average again:
+    # the outlier's confidence no longer matters.
+    def shift_after_outlier(conf):
+        s = TrackStabilizer(confirm_frames=1, conf_weight=False)
+        for seq in range(1, 6):
+            s.update([_box(100.0)], seq, 0.5)
+        out = s.update([_box(112.0, conf=conf)], 6, 0.5)
+        return out[0].x - 100.0
+
+    assert shift_after_outlier(0.1) == shift_after_outlier(0.9)
+
+
+def _coast_alive(s, tid, last_seen, until):
+    """Frames past last_seen the track kept being emitted (coasted)."""
+    alive = 0
+    for seq in range(last_seen + 1, until):
+        out = s.update([], seq, 0.5)
+        if any(t.track_id == tid for t in out):
+            alive = seq - last_seen
+    return alive
+
+
+def test_locked_track_coasts_longer_than_a_young_one():
+    # Track lock: an established track (>= lock_hits fresh detections) rides
+    # out a dropout twice as long as a young one before being dropped.
+    young = TrackStabilizer(confirm_frames=1, max_coast_frames=4,
+                            lock_hits=10, lock_coast_factor=2.0)
+    for seq in range(1, 4):                      # 3 hits: not locked
+        young.update([_box(100.0)], seq, 0.5)
+    assert _coast_alive(young, 1, last_seen=3, until=20) == 4
+
+    locked = TrackStabilizer(confirm_frames=1, max_coast_frames=4,
+                             lock_hits=10, lock_coast_factor=2.0)
+    for seq in range(1, 13):                     # 12 hits: locked
+        locked.update([_box(100.0)], seq, 0.5)
+    assert _coast_alive(locked, 1, last_seen=12, until=30) == 8
+
+
+def test_track_lock_can_be_disabled():
+    s = TrackStabilizer(confirm_frames=1, max_coast_frames=4,
+                        lock_hits=0, lock_coast_factor=2.0)
+    for seq in range(1, 13):
+        s.update([_box(100.0)], seq, 0.5)
+    assert _coast_alive(s, 1, last_seen=12, until=30) == 4
+
+
 def test_sticky_cap_keeps_incumbents_across_confidence_noise():
     a = _box(0.0, tid=1, conf=0.50)
     b = _box(200.0, tid=2, conf=0.49)

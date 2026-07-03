@@ -28,7 +28,16 @@ publish threshold. This stage gives each track a short lifecycle instead:
   out-of-gate frames the new place is accepted as real and the window restarts
   there. No motion model and no prediction (explicit operator decision):
   everything is judged against boxes already seen, never against an estimate
-  of where the target is going.
+  of where the target is going. Each box is weighted by its detection
+  confidence (StrongSORT's NSA-Kalman idea, arXiv:2202.13514, applied to the
+  windowed average): a shaky low-confidence measurement perturbs the shown
+  box less than a solid one.
+* **track lock** — a track with at least ``lock_hits`` fresh detections has
+  proven itself real and is allowed to coast ``lock_coast_factor`` times
+  longer than ``max_coast_frames`` before being dropped (the same idea as
+  ByteTrack's ``track_buffer`` and NvDCF's shadow tracking: an established
+  target survives a longer dropout with its box and id intact, while a young
+  track still dies fast).
 
 One instance per camera (state is keyed by the backend's stable track id).
 Untracked detections (no id) can't be coasted and pass through on a plain
@@ -58,19 +67,26 @@ class _BoxSmoother:
     real (the detector re-seated, the target actually is elsewhere): the
     window restarts from the latest raw box. An in-gate box resets the
     rejection count, so a lone spike every few frames never accumulates
-    acceptance."""
+    acceptance.
 
-    def __init__(self, window: int, jump_tol: float, jump_confirm: int):
-        self._boxes: deque[tuple[float, float, float, float]] = deque(
+    With ``conf_weight`` each box enters the average weighted by its detection
+    confidence (NSA-Kalman analogue): a marginal detection nudges the shown box,
+    a solid one moves it."""
+
+    def __init__(self, window: int, jump_tol: float, jump_confirm: int,
+                 conf_weight: bool = True):
+        self._boxes: deque[tuple[float, float, float, float, float]] = deque(
             maxlen=max(1, window))
         self._jump_tol = max(0.0, jump_tol)
         self._jump_confirm = max(1, jump_confirm)
+        self._conf_weight = conf_weight
         self._rejects = 0
         self._last_seq = 0
 
     def _avg(self) -> tuple[float, float, float, float]:
-        n = len(self._boxes)
-        x, y, w, h = (sum(b[i] for b in self._boxes) / n for i in range(4))
+        total = sum(b[4] for b in self._boxes)
+        x, y, w, h = (sum(b[i] * b[4] for b in self._boxes) / total
+                      for i in range(4))
         return x, y, w, h
 
     def _plausible(self, tr: RawTrack, gap: int) -> bool:
@@ -97,7 +113,11 @@ class _BoxSmoother:
             # The leap persisted: it is real. Follow it from scratch.
             self._boxes.clear()
         self._rejects = 0
-        self._boxes.append((tr.x, tr.y, tr.w, tr.h))
+        # A floor on the weight keeps a window of all-marginal detections from
+        # degenerating (and a zero-confidence box from being averaged out of
+        # existence entirely).
+        wt = max(tr.confidence, 0.05) if self._conf_weight else 1.0
+        self._boxes.append((tr.x, tr.y, tr.w, tr.h, wt))
         x, y, w, h = self._avg()
         return replace(tr, x=x, y=y, w=w, h=h)
 
@@ -140,7 +160,9 @@ class TrackStabilizer:
                  coast_velocity_factor: float = 0.4,
                  person_confirm_frames: int = 1,
                  smooth: bool = True, smooth_window: int = 5,
-                 jump_tol: float = 0.35, jump_confirm: int = 3):
+                 jump_tol: float = 0.35, jump_confirm: int = 3,
+                 lock_hits: int = 30, lock_coast_factor: float = 2.0,
+                 conf_weight: bool = True):
         self.confirm_frames = max(1, confirm_frames)
         # MOB-critical: person tracks confirm faster (default: first frame).
         self.person_confirm_frames = max(1, person_confirm_frames)
@@ -159,6 +181,11 @@ class TrackStabilizer:
         self.smooth_window = max(1, smooth_window)
         self.jump_tol = jump_tol
         self.jump_confirm = jump_confirm
+        self.conf_weight = conf_weight
+        # Track lock: hits needed to earn the extended coast window (0 = off)
+        # and how much longer a locked track may coast (see module docstring).
+        self.lock_hits = max(0, lock_hits)
+        self.lock_coast_factor = max(1.0, lock_coast_factor)
         self._st: dict[int, _State] = {}
 
     def _confirm_for(self, label: str) -> int:
@@ -194,7 +221,8 @@ class TrackStabilizer:
                                            last_seq=seq, hits=1, confirmed=False)
                 if self.smooth:
                     s.smoother = _BoxSmoother(self.smooth_window,
-                                              self.jump_tol, self.jump_confirm)
+                                              self.jump_tol, self.jump_confirm,
+                                              self.conf_weight)
             else:
                 s.conf = self.alpha * tr.confidence + (1 - self.alpha) * s.conf
                 s.last_seq = seq
@@ -219,7 +247,14 @@ class TrackStabilizer:
                 if missed > self._confirm_for(s.track.label):
                     del self._st[tid]
                 continue
-            if missed > self.max_coast_frames or s.conf < conf_off:
+            # Track lock: a track that has proven itself over lock_hits fresh
+            # detections earns a longer coast window, so an established vessel
+            # rides out a longer dropout (wave occlusion, a wake burst) without
+            # losing its box or id; a young track still dies fast.
+            coast_limit = self.max_coast_frames
+            if self.lock_hits and s.hits >= self.lock_hits:
+                coast_limit = int(round(self.max_coast_frames * self.lock_coast_factor))
+            if missed > coast_limit or s.conf < conf_off:
                 del self._st[tid]
                 continue
             base = s.track

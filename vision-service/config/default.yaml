@@ -21,6 +21,9 @@ detector:
   confidence: 0.35
   imgsz: 640
   max_det: 20
+  # Ultralytics tracker association config. Stock name (bytetrack.yaml /
+  # botsort.yaml) or a repo-local marine preset — see config/trackers/
+  # (bytetrack_marine.yaml, botsort_marine.yaml) for tuning rationale.
   tracker: bytetrack.yaml
   # Drop detections whose bbox exceeds this fraction of the frame (own hull /
   # very-near structure mis-detected as a vessel). 1.0 disables the filter.

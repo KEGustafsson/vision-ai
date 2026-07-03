@@ -1,0 +1,27 @@
+# Marine-tuned BoT-SORT association config (Ultralytics tracker format).
+# Select via detector.tracker: config/trackers/botsort_marine.yaml
+#
+# Same association tuning as bytetrack_marine.yaml (see the rationale there),
+# plus BoT-SORT's camera-motion compensation: gmc_method sparseOptFlow
+# estimates the frame-to-frame global transform (sparse optical flow on the
+# background) and subtracts it before association, so pitch/roll/yaw of the
+# boat-mounted camera no longer reads as every target jumping at once — the
+# single biggest cause of association breaks in a seaway. Costs some CPU per
+# frame; prefer bytetrack_marine.yaml if the Jetson is already saturated.
+#
+# with_reid stays off (appearance embedding is extra GPU work per frame and
+# the pipeline's waterline re-id already recovers identity); set
+# with_reid: True + model: auto to trial native appearance re-id if headroom
+# allows.
+tracker_type: botsort
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.4
+track_buffer: 90
+match_thresh: 0.7
+fuse_score: True
+gmc_method: sparseOptFlow
+proximity_thresh: 0.5
+appearance_thresh: 0.25
+with_reid: False
+model: auto

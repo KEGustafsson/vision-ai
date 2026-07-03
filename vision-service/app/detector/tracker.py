@@ -21,6 +21,7 @@ and velocity history.
 from __future__ import annotations
 
 import heapq
+import math
 from collections import deque
 from typing import Deque, Dict, Optional, Tuple
 
@@ -33,6 +34,9 @@ def reid_options(det) -> dict:
         "reid_min_x_overlap": det.reid_min_x_overlap,
         "reid_bottom_tol": det.reid_bottom_tol_frac,
         "reid_max_width_ratio": det.reid_max_width_ratio,
+        "reid_buffer_frac": det.reid_buffer_frac_per_frame,
+        "reid_buffer_max": det.reid_buffer_max_frac,
+        "reid_dir_min_speed": det.reid_dir_min_speed_px,
     }
 
 
@@ -40,7 +44,9 @@ class VelocityTracker:
     def __init__(self, history: int = 5, id_min: int = 10, id_max: int = 99,
                  reid: bool = True, reid_max_gap: int = 40,
                  reid_min_x_overlap: float = 0.5, reid_bottom_tol: float = 0.35,
-                 reid_max_width_ratio: float = 1.6):
+                 reid_max_width_ratio: float = 1.6,
+                 reid_buffer_frac: float = 0.03, reid_buffer_max: float = 0.25,
+                 reid_dir_min_speed: float = 2.0):
         if id_min > id_max:
             raise ValueError(f"id_min ({id_min}) must be <= id_max ({id_max})")
         self._hist: Dict[int, Deque[Tuple[int, float, float]]] = {}
@@ -74,6 +80,16 @@ class VelocityTracker:
         self._reid_min_x_overlap = min(max(reid_min_x_overlap, 0.0), 1.0)
         self._reid_bottom_tol = max(0.0, reid_bottom_tol)
         self._reid_max_width_ratio = max(1.0, reid_max_width_ratio)
+        # Buffered matching (C-BIoU, arXiv:2211.14317): the re-id gates widen
+        # with the dropout gap, because the velocity prediction gets less
+        # certain the longer the target was unseen. Growth per missed frame,
+        # capped, both as fractions of the narrower box's dimension.
+        self._reid_buffer_frac = max(0.0, reid_buffer_frac)
+        self._reid_buffer_max = max(0.0, reid_buffer_max)
+        # Direction-consistency gate (OC-SORT's observation-centric momentum,
+        # arXiv:2203.14360): a mover at/above this speed (px/frame) can only be
+        # re-identified ALONG its direction of travel. 0 disables.
+        self._reid_dir_min_speed = max(0.0, reid_dir_min_speed)
         self._ident: Dict[int, Tuple[float, float, float, float, str, int]] = {}
         self._alias: Dict[int, int] = {}
         # seq each alias was last resolved through, so aliases whose RAW id the
@@ -161,6 +177,17 @@ class VelocityTracker:
           by its last known pixel velocity over the gap before comparing, so a
           moving vessel is re-acquired where it *is now*, and a new arrival
           sitting where a moving vessel *used to be* no longer matches.
+
+        Two association refinements from the MOT literature:
+
+        * **buffered matching** (C-BIoU, arXiv:2211.14317) — the overlap and
+          waterline gates WIDEN with the dropout gap (capped), because the
+          velocity prediction is less certain the longer the target was
+          unseen; a fresh flip is still judged tightly.
+        * **direction consistency** (OC-SORT's observation-centric momentum,
+          arXiv:2203.14360) — a candidate clearly displaced AGAINST a moving
+          track's direction of travel is a different vessel, even when the
+          widened gate would geometrically accept it.
         """
         best: Optional[int] = None
         best_ov = self._reid_min_x_overlap
@@ -181,15 +208,30 @@ class VelocityTracker:
             # the comparison happens where the vessel should be NOW.
             pvx, pvy = self._last_velocity(tid)
             px, pb = ix + pvx * gap, (iy + ih) + pvy * gap
-            # Fraction of the narrower box's width shared with the candidate.
-            ov = (min(x + w, px + iw) - max(x, px)) / min_w
+            # Buffer for this gap: how much the matching space is expanded, as
+            # a fraction of the narrower box's dimension (C-BIoU).
+            buf_frac = min(self._reid_buffer_max, self._reid_buffer_frac * gap)
+            # Fraction of the narrower box's width shared with the candidate,
+            # after buffering both boxes horizontally.
+            ov = (min(x + w, px + iw) - max(x, px)
+                  + 2.0 * buf_frac * min_w) / min_w
             if ov < best_ov:
                 continue
             # Bottom edges must sit on the same waterline, within a tolerance
             # scaled by the SHORTER box (the hull) — a mast-height tolerance
-            # would happily bridge two stacked targets.
-            if abs(bottom - pb) > self._reid_bottom_tol * min(h, ih):
+            # would happily bridge two stacked targets. The buffer relaxes it
+            # for long gaps (pitch/roll moves the waterline while unseen).
+            if abs(bottom - pb) > (self._reid_bottom_tol + buf_frac) * min(h, ih):
                 continue
+            # Direction consistency: a track that was clearly moving can only
+            # be re-acquired by a candidate displaced broadly ALONG its motion.
+            # A small displacement (a shape flip in place) is always allowed.
+            if self._reid_dir_min_speed > 0 and \
+                    math.hypot(pvx, pvy) >= self._reid_dir_min_speed:
+                dx = (x + w / 2.0) - (ix + iw / 2.0)
+                dy = bottom - (iy + ih)
+                if math.hypot(dx, dy) > 0.25 * min_w and dx * pvx + dy * pvy < 0:
+                    continue
             best, best_ov = tid, ov
         return best
 

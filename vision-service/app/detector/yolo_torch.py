@@ -17,12 +17,28 @@ Two execution paths:
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from typing import Dict, List, Optional
 
 from ..camera.base import Frame
 from .base import Detector, RawTrack
 from .classmap import label_for_model
 from .tracker import VelocityTracker
+
+
+def _resolve_tracker_cfg(cfg: str) -> str:
+    """Absolute path for a repo-local tracker config (e.g.
+    ``config/trackers/bytetrack_marine.yaml``), resolved against the CWD and
+    then the vision-service root, so the preset is found regardless of where
+    the process was launched. Anything else (an Ultralytics stock name like
+    ``bytetrack.yaml``) passes through for Ultralytics to resolve itself."""
+    p = Path(cfg)
+    if p.is_file():
+        return str(p.resolve())
+    local = Path(__file__).resolve().parents[2] / cfg
+    if local.is_file():
+        return str(local)
+    return cfg
 
 
 class _Batcher:
@@ -108,7 +124,7 @@ class YoloTorchDetector(Detector):
         self._device = device
         self._conf = confidence
         self._imgsz = imgsz
-        self._tracker_cfg = tracker_cfg
+        self._tracker_cfg = _resolve_tracker_cfg(tracker_cfg)
         self._lock = threading.Lock()
         # Waterline re-identification settings for each camera's VelocityTracker.
         self._reid_opts = reid_opts or {}

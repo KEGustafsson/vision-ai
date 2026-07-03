@@ -267,6 +267,71 @@ def test_reid_stale_aliases_expire_while_canonical_lives_on():
     assert len(vt._alias) <= 60
 
 
+def test_reid_buffered_gate_reacquires_after_long_dropout():
+    # C-BIoU-style buffered matching: a stationary vessel drops out for 20
+    # frames and re-appears shifted by 60% of its width (bobbing / prediction
+    # error accumulated while unseen). Raw footprint overlap is 0.4 < 0.5, so
+    # the strict gate alone would mint a new id; the buffer widens the
+    # matching space with the gap and the vessel keeps its id.
+    vt = VelocityTracker()
+    box = dict(x=100.0, y=360.0, w=200.0, h=40.0)
+    canon0 = None
+    for seq in range(3):
+        canon0, _ = _touch(vt, 1, seq, box)
+    shifted = dict(box, x=220.0)
+    canon1, _ = _touch(vt, 2, seq=22, box=shifted)
+    assert canon1 == canon0
+
+
+def test_reid_buffer_stays_tight_for_short_gaps():
+    # The same 60%-of-width shift ONE frame later is not a plausible flip of
+    # the same hull: the buffer is proportional to the gap, so a fresh
+    # candidate is still judged (almost) as strictly as before.
+    vt = VelocityTracker()
+    box = dict(x=100.0, y=360.0, w=200.0, h=40.0)
+    canon0 = None
+    for seq in range(3):
+        canon0, _ = _touch(vt, 1, seq, box)
+    shifted = dict(box, x=220.0)
+    canon1, _ = _touch(vt, 2, seq=3, box=shifted)
+    assert canon1 != canon0
+
+
+def test_reid_direction_gate_rejects_a_candidate_behind_a_mover():
+    # OC-SORT-style momentum: a vessel crossing at 8 px/frame disappears; a
+    # same-width box then appears clearly BEHIND it (against its motion).
+    # The buffered overlap against the predicted footprint would accept it —
+    # the direction-consistency gate must not.
+    def run(min_speed):
+        vt = VelocityTracker(reid_dir_min_speed=min_speed)
+        moving = dict(x=100.0, y=360.0, w=200.0, h=40.0)
+        canon0 = None
+        for seq in range(5):
+            canon0, _ = _touch(vt, 1, seq, dict(moving, x=100.0 + 8.0 * seq))
+        behind = dict(moving, x=100.0 + 8.0 * 4 - 80.0)
+        canon1, _ = _touch(vt, 2, seq=8, box=behind)
+        return canon0, canon1
+
+    canon0, canon1 = run(min_speed=2.0)
+    assert canon1 != canon0
+    # Sanity: with the gate disabled the geometry alone WOULD hand the id
+    # over — proving the gate (not the overlap check) is what rejected it.
+    canon0, canon1 = run(min_speed=0.0)
+    assert canon1 == canon0
+
+
+def test_reid_direction_gate_still_allows_in_place_shape_flips():
+    # A partial/full flip has near-zero displacement; the direction gate must
+    # never break the bread-and-butter re-id case, even on a moving vessel.
+    vt = VelocityTracker()
+    canon0 = None
+    for seq in range(5):
+        canon0, _ = _touch(vt, 1, seq, dict(FULL, x=FULL["x"] + 8.0 * seq))
+    hull_next = dict(HULL, x=HULL["x"] + 8.0 * 5)
+    canon1, _ = _touch(vt, 2, seq=5, box=hull_next)
+    assert canon1 == canon0
+
+
 def test_reid_alias_dies_with_pruned_track():
     vt = VelocityTracker()
     canon0, _ = _touch(vt, 1, seq=0, box=FULL)

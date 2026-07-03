@@ -167,6 +167,19 @@ class DetectorConfig(BaseModel):
     # there. In-gate frames reset the count, so a recurring lone spike (glint,
     # marina cluster box) never accumulates acceptance.
     stabilize_jump_confirm_frames: int = 3
+    # Track lock (the ByteTrack track_buffer / NvDCF shadow-tracking idea): a
+    # track seen at least this many frames has proven itself real and may
+    # coast stabilize_lock_coast_factor times longer than
+    # stabilize_max_coast_frames before it is dropped, so an established
+    # vessel rides out a longer dropout (wave occlusion, a wake burst) with
+    # its box and id intact while a young track still dies fast. 0 disables.
+    stabilize_lock_hits: int = 30
+    stabilize_lock_coast_factor: float = 2.0
+    # Weight each box in the smoothing window by its detection confidence
+    # (StrongSORT's NSA-Kalman idea, arXiv:2202.13514, applied to the rolling
+    # average): a marginal low-confidence measurement perturbs the shown box
+    # less than a solid detection. false => plain unweighted average.
+    stabilize_conf_weight: bool = True
     # Waterline re-identification: keep ONE detection id on a vessel whose box
     # alternates between partial and full extents (hull only <-> hull + mast).
     # The backend trackers (ByteTrack/NvDCF) associate by box IoU, so that shape
@@ -195,6 +208,21 @@ class DetectorConfig(BaseModel):
     # mast adds height, not width), so a larger mismatch is a DIFFERENT vessel
     # that must not inherit the id.
     reid_max_width_ratio: float = 1.6
+    # Buffered matching (C-BIoU, arXiv:2211.14317): the re-id gates RELAX as
+    # the dropout grows — the footprint-overlap window and the waterline
+    # tolerance widen by this fraction of the narrower box's dimension per
+    # missed frame (velocity prediction is less certain the longer the target
+    # was unseen), capped at reid_buffer_max_frac. A fresh partial/full flip
+    # is still judged tightly. 0 disables the widening.
+    reid_buffer_frac_per_frame: float = 0.03
+    reid_buffer_max_frac: float = 0.25
+    # Direction-consistency gate (OC-SORT's observation-centric momentum,
+    # arXiv:2203.14360): a track moving at or above this speed (px/frame) is
+    # only re-identified by a candidate displaced broadly ALONG its direction
+    # of travel — a box appearing clearly BEHIND a mover is a different
+    # vessel, even where the buffered gate would geometrically accept it.
+    # Counterbalances the widened matching space above. 0 disables.
+    reid_dir_min_speed_px: float = 2.0
     # Batch both cameras into a single inference (needs a batch-capable engine).
     # Removes the one-camera-at-a-time detector serialization. Falls back to
     # per-camera inference automatically when the engine is batch=1.
