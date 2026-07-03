@@ -18,13 +18,17 @@ publish threshold. This stage gives each track a short lifecycle instead:
   adds latency to the most safety-critical detection. A single-frame false person
   is still debounced downstream by the plugin's MOB persistence counter before any
   alarm is raised, so confirming it here on the first frame is safe.
-* **box smoothing** — each shown box is the **rolling average of the track's
-  last few raw boxes**. No motion model and no prediction (explicit operator
-  decision after predictive variants misbehaved on dense marina scenes): the
-  emitted box simply follows the detections, with per-frame jitter and shape
-  flips spread across the window instead of snapping. Averaging is linear, so
-  the emitted bottom edge is exactly the average of the detected bottom
-  edges — a steady waterline stays steady.
+* **box smoothing with a jump gate** — each shown box is the **rolling average
+  of the track's recent raw boxes**, and a raw box that leaps implausibly far
+  from that average (or changes size implausibly fast) is treated as a FALSE
+  measurement: it is not averaged in and the held average is emitted instead.
+  Real objects don't teleport — a boat moves a small fraction of its own
+  length per frame — so a big jump is detector noise (a glint, a cluster box
+  over a marina row) until it *persists*: after ``jump_confirm`` consecutive
+  out-of-gate frames the new place is accepted as real and the window restarts
+  there. No motion model and no prediction (explicit operator decision):
+  everything is judged against boxes already seen, never against an estimate
+  of where the target is going.
 
 One instance per camera (state is keyed by the backend's stable track id).
 Untracked detections (no id) can't be coasted and pass through on a plain
@@ -40,17 +44,61 @@ from .base import RawTrack
 
 
 class _BoxSmoother:
-    """Rolling average over the track's last ``window`` raw boxes. Just follows
-    the detections — no velocity, no prediction, no holding."""
+    """Rolling average over the track's recent raw boxes, guarded by a jump
+    gate (see module docstring). Judges each raw box only against boxes
+    already seen — no velocity, no prediction.
 
-    def __init__(self, window: int):
+    Gate: relative to the current average, the center may shift at most
+    ``jump_tol`` of the box's larger dimension per elapsed frame, and width/
+    height may each grow or shrink at most ``(1 + jump_tol)`` per elapsed
+    frame (a dropout naturally earns a proportionally wider gate — that is
+    just looser plausibility after not looking, not a motion estimate). An
+    out-of-gate box is rejected: the held average is emitted, nothing enters
+    the window. ``jump_confirm`` consecutive rejections mean the change is
+    real (the detector re-seated, the target actually is elsewhere): the
+    window restarts from the latest raw box. An in-gate box resets the
+    rejection count, so a lone spike every few frames never accumulates
+    acceptance."""
+
+    def __init__(self, window: int, jump_tol: float, jump_confirm: int):
         self._boxes: deque[tuple[float, float, float, float]] = deque(
             maxlen=max(1, window))
+        self._jump_tol = max(0.0, jump_tol)
+        self._jump_confirm = max(1, jump_confirm)
+        self._rejects = 0
+        self._last_seq = 0
 
-    def apply(self, tr: RawTrack) -> RawTrack:
-        self._boxes.append((tr.x, tr.y, tr.w, tr.h))
+    def _avg(self) -> tuple[float, float, float, float]:
         n = len(self._boxes)
         x, y, w, h = (sum(b[i] for b in self._boxes) / n for i in range(4))
+        return x, y, w, h
+
+    def _plausible(self, tr: RawTrack, gap: int) -> bool:
+        ax, ay, aw, ah = self._avg()
+        allowance = self._jump_tol * max(1, gap)
+        shift = max(abs((tr.x + tr.w / 2.0) - (ax + aw / 2.0)),
+                    abs((tr.y + tr.h / 2.0) - (ay + ah / 2.0)))
+        if shift > allowance * max(aw, ah):
+            return False
+        max_ratio = (1.0 + self._jump_tol) ** max(1, gap)
+        for new, old in ((tr.w, aw), (tr.h, ah)):
+            if new <= 0 or old <= 0 or new / old > max_ratio or old / new > max_ratio:
+                return False
+        return True
+
+    def apply(self, tr: RawTrack, seq: int) -> RawTrack:
+        gap, self._last_seq = seq - self._last_seq, seq
+        if self._boxes and self._jump_tol > 0 and not self._plausible(tr, gap):
+            self._rejects += 1
+            if self._rejects < self._jump_confirm:
+                # False measurement: emit the held average unchanged.
+                x, y, w, h = self._avg()
+                return replace(tr, x=x, y=y, w=w, h=h)
+            # The leap persisted: it is real. Follow it from scratch.
+            self._boxes.clear()
+        self._rejects = 0
+        self._boxes.append((tr.x, tr.y, tr.w, tr.h))
+        x, y, w, h = self._avg()
         return replace(tr, x=x, y=y, w=w, h=h)
 
 
@@ -91,7 +139,8 @@ class TrackStabilizer:
                  hysteresis_ratio: float = 0.6, ema_alpha: float = 0.4,
                  coast_velocity_factor: float = 0.4,
                  person_confirm_frames: int = 1,
-                 smooth: bool = True, smooth_window: int = 5):
+                 smooth: bool = True, smooth_window: int = 5,
+                 jump_tol: float = 0.35, jump_confirm: int = 3):
         self.confirm_frames = max(1, confirm_frames)
         # MOB-critical: person tracks confirm faster (default: first frame).
         self.person_confirm_frames = max(1, person_confirm_frames)
@@ -103,11 +152,13 @@ class TrackStabilizer:
         # damped value keeps a coasted box near the object instead of letting a
         # noisy velocity estimate fling it away over several missed frames.
         self.coast_velocity_factor = max(0.0, coast_velocity_factor)
-        # Rolling-average box smoothing (see module docstring). Applied per
-        # track to everything emitted, so overlay, event geometry and coasting
-        # all work from the same calm box.
+        # Rolling-average box smoothing + jump gate (see module docstring).
+        # Applied per track to everything emitted, so overlay, event geometry
+        # and coasting all work from the same calm box.
         self.smooth = smooth
         self.smooth_window = max(1, smooth_window)
+        self.jump_tol = jump_tol
+        self.jump_confirm = jump_confirm
         self._st: dict[int, _State] = {}
 
     def _confirm_for(self, label: str) -> int:
@@ -142,13 +193,14 @@ class TrackStabilizer:
                 s = self._st[tid] = _State(conf=tr.confidence, track=tr,
                                            last_seq=seq, hits=1, confirmed=False)
                 if self.smooth:
-                    s.smoother = _BoxSmoother(self.smooth_window)
+                    s.smoother = _BoxSmoother(self.smooth_window,
+                                              self.jump_tol, self.jump_confirm)
             else:
                 s.conf = self.alpha * tr.confidence + (1 - self.alpha) * s.conf
                 s.last_seq = seq
                 s.hits += 1
             if s.smoother is not None:
-                tr = s.smoother.apply(tr)
+                tr = s.smoother.apply(tr, seq)
             # Coasting continues from the smoothed box, so a dropout doesn't
             # snap the box back to the last raw (jittery) position.
             s.track = tr

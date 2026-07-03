@@ -155,6 +155,18 @@ class DetectorConfig(BaseModel):
     # laggier (a mover's box trails by about half the window). 1 disables.
     stabilize_smooth: bool = True
     stabilize_smooth_window: int = 5
+    # Jump gate on the smoothed box: real objects don't teleport, so a raw box
+    # whose center leaps more than this fraction of the box's larger dimension
+    # per elapsed frame — or whose width/height changes by more than
+    # (1 + this) per elapsed frame — is a FALSE measurement: it is not
+    # averaged in and the held average is emitted instead. Judged only against
+    # boxes already seen (no motion estimate). 0 disables the gate.
+    stabilize_jump_tol: float = 0.35
+    # An out-of-gate box observed this many CONSECUTIVE frames is real (the
+    # target genuinely is elsewhere / another size): the average restarts
+    # there. In-gate frames reset the count, so a recurring lone spike (glint,
+    # marina cluster box) never accumulates acceptance.
+    stabilize_jump_confirm_frames: int = 3
     # Waterline re-identification: keep ONE detection id on a vessel whose box
     # alternates between partial and full extents (hull only <-> hull + mast).
     # The backend trackers (ByteTrack/NvDCF) associate by box IoU, so that shape

@@ -316,6 +316,8 @@ class DeepStreamPipeline:
                 person_confirm_frames=d.stabilize_person_confirm_frames,
                 smooth=d.stabilize_smooth,
                 smooth_window=d.stabilize_smooth_window,
+                jump_tol=d.stabilize_jump_tol,
+                jump_confirm=d.stabilize_jump_confirm_frames,
             ) if d.stabilize else None
             with self._lock:
                 self._states[cam.name] = _StreamState(

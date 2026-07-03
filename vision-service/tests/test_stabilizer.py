@@ -69,26 +69,53 @@ def test_smoothing_follows_a_moving_box_with_window_lag_only():
     assert abs(width - 40.0) < 1e-6  # no smear, no inflation
 
 
-def test_smoothing_spreads_shape_flips_across_the_window():
+def test_jump_gate_rejects_recurring_shape_flips():
     # A vessel detected alternately as hull-only and hull+mast flips its raw
     # box height by 230 px per frame under ONE id (re-id keeps the id; the
-    # shape still flaps). The rolling average spreads that flip across the
-    # window: bounded steps around the running mean, no full-size snap.
+    # shape still flaps). A box can't really grow 7x in one frame, so the
+    # flipped extent is a false measurement: the gate holds the established
+    # box, and because in-gate frames keep resetting the rejection count, the
+    # recurring flip NEVER accumulates acceptance — the box is simply stable.
     s = TrackStabilizer(confirm_frames=1)
     hs = []
     for seq in range(1, 40):
         h = 40.0 if seq % 2 else 270.0  # hull only <-> hull + mast
         out = s.update([_box(100.0, y=300.0 - h, h=h)], seq, 0.5)
         hs.append(out[0].h)
-    for prev, cur in zip(hs[10:], hs[11:]):
-        assert abs(cur - prev) <= 230.0 / 5 + 1e-6  # a window's share, no snap
-    assert 100.0 < hs[-1] < 200.0  # tracks the average of the two extents
+    assert all(h == 40.0 for h in hs)  # rock-steady at the established extent
+
+
+def test_jump_gate_rejects_a_single_frame_teleport():
+    # A detector glitch throws the box across the frame for one frame. Real
+    # targets don't teleport: the spike must not appear in the output at all.
+    s = TrackStabilizer(confirm_frames=1)
+    xs = []
+    for seq in range(1, 30):
+        raw_x = 500.0 if seq == 15 else 100.0  # one-frame leap
+        out = s.update([_box(raw_x)], seq, 0.5)
+        xs.append(out[0].x)
+    assert max(xs) < 101.0  # the teleport frame emitted the held box
+
+
+def test_jump_gate_accepts_a_persistent_relocation():
+    # If the "implausible" position persists, it is real (the detector was
+    # wrong BEFORE, or re-seated on the true object): after jump_confirm
+    # consecutive frames the box follows to the new place and stays.
+    s = TrackStabilizer(confirm_frames=1, jump_confirm=3)
+    xs = []
+    for seq in range(1, 30):
+        raw_x = 100.0 if seq < 15 else 500.0  # permanent move at seq 15
+        out = s.update([_box(raw_x)], seq, 0.5)
+        xs.append(out[0].x)
+    assert xs[13] == 100.0   # still held on the first out-of-gate frame
+    assert xs[-1] == 500.0   # settled at the real new position
+    assert max(x for x in xs) <= 500.0  # never overshoots (no prediction)
 
 
 def test_smoothing_keeps_the_waterline_steady_across_height_flips():
     # Partial <-> full extent flips (hull only <-> hull + mast) share one id via
-    # re-id; averaging is linear, so a steady detected bottom edge (waterline)
-    # stays exactly steady while the top edge is averaged.
+    # re-id; whether a flip is averaged in (small) or gate-rejected (large),
+    # a steady detected bottom edge (waterline) stays exactly steady.
     s = TrackStabilizer(confirm_frames=1)
     for seq in range(1, 30):
         h = 40.0 if seq % 2 else 150.0
