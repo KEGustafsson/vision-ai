@@ -55,8 +55,26 @@ Ultralytics backends the repo ships **marine-tuned presets** in
   is left off — it is extra GPU work and the waterline re-id below already
   recovers identity.
 
-The DeepStream backend gets the equivalent from NvDCF's visual tracking and
-`maxShadowTrackingAge: 240` in `vision-service/deepstream/nvdcf_config.yml`.
+The DeepStream backend (the production target) gets the equivalent — and
+more — from [NvDCF][nvdcf] in `vision-service/deepstream/nvdcf_config.yml`:
+
+- **Correlation-filter visual tracking** (`VisualTracker`): NvDCF localises
+  each target visually between detector hits, with a low filter learning
+  rate (long visual memory through spray) and a widened search region for
+  wave-induced apparent motion. Note the section names are DeepStream
+  6.x/7.x format — the parser silently ignores unknown sections, so a stale
+  5.x-style `DCF:` block means the visual tracker runs on defaults.
+- **Shadow tracking** (`maxShadowTrackingAge: 240`, ~20 s): a lost target
+  keeps its id alive (unreported) and is re-acquired under the same number.
+- **Motion-based re-association** (`enableReAssoc: 1`, DeepStream 6.2+): a
+  lost tracklet's trajectory is projected forward and a newborn tracklet
+  matching it in position/velocity/size is re-linked to the old id — the
+  tracker-level cure for dropout-induced id switches, with no ReID network
+  cost. Projection windows are rescaled for ~12 FPS marine motion.
+- **Cascaded association** (`associationMatcherType: 1`): confirmed targets
+  match before tentative ones, so a flickery newborn can't steal a confirmed
+  vessel's detection; the size-similarity gate is relaxed (0.6 → 0.4) so a
+  hull-only ↔ hull+mast extent flip doesn't break association at the source.
 
 ## Layer 2 — waterline re-identification (`VelocityTracker.resolve`)
 
@@ -135,7 +153,8 @@ targets can't swap the last slot (and blink) on every confidence wobble.
 | Symptom on the water | First knob to try |
 |---|---|
 | Box blinks off for a frame or two | raise `stabilize_max_coast_frames` |
-| Established vessel drops id after a long wave occlusion | raise `stabilize_lock_hits`/`stabilize_lock_coast_factor`, or `track_buffer` in the tracker preset, or `reid_max_gap_frames` |
+| Established vessel drops id after a long wave occlusion | raise `stabilize_lock_hits`/`stabilize_lock_coast_factor`, or `track_buffer` in the tracker preset (deepstream: `maxShadowTrackingAge`, `maxTrackletMatchingTimeSearchRange`), or `reid_max_gap_frames` |
+| (deepstream) same vessel gets a new id after every dropout | check `enableReAssoc: 1` is set and the config uses 6.x/7.x section names (a 5.x `DCF:` block is silently ignored) |
 | Same vessel alternates between two numbers | waterline re-id gates too tight: `reid_min_x_overlap`, `reid_buffer_frac_per_frame` |
 | A departed vessel's id lands on a newcomer | tighten `reid_max_width_ratio`, raise `reid_dir_min_speed_px`, lower `reid_max_gap_frames` |
 | Everything loses lock together in a seaway | switch to `config/trackers/botsort_marine.yaml` (camera-motion compensation) |
@@ -155,9 +174,11 @@ targets can't swap the last slot (and blink) on every confidence wobble.
 - OC-SORT: [Cao et al., *Observation-Centric SORT: Rethinking SORT for Robust
   Multi-Object Tracking*, CVPR 2023][ocsort]
 - StrongSORT: [Du et al., *StrongSORT: Make DeepSORT Great Again*, 2022][strongsort]
+- NvDCF / re-association: [NVIDIA DeepStream Gst-nvtracker documentation][nvdcf]
 
 [bytetrack]: https://arxiv.org/abs/2110.06864
 [botsort]: https://arxiv.org/abs/2206.14651
 [cbiou]: https://arxiv.org/abs/2211.14317
 [ocsort]: https://arxiv.org/abs/2203.14360
 [strongsort]: https://arxiv.org/abs/2202.13514
+[nvdcf]: https://docs.nvidia.com/metropolis/deepstream/dev-guide/text/DS_plugin_gst-nvtracker.html
