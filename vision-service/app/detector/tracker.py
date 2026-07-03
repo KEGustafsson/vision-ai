@@ -69,6 +69,11 @@ class VelocityTracker:
         self._reid_bottom_tol = max(0.0, reid_bottom_tol)
         self._ident: Dict[int, Tuple[float, float, float, float, str, int]] = {}
         self._alias: Dict[int, int] = {}
+        # seq each alias was last resolved through, so aliases whose RAW id the
+        # backend stopped emitting can expire on their own: a long-lived vessel
+        # that flickers mints a new raw id per flip, and without per-alias
+        # expiry every one of them would live as long as the canonical track.
+        self._alias_seen: Dict[int, int] = {}
 
     def set_id_range(self, id_min: int, id_max: int) -> None:
         """Resize the recycled display-id pool to follow max-targets-per-frame so
@@ -119,11 +124,14 @@ class VelocityTracker:
         them could mask one of two live casualties.
         """
         canon = self._alias.get(track_id, track_id)
+        if canon != track_id:
+            self._alias_seen[track_id] = seq
         if self._reid and label != "person" and canon not in self._hist:
             match = self._match_identity(track_id, seq, x, y, w, h, label)
             if match is not None:
                 canon = match
                 self._alias[track_id] = canon
+                self._alias_seen[track_id] = seq
         self._ident[canon] = (x, y, w, h, label, seq)
         return canon
 
@@ -182,6 +190,13 @@ class VelocityTracker:
 
     def prune(self, active_ids: set, seq: int, max_idle: int = 60) -> None:
         """Drop tracks not seen recently to bound memory."""
+        # Expire aliases whose raw id hasn't been resolved recently, even while
+        # their canonical track lives on — otherwise a flickering vessel grows
+        # one immortal alias per flip over a long session.
+        for raw, last in list(self._alias_seen.items()):
+            if raw not in active_ids and seq - last > max_idle:
+                self._alias.pop(raw, None)
+                self._alias_seen.pop(raw, None)
         for tid in list(self._hist.keys()):
             if tid in active_ids:
                 continue
@@ -193,7 +208,9 @@ class VelocityTracker:
                 # Aliases die with their canonical track: a raw id the backend
                 # resurrects later must start (and re-match) fresh, not point at
                 # state that no longer exists.
-                self._alias = {a: c for a, c in self._alias.items() if c != tid}
+                for a in [a for a, c in self._alias.items() if c == tid]:
+                    self._alias.pop(a, None)
+                    self._alias_seen.pop(a, None)
                 # Recycle the display id by appending to the *back* of the pool,
                 # so freed numbers rotate to the end and are reused last — the
                 # allocator keeps cycling through the whole range before handing a

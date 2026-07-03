@@ -243,6 +243,22 @@ def test_reid_co_occurring_partial_and_full_share_the_display_id():
     assert disp1 == disp0
 
 
+def test_reid_stale_aliases_expire_while_canonical_lives_on():
+    # A vessel that flickers for a long session mints a new raw id per flip;
+    # each alias must expire once its raw id stops being emitted, or the alias
+    # map grows one immortal entry per flip for the canonical track's lifetime.
+    vt = VelocityTracker()
+    canon, _ = _touch(vt, 1, seq=0, box=FULL)
+    for seq in range(1, 200):
+        raw = 1 if seq % 2 else 100 + seq  # a fresh raw id on every "hull" flip
+        c, _ = _touch(vt, raw, seq, box=FULL if seq % 2 else HULL)
+        assert c == canon
+        vt.prune({c}, seq)
+    # Only recently-resolved aliases survive; the map stays bounded by the
+    # prune window instead of growing with every flip.
+    assert len(vt._alias) <= 60
+
+
 def test_reid_alias_dies_with_pruned_track():
     vt = VelocityTracker()
     canon0, _ = _touch(vt, 1, seq=0, box=FULL)

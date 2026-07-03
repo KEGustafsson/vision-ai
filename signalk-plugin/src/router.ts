@@ -123,10 +123,15 @@ export function multipartBoundary(contentType: string | undefined): string {
 export class MjpegPartAligner {
   private buf: Buffer = Buffer.alloc(0);
   private readonly marker: Buffer;
+  // Delimiter form (CRLF + marker) for scanning INSIDE a part body: raw JPEG
+  // bytes can coincidentally contain "--boundary", but only a real boundary
+  // line is preceded by CRLF.
+  private readonly delimiter: Buffer;
   private readonly clientMarker: Buffer;
 
   constructor(upstreamBoundary: string, clientBoundary: string) {
     this.marker = Buffer.from(`--${upstreamBoundary}`);
+    this.delimiter = Buffer.from(`\r\n--${upstreamBoundary}`);
     this.clientMarker = Buffer.from(`--${clientBoundary}`);
   }
 
@@ -164,8 +169,10 @@ export class MjpegPartAligner {
           break; // body still arriving
         }
       } else {
-        // No Content-Length: the part runs to the next boundary marker.
-        const next = this.buf.indexOf(this.marker, headerEnd + 4);
+        // No Content-Length: the part runs to the next boundary line. Scan for
+        // the delimiter form (CRLF + marker) so binary body bytes that happen
+        // to contain "--boundary" can't end the part early.
+        const next = this.buf.indexOf(this.delimiter, headerEnd + 4);
         if (next < 0) {
           if (this.buf.length > MAX_PART_BYTES) throw new Error('mjpeg part too large');
           break;
@@ -233,8 +240,15 @@ function proxyStream(targetUrl: string, res: any): void {
       const upBoundary = multipartBoundary(up.headers['content-type']);
       if (!headersWritten) {
         clientBoundary = upBoundary;
+        // Always advertise the boundary the aligner will actually emit: when
+        // the upstream header is missing (or lacks boundary=), clientBoundary
+        // fell back to "frame", and a bare multipart/x-mixed-replace would
+        // leave the browser with no boundary to parse by.
+        const upContentType = up.headers['content-type'] || '';
         res.writeHead(up.statusCode, {
-          'content-type': up.headers['content-type'] || 'multipart/x-mixed-replace',
+          'content-type': /boundary=/i.test(upContentType)
+            ? upContentType
+            : `multipart/x-mixed-replace; boundary=${clientBoundary}`,
           'cache-control': 'no-store, no-cache, must-revalidate, max-age=0',
           pragma: 'no-cache',
           'x-accel-buffering': 'no',

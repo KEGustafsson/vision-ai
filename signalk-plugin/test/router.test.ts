@@ -15,8 +15,11 @@ function part(boundary: string, body: Buffer | string, withLength = true): Buffe
 }
 
 /** Parse a multipart byte stream strictly (as a browser would): every part must
- * carry its declared Content-Length in full, ending at a boundary. Returns the
- * bodies; throws on any truncated or malformed part. */
+ * start at a boundary and carry its declared Content-Length. Returns the bodies
+ * of the complete parts; throws on interior desync (bytes after a completed
+ * part that aren't a boundary — the mid-part-splice bug this suite guards
+ * against). A part still in flight at the TAIL of the stream is normal TCP
+ * chunking on a live connection and simply isn't returned yet. */
 function parseStrict(stream: Buffer, boundary: string): string[] {
   const marker = `--${boundary}`;
   const bodies: string[] = [];
@@ -25,17 +28,19 @@ function parseStrict(stream: Buffer, boundary: string): string[] {
     // skip inter-part CRLFs
     while (stream[off] === 0x0d || stream[off] === 0x0a) off++;
     if (off >= stream.length) break;
-    if (stream.subarray(off, off + marker.length).toString() !== marker) {
+    const head = stream.subarray(off, off + marker.length).toString();
+    if (head !== marker) {
+      if (marker.startsWith(head)) break; // boundary itself still in flight
       throw new Error(`expected boundary at ${off}`);
     }
     const headerEnd = stream.indexOf('\r\n\r\n', off);
-    if (headerEnd < 0) throw new Error('unterminated part headers');
+    if (headerEnd < 0) break; // trailing part headers still in flight
     const headers = stream.subarray(off, headerEnd).toString();
     const m = /content-length:\s*(\d+)/i.exec(headers);
     if (!m) throw new Error('part without Content-Length');
     const bodyStart = headerEnd + 4;
     const bodyEnd = bodyStart + Number(m[1]);
-    if (bodyEnd > stream.length) throw new Error('truncated part body');
+    if (bodyEnd > stream.length) break; // trailing part body still in flight
     bodies.push(stream.subarray(bodyStart, bodyEnd).toString());
     off = bodyEnd;
   }
@@ -149,11 +154,19 @@ function startFakeContainer(port: number, tag: string): Promise<http.Server> {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Poll until the condition holds (deterministic under CI load, unlike a fixed
+ * sleep) or the timeout elapses — assertions after it then report the miss. */
+async function waitFor(cond: () => boolean, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!cond() && Date.now() < deadline) await sleep(25);
+}
+
 describe('proxyStream across a container restart', () => {
   it('keeps the browser connection open and resumes with only whole parts', async () => {
-    const PORT = 18790;
-    let container = await startFakeContainer(PORT, 'GEN1');
-    const routes = buildRouter(`http://127.0.0.1:${PORT}`);
+    // Ports are OS-assigned (listen on 0) so parallel suites can't collide.
+    let container = await startFakeContainer(0, 'GEN1');
+    const containerPort = (container.address() as AddressInfo).port;
+    const routes = buildRouter(`http://127.0.0.1:${containerPort}`);
 
     const plugin = http.createServer((req, res) => {
       (res as any).set = (k: string, v: string) => res.setHeader(k, v);
@@ -162,39 +175,42 @@ describe('proxyStream across a container restart', () => {
       (req as any).params = { camera: 'forward' };
       routes.get('/stream/:camera')!(req, res);
     });
-    await new Promise<void>((r) => plugin.listen(PORT + 1, () => r()));
+    await new Promise<void>((r) => plugin.listen(0, () => r()));
+    const pluginPort = (plugin.address() as AddressInfo).port;
 
     const received: Buffer[] = [];
     let ended = false;
-    const clientReq = http.get(`http://127.0.0.1:${PORT + 1}/stream/forward`, (res) => {
+    const frames = (tag: string) =>
+      parseStrict(Buffer.concat(received), 'frame').filter((b) => b === `FRAME-${tag}`).length;
+    const clientReq = http.get(`http://127.0.0.1:${pluginPort}/stream/forward`, (res) => {
       res.on('data', (c: Buffer) => received.push(c));
       res.on('end', () => (ended = true));
       res.on('error', () => (ended = true));
     });
 
     try {
-      await sleep(300);
+      await waitFor(() => frames('GEN1') > 2, 5000);
       const beforeKill = parseStrict(Buffer.concat(received), 'frame');
       expect(beforeKill.length).toBeGreaterThan(2);
       expect(beforeKill.every((b) => b === 'FRAME-GEN1')).toBe(true);
 
       await (container as any).killHard();
-      await sleep(200);
+      await sleep(200); // give a wrongly-ended response time to surface
       expect(ended).toBe(false); // browser connection must stay open
 
-      container = await startFakeContainer(PORT, 'GEN2');
-      await sleep(1600); // retry loop re-dials within ~1s
+      // Restart on the SAME port (the proxy keeps dialing the original URL).
+      container = await startFakeContainer(containerPort, 'GEN2');
+      await waitFor(() => frames('GEN2') > 2, 10000); // retry loop re-dials within ~1s
 
       // parseStrict throws if ANY forwarded part is truncated — this is the
       // regression this test exists for (a mid-part splice permanently desyncs
       // the browser's multipart parser with no error event to recover on).
-      const all = parseStrict(Buffer.concat(received), 'frame');
-      expect(all.filter((b) => b === 'FRAME-GEN2').length).toBeGreaterThan(2);
+      expect(frames('GEN2')).toBeGreaterThan(2);
       expect(ended).toBe(false);
     } finally {
       clientReq.destroy();
       await (container as any).killHard();
       await new Promise<void>((r) => plugin.close(() => r()));
     }
-  }, 15000);
+  }, 20000);
 });
