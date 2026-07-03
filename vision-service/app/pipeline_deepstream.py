@@ -1249,7 +1249,11 @@ class DeepStreamPipeline:
 
         # Collapse duplicate detections of one physical vessel (hull vs
         # hull+mast double-fires) and drop nested boxes, before ranking/capping.
-        targets = state.dedup.update(targets, frame_num)
+        # Runs on state.seq — the same clock as the stabilizer/velocity tracker,
+        # which only advances on processed frames — so the sticky-pairing hold
+        # window (calibrated as 2x the coast window) isn't shortened by muxer
+        # frame repeats; frame_num is only the emitted frame_seq.
+        targets = state.dedup.update(targets, state.seq)
         targets = sorted(targets, key=lambda t: t.confidence, reverse=True)[:max_det]
 
         return DetectionEvent(
