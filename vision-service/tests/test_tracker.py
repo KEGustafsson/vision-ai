@@ -32,43 +32,50 @@ def test_distinct_raw_ids_get_distinct_display_ids():
     assert len(disps) == 5
 
 
-def test_recycled_id_is_reused_last_rotation():
-    # Tiny range so the pool is easy to reason about.
-    vt = VelocityTracker(id_min=10, id_max=12)
-    for raw in (1, 2, 3):
+def test_lowest_free_id_is_allocated_first():
+    # Numbers stay small and familiar: allocation always takes the lowest free
+    # id, regardless of how large the raw tracker ids grow.
+    vt = VelocityTracker()
+    for raw in (1001, 52, 999999):
         vt.update(raw, seq=0, cx=0.0, cy=0.0)
-    assert vt.display_id(1) == 10  # allocated front-to-back
-
-    # raw 1 goes idle and is pruned; its id (10) returns to the *back* of pool.
-    for seq in range(1, 5):
-        vt.update(2, seq=seq, cx=0.0, cy=0.0)
-        vt.update(3, seq=seq, cx=0.0, cy=0.0)
-        vt.prune({2, 3}, seq=seq, max_idle=2)
-    assert vt.display_id(1) is None  # pruned
-
-    # New track does NOT immediately reuse 10 while other ids are free... but
-    # here the pool only held 10, so it does come back — rotation guarantees it
-    # is handed out only after everything ahead of it in the queue.
-    vt.update(4, seq=5, cx=0.0, cy=0.0)
-    assert vt.display_id(4) == 10
+    assert [vt.display_id(r) for r in (1001, 52, 999999)] == [10, 11, 12]
 
 
-def test_rotation_prefers_unused_ids_before_recycled():
-    vt = VelocityTracker(id_min=10, id_max=13)  # pool: 10,11,12,13
+def test_recycled_id_is_quarantined_before_reuse():
+    vt = VelocityTracker(id_min=10, id_max=12)
     vt.update(1, seq=0, cx=0.0, cy=0.0)  # -> 10
-    vt.update(2, seq=0, cx=0.0, cy=0.0)  # -> 11
-    # Drop raw 1 (id 10 recycled to back: queue is now 12,13,10).
-    for seq in range(1, 5):
-        vt.update(2, seq=seq, cx=0.0, cy=0.0)
-        vt.prune({2}, seq=seq, max_idle=2)
-    # Next two new tracks should get the still-unused 12 and 13 before 10.
-    vt.update(3, seq=5, cx=0.0, cy=0.0)
-    vt.update(4, seq=5, cx=0.0, cy=0.0)
-    assert vt.display_id(3) == 12
-    assert vt.display_id(4) == 13
-    # Only now is the recycled 10 handed out.
-    vt.update(5, seq=5, cx=0.0, cy=0.0)
-    assert vt.display_id(5) == 10
+    vt.prune(set(), seq=20)              # single-sighting track prunes fast
+    assert vt.display_id(1) is None
+    # A new track soon after must NOT be handed 10 (an operator may still
+    # associate that number with the old vessel): next-lowest instead.
+    vt.update(2, seq=21, cx=0.0, cy=0.0)
+    assert vt.display_id(2) == 11
+    # Long after the quarantine, 10 is simply the lowest free id again.
+    vt.update(3, seq=400, cx=0.0, cy=0.0)
+    assert vt.display_id(3) == 10
+
+
+def test_all_free_ids_quarantined_reuses_longest_freed():
+    vt = VelocityTracker(id_min=10, id_max=11)
+    vt.update(1, seq=0, cx=0.0, cy=0.0)   # -> 10
+    vt.prune(set(), seq=20)               # 10 freed (quarantined)
+    vt.update(2, seq=21, cx=0.0, cy=0.0)  # -> 11
+    # Only 10 is free and it is quarantined; heavy churn must still get an id
+    # (the longest-freed one) rather than colliding with the live 11.
+    vt.update(3, seq=22, cx=0.0, cy=0.0)
+    assert vt.display_id(3) == 10
+
+
+def test_thin_tracks_release_their_ids_quickly():
+    # A single-sighting glint holds a display id only briefly; an established
+    # track keeps its id through the same idle gap.
+    vt = VelocityTracker()
+    vt.update(1, seq=0, cx=0.0, cy=0.0)               # glint: one sighting
+    for seq in range(3):
+        vt.update(2, seq=seq, cx=0.0, cy=0.0)         # established: 3 hits
+    vt.prune(set(), seq=20)  # idle 20: past thin limit (16), below max (60)
+    assert vt.display_id(1) is None
+    assert vt.display_id(2) == 11
 
 
 def test_pool_exhaustion_falls_back_within_range():
@@ -90,44 +97,6 @@ def test_separate_instances_are_independent_per_stream():
 def test_invalid_range_rejected():
     with pytest.raises(ValueError):
         VelocityTracker(id_min=99, id_max=10)
-
-
-def test_set_id_range_bounds_new_ids():
-    vt = VelocityTracker(id_min=10, id_max=99)
-    vt.set_id_range(10, 17)  # follow max_targets=8
-    for raw in range(1, 40):
-        vt.update(raw, seq=0, cx=0.0, cy=0.0)
-        assert 10 <= vt.display_id(raw) <= 17  # always within the new range
-
-
-def test_set_id_range_remaps_out_of_range_live_ids():
-    vt = VelocityTracker(id_min=10, id_max=99)
-    vt.update(1, seq=0, cx=0.0, cy=0.0)  # gets 10
-    vt.set_id_range(20, 23)  # 10 is now out of range
-    # The live track is remapped into range immediately — no higher id lingers.
-    assert 20 <= vt.display_id(1) <= 23
-
-
-def test_set_id_range_keeps_in_range_live_ids():
-    vt = VelocityTracker(id_min=10, id_max=99)
-    vt.update(1, seq=0, cx=0.0, cy=0.0)  # gets 10
-    vt.set_id_range(10, 17)  # 10 still in range
-    assert vt.display_id(1) == 10  # unchanged — no needless reshuffle
-
-
-def test_set_id_range_all_live_ids_bounded_after_shrink():
-    vt = VelocityTracker(id_min=10, id_max=99)
-    for raw in range(1, 30):  # spread across the wide range
-        vt.update(raw, seq=0, cx=0.0, cy=0.0)
-    vt.set_id_range(10, 17)  # shrink to max_targets=8
-    for raw in range(1, 30):
-        assert 10 <= vt.display_id(raw) <= 17  # EVERY live id now in range
-
-
-def test_set_id_range_invalid_rejected():
-    vt = VelocityTracker()
-    with pytest.raises(ValueError):
-        vt.set_id_range(30, 10)
 
 
 # --- Waterline re-identification -------------------------------------------
@@ -217,6 +186,45 @@ def test_reid_rejects_misaligned_waterline():
     floating = dict(x=100.0, y=200.0, w=200.0, h=40.0)
     canon0, _ = _touch(vt, 1, seq=0, box=HULL)
     canon1, _ = _touch(vt, 2, seq=1, box=floating)
+    assert canon1 != canon0
+
+
+def test_reid_rejects_width_mismatch():
+    # A much narrower same-label box on the same waterline (a small boat passing
+    # in front of a vanished big one) is a DIFFERENT vessel: the hull's waterline
+    # width is the invariant a partial/full flip preserves.
+    vt = VelocityTracker()
+    small = dict(x=150.0, y=370.0, w=90.0, h=30.0)  # inside HULL's footprint
+    canon0, _ = _touch(vt, 1, seq=0, box=HULL)
+    canon1, _ = _touch(vt, 2, seq=1, box=small)
+    assert canon1 != canon0
+
+
+def test_reid_reacquires_a_moving_vessel_at_its_predicted_position():
+    # A vessel crossing at 30 px/frame drops out for 5 frames. Its stored
+    # footprint is advanced by its known velocity, so the re-detection where the
+    # vessel actually IS matches even though it no longer overlaps the old spot.
+    vt = VelocityTracker()
+    moving = dict(x=100.0, y=360.0, w=100.0, h=40.0)
+    canon0 = None
+    for seq in range(5):
+        canon0, _ = _touch(vt, 1, seq, dict(moving, x=100.0 + 30.0 * seq))
+    ahead = dict(moving, x=100.0 + 30.0 * 9)  # where it should be at seq 9
+    canon1, _ = _touch(vt, 2, seq=9, box=ahead)
+    assert canon1 == canon0
+
+
+def test_reid_does_not_give_a_movers_id_to_a_newcomer_at_its_old_spot():
+    # Same moving vessel as above — but the box appearing after the gap sits at
+    # the mover's OLD position. Without motion prediction it would inherit the
+    # id; with it, the footprint has moved on and the newcomer stays distinct.
+    vt = VelocityTracker()
+    moving = dict(x=100.0, y=360.0, w=100.0, h=40.0)
+    canon0 = None
+    for seq in range(5):
+        canon0, _ = _touch(vt, 1, seq, dict(moving, x=100.0 + 30.0 * seq))
+    old_spot = dict(moving, x=100.0 + 30.0 * 4)  # where it was LAST seen
+    canon1, _ = _touch(vt, 2, seq=9, box=old_spot)
     assert canon1 != canon0
 
 

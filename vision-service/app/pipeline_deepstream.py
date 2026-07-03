@@ -77,7 +77,7 @@ from .detector.classmap import (
     is_person_in_water,
     label_for_model,
 )
-from .detector.stabilizer import TrackStabilizer
+from .detector.stabilizer import TrackStabilizer, cap_targets_sticky
 from .detector.tracker import VelocityTracker, reid_options
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
 from .pipeline import _drop_contained_targets  # shared geometry filter, same package
@@ -108,16 +108,6 @@ _STALL_REBUILD_S = 20.0
 # enough that the per-frame path stays copy-free, frequent enough to track a
 # horizon that drifts with the boat's pitch/roll.
 _HORIZON_REFRESH_S = 1.0
-# Recycled display-id pool. Starts at 10 (always a readable >=2-digit number) and
-# spans max-targets-per-frame, so emitted ids stay bounded to roughly the number
-# of vessels drawn rather than a fixed 10..99.
-_DISPLAY_ID_MIN = 10
-
-
-def _display_id_max(max_targets: int) -> int:
-    """Top of the display-id range for a given max-targets-per-frame (>=1)."""
-    return _DISPLAY_ID_MIN + max(1, max_targets) - 1
-
 _GST_CLOCK_TIME_NONE = 0xFFFF_FFFF_FFFF_FFFF  # GStreamer "invalid timestamp" sentinel
 # Auto-restart after a fatal GStreamer error/EOS: a transient RTSP/decoder glitch
 # must not take detection down until a manual container restart. The supervisor
@@ -209,6 +199,8 @@ class _StreamState:
     # monotonic time it was computed, so we only map the surface ~1/s.
     horizon_y_cached: Optional[float] = None
     last_horizon_t: float = 0.0
+    # Track ids emitted in the last event, for the sticky max-targets cap.
+    emitted_ids: set = field(default_factory=set)
 
 
 # ── Main pipeline ─────────────────────────────────────────────────────────────
@@ -322,15 +314,20 @@ class DeepStreamPipeline:
                 ema_alpha=d.stabilize_ema_alpha,
                 coast_velocity_factor=d.stabilize_coast_velocity_factor,
                 person_confirm_frames=d.stabilize_person_confirm_frames,
+                smooth=d.stabilize_smooth,
+                smooth_window=d.stabilize_smooth_window,
             ) if d.stabilize else None
             with self._lock:
                 self._states[cam.name] = _StreamState(
                     cam=cam, settings=self.settings, stabilizer=stab,
                     confidence=self._confidence, allowed_labels=self._allowed_labels,
                     min_target_range_m=self._min_target_range_m,
-                    vel=VelocityTracker(id_min=_DISPLAY_ID_MIN,
-                                        id_max=_display_id_max(self._max_det),
-                                        **reid_options(d)),
+                    # Display ids use the full 10..99 pool regardless of the
+                    # max-targets cap: the cap bounds how many targets are
+                    # SHOWN per frame, not what they are NAMED — a small pool
+                    # sized to the cap recycles numbers so fast that a freed id
+                    # lands on a different vessel within seconds.
+                    vel=VelocityTracker(**reid_options(d)),
                 )
 
         self._gst = self._build_pipeline(Gst)
@@ -513,10 +510,6 @@ class DeepStreamPipeline:
         with self._lock:
             self._max_det = value
             self.settings.detector.max_det = value
-            # Keep emitted display ids bounded to roughly the number of vessels
-            # actually drawn: the recycled id pool tracks max-targets-per-frame.
-            for st in self._states.values():
-                st.vel.set_id_range(_DISPLAY_ID_MIN, _display_id_max(value))
 
     def max_targets(self) -> int:
         with self._lock:
@@ -1247,7 +1240,10 @@ class DeepStreamPipeline:
             ))
 
         targets = _drop_contained_targets(targets, self.settings.detector.contained_frac)
-        targets = sorted(targets, key=lambda t: t.confidence, reverse=True)[:max_det]
+        targets = cap_targets_sticky(
+            targets, max_det, state.emitted_ids,
+            self.settings.detector.max_det_sticky_margin)
+        state.emitted_ids = {t.track_id for t in targets if t.track_id is not None}
 
         return DetectionEvent(
             camera=cam.name,

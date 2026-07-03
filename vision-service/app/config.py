@@ -107,6 +107,12 @@ class DetectorConfig(BaseModel):
     # detection is dropped and the larger containing one is kept. A
     # person-in-water is never dropped (MOB safety). 1.0 disables.
     contained_frac: float = 0.8
+    # Sticky max-targets cap: when more targets are live than max_det allows, a
+    # target emitted last frame keeps its slot unless a challenger's confidence
+    # beats it by this margin. Stops two near-tied targets from swapping the
+    # last slot every few frames (the loser blinks in and out of the overlay
+    # and target list). person always ranks first regardless. 0 disables.
+    max_det_sticky_margin: float = 0.05
     # Drop any detection whose estimated range is below this many metres (own-hull
     # artifacts / very-near clutter). Applied EARLY — before events and the
     # annotated overlay — so neither surfaces a too-close object. person is exempt
@@ -141,6 +147,14 @@ class DetectorConfig(BaseModel):
     # its last spot, 1 = full extrapolation). Damps a noisy velocity so a
     # coasted (dashed) box doesn't drift fast off the object across dropouts.
     stabilize_coast_velocity_factor: float = 0.4
+    # Box smoothing: every emitted box is the rolling AVERAGE of the track's
+    # last stabilize_smooth_window raw boxes. Deliberately simple (operator
+    # decision): no motion model, no prediction, no extent-holding — the box
+    # just follows the detections, with per-frame jitter and shape flips
+    # spread across the window instead of snapping. Bigger window = calmer but
+    # laggier (a mover's box trails by about half the window). 1 disables.
+    stabilize_smooth: bool = True
+    stabilize_smooth_window: int = 5
     # Waterline re-identification: keep ONE detection id on a vessel whose box
     # alternates between partial and full extents (hull only <-> hull + mast).
     # The backend trackers (ByteTrack/NvDCF) associate by box IoU, so that shape
@@ -152,17 +166,23 @@ class DetectorConfig(BaseModel):
     # behind another) can be fused while they overlap; the thresholds below
     # keep that window narrow.
     reid: bool = True
-    # How many frames back a disappeared track can be re-identified. Keep it
-    # above the flicker period (1-2 frames) and the stabilizer coast window,
-    # but short enough that a NEW vessel arriving where another just vanished
-    # doesn't inherit its id.
-    reid_max_gap_frames: int = 16
+    # How many frames back a disappeared track can be re-identified (~4 s at
+    # 10 fps), so a vessel that drops out for a few seconds re-acquires its id
+    # instead of appearing as a new target. A NEW vessel arriving in the spot
+    # is kept from inheriting the id by the width-similarity and
+    # motion-prediction gates below, not by keeping this window tight.
+    reid_max_gap_frames: int = 40
     # Minimum horizontal overlap, as a fraction of the narrower box's width.
     reid_min_x_overlap: float = 0.5
     # Max bottom-edge (waterline) misalignment, as a fraction of the SHORTER
     # box's height (the hull) — a mast-height tolerance would bridge two
     # vertically separate targets.
     reid_bottom_tol_frac: float = 0.35
+    # Max waterline-width mismatch (wider/narrower) between the candidate and
+    # the stored footprint. A partial/full flip preserves the hull's width (a
+    # mast adds height, not width), so a larger mismatch is a DIFFERENT vessel
+    # that must not inherit the id.
+    reid_max_width_ratio: float = 1.6
     # Batch both cameras into a single inference (needs a batch-capable engine).
     # Removes the one-camera-at-a-time detector serialization. Falls back to
     # per-camera inference automatically when the engine is batch=1.

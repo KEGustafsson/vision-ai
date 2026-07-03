@@ -18,6 +18,13 @@ publish threshold. This stage gives each track a short lifecycle instead:
   adds latency to the most safety-critical detection. A single-frame false person
   is still debounced downstream by the plugin's MOB persistence counter before any
   alarm is raised, so confirming it here on the first frame is safe.
+* **box smoothing** — each shown box is the **rolling average of the track's
+  last few raw boxes**. No motion model and no prediction (explicit operator
+  decision after predictive variants misbehaved on dense marina scenes): the
+  emitted box simply follows the detections, with per-frame jitter and shape
+  flips spread across the window instead of snapping. Averaging is linear, so
+  the emitted bottom edge is exactly the average of the detected bottom
+  edges — a steady waterline stays steady.
 
 One instance per camera (state is keyed by the backend's stable track id).
 Untracked detections (no id) can't be coasted and pass through on a plain
@@ -26,25 +33,65 @@ Untracked detections (no id) can't be coasted and pass through on a plain
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from collections import deque
+from dataclasses import dataclass, field, replace
 
 from .base import RawTrack
+
+
+class _BoxSmoother:
+    """Rolling average over the track's last ``window`` raw boxes. Just follows
+    the detections — no velocity, no prediction, no holding."""
+
+    def __init__(self, window: int):
+        self._boxes: deque[tuple[float, float, float, float]] = deque(
+            maxlen=max(1, window))
+
+    def apply(self, tr: RawTrack) -> RawTrack:
+        self._boxes.append((tr.x, tr.y, tr.w, tr.h))
+        n = len(self._boxes)
+        x, y, w, h = (sum(b[i] for b in self._boxes) / n for i in range(4))
+        return replace(tr, x=x, y=y, w=w, h=h)
 
 
 @dataclass
 class _State:
     conf: float        # EMA of detection confidence
-    track: RawTrack    # most recent detected track (box, velocity, label, ...)
+    track: RawTrack    # most recent (smoothed) detected track (box, velocity, ...)
     last_seq: int      # frame seq of the last fresh detection
     hits: int          # number of fresh detections so far
     confirmed: bool    # has cleared the appearance debounce
+    smoother: _BoxSmoother | None = field(default=None)
+
+
+def cap_targets_sticky(targets: list, max_det: int, prev_ids: set,
+                       margin: float) -> list:
+    """Cap a ranked target list to ``max_det`` with STICKY membership: a target
+    emitted last frame keeps its slot unless a challenger's confidence beats it
+    by ``margin``. Without this, targets whose smoothed confidences hover within
+    noise of each other swap the last slot every few frames, and the loser
+    blinks in and out of the event/overlay/target list. ``person`` always ranks
+    first regardless of confidence: the cap must never squeeze out a possible
+    man-overboard in a crowded frame.
+
+    Duck-typed over anything with ``track_id``/``label``/``confidence`` (works
+    for both ``Target`` and ``RawTrack``). The caller keeps ``prev_ids`` per
+    camera and refreshes it from the returned list each frame."""
+    ranked = sorted(
+        targets,
+        key=lambda t: (t.label == "person",
+                       t.confidence + (margin if t.track_id in prev_ids else 0.0)),
+        reverse=True,
+    )
+    return ranked[:max_det]
 
 
 class TrackStabilizer:
     def __init__(self, confirm_frames: int = 3, max_coast_frames: int = 8,
                  hysteresis_ratio: float = 0.6, ema_alpha: float = 0.4,
                  coast_velocity_factor: float = 0.4,
-                 person_confirm_frames: int = 1):
+                 person_confirm_frames: int = 1,
+                 smooth: bool = True, smooth_window: int = 5):
         self.confirm_frames = max(1, confirm_frames)
         # MOB-critical: person tracks confirm faster (default: first frame).
         self.person_confirm_frames = max(1, person_confirm_frames)
@@ -56,6 +103,11 @@ class TrackStabilizer:
         # damped value keeps a coasted box near the object instead of letting a
         # noisy velocity estimate fling it away over several missed frames.
         self.coast_velocity_factor = max(0.0, coast_velocity_factor)
+        # Rolling-average box smoothing (see module docstring). Applied per
+        # track to everything emitted, so overlay, event geometry and coasting
+        # all work from the same calm box.
+        self.smooth = smooth
+        self.smooth_window = max(1, smooth_window)
         self._st: dict[int, _State] = {}
 
     def _confirm_for(self, label: str) -> int:
@@ -80,18 +132,26 @@ class TrackStabilizer:
                 if prev is None or tr.confidence > prev.confidence:
                     seen[tr.track_id] = tr
 
-        # Tracks detected this frame: refresh state, smooth confidence, emit if
-        # confirmed and above the lower (off) threshold.
+        # Tracks detected this frame: refresh state, smooth confidence and box,
+        # emit if confirmed and above the lower (off) threshold. The box filter
+        # runs from the first sighting (not first emission), so by the time the
+        # debounce clears the smoothed box is already settled.
         for tid, tr in seen.items():
             s = self._st.get(tid)
             if s is None:
                 s = self._st[tid] = _State(conf=tr.confidence, track=tr,
                                            last_seq=seq, hits=1, confirmed=False)
+                if self.smooth:
+                    s.smoother = _BoxSmoother(self.smooth_window)
             else:
                 s.conf = self.alpha * tr.confidence + (1 - self.alpha) * s.conf
-                s.track = tr
                 s.last_seq = seq
                 s.hits += 1
+            if s.smoother is not None:
+                tr = s.smoother.apply(tr)
+            # Coasting continues from the smoothed box, so a dropout doesn't
+            # snap the box back to the last raw (jittery) position.
+            s.track = tr
             if not s.confirmed and s.hits >= self._confirm_for(tr.label) and s.conf >= conf_on:
                 s.confirmed = True
             if s.confirmed and s.conf >= conf_off:

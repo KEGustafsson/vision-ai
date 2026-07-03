@@ -20,6 +20,7 @@ and velocity history.
 
 from __future__ import annotations
 
+import heapq
 from collections import deque
 from typing import Deque, Dict, Optional, Tuple
 
@@ -31,13 +32,15 @@ def reid_options(det) -> dict:
         "reid_max_gap": det.reid_max_gap_frames,
         "reid_min_x_overlap": det.reid_min_x_overlap,
         "reid_bottom_tol": det.reid_bottom_tol_frac,
+        "reid_max_width_ratio": det.reid_max_width_ratio,
     }
 
 
 class VelocityTracker:
     def __init__(self, history: int = 5, id_min: int = 10, id_max: int = 99,
-                 reid: bool = True, reid_max_gap: int = 16,
-                 reid_min_x_overlap: float = 0.5, reid_bottom_tol: float = 0.35):
+                 reid: bool = True, reid_max_gap: int = 40,
+                 reid_min_x_overlap: float = 0.5, reid_bottom_tol: float = 0.35,
+                 reid_max_width_ratio: float = 1.6):
         if id_min > id_max:
             raise ValueError(f"id_min ({id_min}) must be <= id_max ({id_max})")
         self._hist: Dict[int, Deque[Tuple[int, float, float]]] = {}
@@ -48,18 +51,21 @@ class VelocityTracker:
         # detections always carry a stable id in a bounded range. Velocity/age
         # state stays keyed by the raw id internally.
         #
-        # Invariant this relies on: a display id is recycled only after a raw
-        # track has been idle for ``prune(max_idle=60)`` frames, which must stay
-        # well above the stabilizer's ``max_coast_frames`` (default 8). Otherwise
-        # a freed id could be handed to a new track while the stabilizer still
-        # holds coasting state under that id, briefly fusing two objects.
+        # Allocation policy: LOWEST free number first, but an id freed less than
+        # _ID_QUARANTINE_FRAMES ago is skipped. Lowest-first keeps the on-screen
+        # numbers small and familiar over a long session (a churning scene stays
+        # in the 10-30s instead of marching through the whole range); the
+        # quarantine ensures a number that just left one vessel cannot reappear
+        # on a different one moments later. This also subsumes the older
+        # invariant that a freed id must outlive the stabilizer's coast window
+        # (max_coast_frames, default 8): the quarantine is far longer.
         self._id_min = id_min
         self._id_max = id_max
         self._display: Dict[int, int] = {}
-        # Deque so allocation (popleft) and recycling (append) are both O(1) and
-        # the FIFO order expresses the rotation: freed ids go to the back and are
-        # reused last, cycling through the whole range before any reuse.
-        self._free: Deque[int] = deque(range(id_min, id_max + 1))
+        # Min-heap of free ids (lowest allocated first) + when each recycled id
+        # was freed, for the quarantine check.
+        self._free: list = list(range(id_min, id_max + 1))
+        self._freed_at: Dict[int, int] = {}
         # Waterline re-identification (see resolve()). _ident holds each
         # canonical track's last box + label + seq; _alias maps re-identified
         # raw ids onto their canonical id. Both are pruned with the track.
@@ -67,6 +73,7 @@ class VelocityTracker:
         self._reid_max_gap = max(0, reid_max_gap)
         self._reid_min_x_overlap = min(max(reid_min_x_overlap, 0.0), 1.0)
         self._reid_bottom_tol = max(0.0, reid_bottom_tol)
+        self._reid_max_width_ratio = max(1.0, reid_max_width_ratio)
         self._ident: Dict[int, Tuple[float, float, float, float, str, int]] = {}
         self._alias: Dict[int, int] = {}
         # seq each alias was last resolved through, so aliases whose RAW id the
@@ -75,29 +82,32 @@ class VelocityTracker:
         # expiry every one of them would live as long as the canonical track.
         self._alias_seen: Dict[int, int] = {}
 
-    def set_id_range(self, id_min: int, id_max: int) -> None:
-        """Resize the recycled display-id pool to follow max-targets-per-frame so
-        EVERY emitted id stays within ``[id_min, id_max]``. Live tracks already in
-        range keep their id (no needless reshuffle); any live track whose id is
-        now out of range is remapped to a fresh in-range id immediately — so a
-        shrink can never leave a higher id on the wire (at the cost of a one-time
-        id change for those tracks). If more tracks are live than the range holds,
-        the allocator wraps within range (ids may then collide, but never exceed).
-        """
-        if id_min > id_max:
-            raise ValueError(f"id_min ({id_min}) must be <= id_max ({id_max})")
-        if (id_min, id_max) == (self._id_min, self._id_max):
-            return
-        self._id_min, self._id_max = id_min, id_max
-        in_range_held = {d for d in self._display.values() if id_min <= d <= id_max}
-        self._free = deque(i for i in range(id_min, id_max + 1) if i not in in_range_held)
-        for tid, disp in self._display.items():
-            if disp < id_min or disp > id_max:
-                self._display[tid] = self._alloc_display(tid)
+    # A freed display id is not handed out again for this many frames (~15 s at
+    # 10 fps), so a number that just left one vessel can't reappear on another
+    # while the operator still associates it with the first.
+    _ID_QUARANTINE_FRAMES = 150
 
-    def _alloc_display(self, track_id: int) -> int:
-        if self._free:
-            return self._free.popleft()
+    def _alloc_display(self, track_id: int, seq: int) -> int:
+        # Lowest free id whose quarantine (if recycled) has expired.
+        skipped: list = []
+        try:
+            while self._free:
+                cand = heapq.heappop(self._free)
+                if seq - self._freed_at.get(cand, -self._ID_QUARANTINE_FRAMES) \
+                        >= self._ID_QUARANTINE_FRAMES:
+                    self._freed_at.pop(cand, None)
+                    return cand
+                skipped.append(cand)
+            if skipped:
+                # Every free id is quarantined (heavy churn): take the one freed
+                # longest ago rather than colliding with a live id.
+                oldest = min(skipped, key=lambda c: self._freed_at.get(c, 0))
+                skipped.remove(oldest)
+                self._freed_at.pop(oldest, None)
+                return oldest
+        finally:
+            for c in skipped:
+                heapq.heappush(self._free, c)
         # Pool exhausted (more live tracks than the range can hold): fall back to
         # a wrapped value. May collide, but maxTargetsPerStream keeps this rare.
         span = self._id_max - self._id_min + 1
@@ -138,29 +148,60 @@ class VelocityTracker:
     def _match_identity(self, track_id: int, seq: int, x: float, y: float,
                         w: float, h: float, label: str) -> Optional[int]:
         """Best recently-seen same-label track whose waterline footprint the
-        given box stands on, or ``None``. Best = largest horizontal overlap."""
+        given box stands on, or ``None``. Best = largest horizontal overlap.
+
+        Two gates keep an id from being handed to a DIFFERENT vessel that
+        happens to occupy a vanished track's spot:
+
+        * **width similarity** — the hull's waterline width is the invariant a
+          partial/full flip preserves (a mast adds height, not width), so a
+          candidate whose width differs by more than ``reid_max_width_ratio``
+          is another vessel, not another extent of the same one.
+        * **motion prediction** — the candidate's stored footprint is advanced
+          by its last known pixel velocity over the gap before comparing, so a
+          moving vessel is re-acquired where it *is now*, and a new arrival
+          sitting where a moving vessel *used to be* no longer matches.
+        """
         best: Optional[int] = None
         best_ov = self._reid_min_x_overlap
         bottom = y + h
         for tid, (ix, iy, iw, ih, ilabel, iseq) in self._ident.items():
             if tid == track_id or ilabel != label:
                 continue
-            if seq - iseq > self._reid_max_gap:
+            gap = seq - iseq
+            if gap > self._reid_max_gap:
                 continue
             min_w = min(w, iw)
             if min_w <= 0:
                 continue
+            # Same hull, or a different vessel? The waterline width must agree.
+            if max(w, iw) / min_w > self._reid_max_width_ratio:
+                continue
+            # Advance the stored footprint by the track's waterline velocity so
+            # the comparison happens where the vessel should be NOW.
+            pvx, pvy = self._last_velocity(tid)
+            px, pb = ix + pvx * gap, (iy + ih) + pvy * gap
             # Fraction of the narrower box's width shared with the candidate.
-            ov = (min(x + w, ix + iw) - max(x, ix)) / min_w
+            ov = (min(x + w, px + iw) - max(x, px)) / min_w
             if ov < best_ov:
                 continue
             # Bottom edges must sit on the same waterline, within a tolerance
             # scaled by the SHORTER box (the hull) — a mast-height tolerance
             # would happily bridge two stacked targets.
-            if abs(bottom - (iy + ih)) > self._reid_bottom_tol * min(h, ih):
+            if abs(bottom - pb) > self._reid_bottom_tol * min(h, ih):
                 continue
             best, best_ov = tid, ov
         return best
+
+    def _last_velocity(self, track_id: int) -> Tuple[float, float]:
+        """Waterline-anchor pixel velocity (px/frame) from a track's history,
+        averaged over the window like :meth:`update`; (0, 0) if unknown."""
+        hist = self._hist.get(track_id)
+        if not hist or len(hist) < 2:
+            return 0.0, 0.0
+        (oseq, ocx, ocy), (lseq, lcx, lcy) = hist[0], hist[-1]
+        dseq = max(lseq - oseq, 1)
+        return (lcx - ocx) / dseq, (lcy - ocy) / dseq
 
     def update(self, track_id: int, seq: int, cx: float, cy: float) -> Tuple[float, float, int]:
         """Return (vx, vy, age_frames) for a track anchor point at the given seq.
@@ -173,7 +214,7 @@ class VelocityTracker:
         if track_id not in self._hist:
             self._hist[track_id] = deque(maxlen=self._history)
             self._first_seq[track_id] = seq
-            self._display[track_id] = self._alloc_display(track_id)
+            self._display[track_id] = self._alloc_display(track_id, seq)
         hist = self._hist[track_id]
         vx = vy = 0.0
         if hist:
@@ -188,8 +229,14 @@ class VelocityTracker:
         age = seq - self._first_seq[track_id]
         return vx, vy, age
 
-    def prune(self, active_ids: set, seq: int, max_idle: int = 60) -> None:
-        """Drop tracks not seen recently to bound memory."""
+    def prune(self, active_ids: set, seq: int, max_idle: int = 60,
+              max_idle_thin: int = 16) -> None:
+        """Drop tracks not seen recently to bound memory. Tracks with fewer
+        than 3 sightings ("thin": single-frame glints, wave crests) are dropped
+        after the much shorter ``max_idle_thin`` — they were never shown (the
+        stabilizer's confirm debounce needs 3 hits), so releasing their display
+        id early costs nothing and keeps a churning scene from marching the
+        visible numbers through the whole pool."""
         # Expire aliases whose raw id hasn't been resolved recently, even while
         # their canonical track lives on — otherwise a flickering vessel grows
         # one immortal alias per flip over a long session.
@@ -200,8 +247,10 @@ class VelocityTracker:
         for tid in list(self._hist.keys()):
             if tid in active_ids:
                 continue
+            idle_limit = max_idle if len(self._hist[tid]) >= 3 \
+                else min(max_idle, max_idle_thin)
             last_seq = self._hist[tid][-1][0] if self._hist[tid] else 0
-            if seq - last_seq > max_idle:
+            if seq - last_seq > idle_limit:
                 self._hist.pop(tid, None)
                 self._first_seq.pop(tid, None)
                 self._ident.pop(tid, None)
@@ -211,11 +260,11 @@ class VelocityTracker:
                 for a in [a for a, c in self._alias.items() if c == tid]:
                     self._alias.pop(a, None)
                     self._alias_seen.pop(a, None)
-                # Recycle the display id by appending to the *back* of the pool,
-                # so freed numbers rotate to the end and are reused last — the
-                # allocator keeps cycling through the whole range before handing a
-                # just-freed number to a new track.
+                # Recycle the display id: back into the pool, stamped with the
+                # frame it was freed so the allocator quarantines it (see
+                # _alloc_display) before any reuse.
                 disp = self._display.pop(tid, None)
                 if disp is not None and self._id_min <= disp <= self._id_max \
                         and disp not in self._free:
-                    self._free.append(disp)
+                    heapq.heappush(self._free, disp)
+                    self._freed_at[disp] = seq
