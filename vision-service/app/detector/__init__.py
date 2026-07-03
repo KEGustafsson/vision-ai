@@ -6,6 +6,7 @@ from pathlib import Path
 
 from ..config import Settings
 from .base import Detector, RawTrack
+from .tracker import reid_options
 
 MODELS_DIR = Path(__file__).resolve().parent.parent.parent / "models"
 
@@ -20,10 +21,11 @@ def _resolve(model: str) -> str:
 def create_detector(settings: Settings) -> Detector:
     backend = settings.detector.backend
     det = settings.detector
+    reid_opts = reid_options(det)
 
     if backend == "mock":
         from .mock import MockDetector
-        return MockDetector()
+        return MockDetector(reid_opts=reid_opts)
 
     # Feed YOLO the lower floor (not the publish threshold) so the worker-side
     # filter at det.confidence is authoritative and runtime /control is symmetric.
@@ -37,7 +39,7 @@ def create_detector(settings: Settings) -> Detector:
                                  tracker_cfg=det.tracker, backend_name=backend,
                                  batch_cameras=det.batch_cameras,
                                  batch_wait_ms=det.batch_wait_ms,
-                                 model_name=det.model)
+                                 model_name=det.model, reid_opts=reid_opts)
 
     if backend == "tensorrt":
         from .yolo_trt import YoloTrtDetector
@@ -45,7 +47,7 @@ def create_detector(settings: Settings) -> Detector:
                                imgsz=det.imgsz, tracker_cfg=det.tracker,
                                batch_cameras=det.batch_cameras,
                                batch_wait_ms=det.batch_wait_ms,
-                               model_name=det.model)
+                               model_name=det.model, reid_opts=reid_opts)
 
     raise ValueError(f"unknown detector backend: {backend}")
 

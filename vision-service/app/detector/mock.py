@@ -28,14 +28,16 @@ _COLOURS = [
 class MockDetector(Detector):
     backend = "mock"
 
-    def __init__(self, assoc_dist: float = 80.0):
+    def __init__(self, assoc_dist: float = 80.0, reid_opts: dict | None = None):
         self._assoc_dist = assoc_dist
+        self._reid_opts = reid_opts or {}
         # Per-camera association/velocity state (one shared detector, many cams).
         self._state: dict = {}  # stream -> {tracker, next_id, prev}
 
     def _stream_state(self, stream: str) -> dict:
         return self._state.setdefault(
-            stream, {"tracker": VelocityTracker(), "next_id": 1, "prev": {}}
+            stream,
+            {"tracker": VelocityTracker(**self._reid_opts), "next_id": 1, "prev": {}},
         )
 
     def detect_and_track(
@@ -68,6 +70,7 @@ class MockDetector(Detector):
     def _associate(self, seq: int, dets, state: dict) -> List[RawTrack]:
         tracks: List[RawTrack] = []
         used = set()
+        active = set()
         new_prev = {}
         prev = state["prev"]
         for cls, label, conf, x, y, w, h in dets:
@@ -84,12 +87,18 @@ class MockDetector(Detector):
                 best_id = state["next_id"]
                 state["next_id"] += 1
             used.add(best_id)
-            vx, vy, age = state["tracker"].update(best_id, seq, cx, cy)
-            disp = state["tracker"].display_id(best_id)
             new_prev[best_id] = (cx, cy)
+            # Waterline re-id: a partial re-detection of a known target keeps its
+            # canonical id (and display id). Velocity is anchored at the bbox
+            # bottom-center — the waterline — which stays put when the detected
+            # extent flips partial <-> full (see VelocityTracker.update).
+            canon = state["tracker"].resolve(best_id, seq, x, y, w, h, label)
+            active.add(canon)
+            vx, vy, age = state["tracker"].update(canon, seq, cx, y + h)
+            disp = state["tracker"].display_id(canon)
             tracks.append(RawTrack(track_id=disp, cls=cls, label=label,
                                    confidence=conf, x=x, y=y, w=w, h=h,
                                    vx=vx, vy=vy, age_frames=age))
         state["prev"] = new_prev
-        state["tracker"].prune(used, seq)
+        state["tracker"].prune(active, seq)
         return tracks

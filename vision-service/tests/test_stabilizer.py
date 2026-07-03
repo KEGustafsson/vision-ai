@@ -31,3 +31,19 @@ def test_person_confirm_respects_a_higher_threshold():
     assert s.update([_track("person")], 1, 0.5) == []
     out = s.update([_track("person")], 2, 0.5)
     assert [t.label for t in out] == ["person"]
+
+
+def test_same_id_duplicates_in_one_frame_keep_the_stronger():
+    # Waterline re-id can put the same display id on a partial AND a full
+    # detection of one vessel in a single frame; only the stronger must emit.
+    s = TrackStabilizer(confirm_frames=1)
+    weak = _track("vessel", tid=7, conf=0.6)
+    strong = _track("vessel", tid=7, conf=0.9)
+    out = s.update([weak, strong], seq=1, conf_on=0.5)
+    assert len(out) == 1
+    assert out[0].confidence == 0.9
+    # Order must not matter.
+    s2 = TrackStabilizer(confirm_frames=1)
+    out2 = s2.update([strong, weak], seq=1, conf_on=0.5)
+    assert len(out2) == 1
+    assert out2[0].confidence == 0.9

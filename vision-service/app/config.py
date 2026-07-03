@@ -141,6 +141,28 @@ class DetectorConfig(BaseModel):
     # its last spot, 1 = full extrapolation). Damps a noisy velocity so a
     # coasted (dashed) box doesn't drift fast off the object across dropouts.
     stabilize_coast_velocity_factor: float = 0.4
+    # Waterline re-identification: keep ONE detection id on a vessel whose box
+    # alternates between partial and full extents (hull only <-> hull + mast).
+    # The backend trackers (ByteTrack/NvDCF) associate by box IoU, so that shape
+    # jump mints a fresh track id and the same target flickers between two ids;
+    # re-id aliases the new id back when both boxes stand on the same waterline
+    # footprint (see app/detector/tracker.py resolve()). person is always exempt
+    # (two swimmers must never be fused into one MOB target). Trade-off: two
+    # same-label targets that genuinely share a footprint (one passing close
+    # behind another) can be fused while they overlap; the thresholds below
+    # keep that window narrow.
+    reid: bool = True
+    # How many frames back a disappeared track can be re-identified. Keep it
+    # above the flicker period (1-2 frames) and the stabilizer coast window,
+    # but short enough that a NEW vessel arriving where another just vanished
+    # doesn't inherit its id.
+    reid_max_gap_frames: int = 16
+    # Minimum horizontal overlap, as a fraction of the narrower box's width.
+    reid_min_x_overlap: float = 0.5
+    # Max bottom-edge (waterline) misalignment, as a fraction of the SHORTER
+    # box's height (the hull) — a mast-height tolerance would bridge two
+    # vertically separate targets.
+    reid_bottom_tol_frac: float = 0.35
     # Batch both cameras into a single inference (needs a batch-capable engine).
     # Removes the one-camera-at-a-time detector serialization. Falls back to
     # per-camera inference automatically when the engine is batch=1.

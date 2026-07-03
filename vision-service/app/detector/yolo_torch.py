@@ -94,7 +94,7 @@ class YoloTorchDetector(Detector):
                  imgsz: int = 640, tracker_cfg: str = "bytetrack.yaml",
                  backend_name: str = "torch-cpu", batch_cameras: bool = False,
                  batch_wait_ms: int = 20, batch_size: int = 2,
-                 model_name: str = "coco"):
+                 model_name: str = "coco", reid_opts: dict | None = None):
         from ultralytics import YOLO  # imported lazily so mock mode needs no torch
 
         self.backend = backend_name
@@ -110,6 +110,8 @@ class YoloTorchDetector(Detector):
         self._imgsz = imgsz
         self._tracker_cfg = tracker_cfg
         self._lock = threading.Lock()
+        # Waterline re-identification settings for each camera's VelocityTracker.
+        self._reid_opts = reid_opts or {}
         # Per-camera state. _trackers holds each camera's Ultralytics ByteTracker
         # list (swapped into the predictor before each call); _vels holds each
         # camera's pixel-velocity history.
@@ -142,7 +144,7 @@ class YoloTorchDetector(Detector):
                 max_det=max_det, verbose=False,
             )
             self._trackers[stream] = self._model.predictor.trackers
-            vel = self._vels.setdefault(stream, VelocityTracker())
+            vel = self._vels.setdefault(stream, VelocityTracker(**self._reid_opts))
             tracks = self._parse(results, frame, vel)
             if max_det is not None:
                 tracks = sorted(tracks, key=lambda tr: tr.confidence, reverse=True)[:max_det]
@@ -173,7 +175,7 @@ class YoloTorchDetector(Detector):
                     result = result[idx]
                     result.update(boxes=torch.as_tensor(tracks[:, :-1]))
                 # else: leave raw boxes (no ids), matching Ultralytics behaviour
-                vel = self._vels.setdefault(s, VelocityTracker())
+                vel = self._vels.setdefault(s, VelocityTracker(**self._reid_opts))
                 trk = self._parse([result], batch[s][0], vel)
                 md = batch[s][1]
                 if md is not None:
@@ -214,8 +216,13 @@ class YoloTorchDetector(Detector):
             age = 0
             disp = tid
             if tid is not None:
-                cx, cy = x1 + w / 2, y1 + h / 2
-                vx, vy, age = vel.update(tid, frame.seq, cx, cy)
+                # Waterline re-id first: a partial re-detection (hull only) of a
+                # known target must continue that track, not mint a new id. All
+                # per-track state is keyed on the canonical id it returns, and
+                # velocity is anchored at the bbox bottom-center (the waterline),
+                # which stays put when the box flips partial <-> full.
+                tid = vel.resolve(tid, frame.seq, x1, y1, w, h, label)
+                vx, vy, age = vel.update(tid, frame.seq, x1 + w / 2, y1 + h)
                 disp = vel.display_id(tid)
                 active.add(tid)
             out.append(RawTrack(track_id=disp, cls=cls, label=label, confidence=conf,

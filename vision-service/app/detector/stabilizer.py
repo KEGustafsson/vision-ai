@@ -73,7 +73,12 @@ class TrackStabilizer:
                 if tr.confidence >= conf_on:
                     out.append(tr)
             else:
-                seen[tr.track_id] = tr
+                # Waterline re-id can put the same id on two boxes in ONE frame
+                # (a partial and a full detection of the same vessel co-occur);
+                # keep only the stronger so one target never draws two boxes.
+                prev = seen.get(tr.track_id)
+                if prev is None or tr.confidence > prev.confidence:
+                    seen[tr.track_id] = tr
 
         # Tracks detected this frame: refresh state, smooth confidence, emit if
         # confirmed and above the lower (off) threshold.

@@ -78,7 +78,7 @@ from .detector.classmap import (
     label_for_model,
 )
 from .detector.stabilizer import TrackStabilizer
-from .detector.tracker import VelocityTracker
+from .detector.tracker import VelocityTracker, reid_options
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
 from .pipeline import _drop_contained_targets  # shared geometry filter, same package
 from .schemas import (
@@ -329,7 +329,8 @@ class DeepStreamPipeline:
                     confidence=self._confidence, allowed_labels=self._allowed_labels,
                     min_target_range_m=self._min_target_range_m,
                     vel=VelocityTracker(id_min=_DISPLAY_ID_MIN,
-                                        id_max=_display_id_max(self._max_det)),
+                                        id_max=_display_id_max(self._max_det),
+                                        **reid_options(d)),
                 )
 
         self._gst = self._build_pipeline(Gst)
@@ -1063,9 +1064,16 @@ class DeepStreamPipeline:
                 disp = tid
 
                 if tid is not None:
+                    # Waterline re-id first: a partial re-detection (hull only)
+                    # of a known target continues that track instead of minting
+                    # a new id. Velocity is anchored at the bbox bottom-center
+                    # (the waterline), which stays put when the detected extent
+                    # flips partial <-> full (see VelocityTracker.update).
+                    tid = state.vel.resolve(
+                        tid, state.seq, r.left, r.top, r.width, r.height, lbl)
                     cx = r.left + r.width / 2.0
-                    cy = r.top + r.height / 2.0
-                    vx, vy, age = state.vel.update(tid, state.seq, cx, cy)
+                    vx, vy, age = state.vel.update(
+                        tid, state.seq, cx, r.top + r.height)
                     disp = state.vel.display_id(tid)
                     active_ids.add(tid)
 

@@ -128,3 +128,130 @@ def test_set_id_range_invalid_rejected():
     vt = VelocityTracker()
     with pytest.raises(ValueError):
         vt.set_id_range(30, 10)
+
+
+# --- Waterline re-identification -------------------------------------------
+# The backend tracker mints a NEW raw id when a vessel's detected box flips
+# between partial (hull only) and full (hull + mast) extents — the IoU jump
+# breaks its association. resolve() must alias the new raw id back onto the
+# known target (same waterline footprint) so the display id doesn't flicker.
+
+# A vessel at x=100..300 with its waterline at y=400.
+HULL = dict(x=100.0, y=360.0, w=200.0, h=40.0)     # hull only: short box
+FULL = dict(x=100.0, y=250.0, w=200.0, h=150.0)    # hull + mast: tall box
+
+def _touch(vt, raw_id, seq, box, label="vessel"):
+    """Drive one detection through the resolve->update->display_id sequence
+    exactly like the backends do; returns (canonical_id, display_id)."""
+    canon = vt.resolve(raw_id, seq, box["x"], box["y"], box["w"], box["h"], label)
+    vt.update(canon, seq, box["x"] + box["w"] / 2, box["y"] + box["h"])
+    return canon, vt.display_id(canon)
+
+
+def test_reid_keeps_one_id_across_partial_full_alternation():
+    vt = VelocityTracker()
+    _, disp = _touch(vt, 1, seq=0, box=FULL)
+    # The detector alternates hull-only / full boxes under two raw ids.
+    for seq in range(1, 8):
+        raw = 1 if seq % 2 else 2
+        box = FULL if seq % 2 else HULL
+        _, d = _touch(vt, raw, seq, box)
+        assert d == disp  # same vessel, same detection number
+
+
+def test_reid_alias_is_sticky_and_ages_continuously():
+    vt = VelocityTracker()
+    canon0, _ = _touch(vt, 1, seq=0, box=FULL)
+    canon1, _ = _touch(vt, 2, seq=1, box=HULL)
+    assert canon1 == canon0
+    # Once aliased, the raw id resolves to the canonical without re-matching.
+    canon2, _ = _touch(vt, 2, seq=2, box=HULL)
+    assert canon2 == canon0
+    # Age keeps counting from the FIRST sighting of the target, either raw id.
+    _, vy, age = vt.update(canon0, 3, HULL["x"] + HULL["w"] / 2, HULL["y"] + HULL["h"])
+    assert age == 3
+
+
+def test_reid_velocity_stays_clean_across_shape_flips():
+    # The waterline (bottom-center) anchor is identical for HULL and FULL boxes,
+    # so alternating shapes must NOT produce a spurious vertical velocity.
+    vt = VelocityTracker()
+    _touch(vt, 1, seq=0, box=FULL)
+    for seq in range(1, 6):
+        raw = 1 if seq % 2 else 2
+        box = FULL if seq % 2 else HULL
+        canon = vt.resolve(raw, seq, box["x"], box["y"], box["w"], box["h"], "vessel")
+        vx, vy, _ = vt.update(canon, seq, box["x"] + box["w"] / 2, box["y"] + box["h"])
+        assert vx == 0.0 and vy == 0.0  # stationary vessel reads as stationary
+
+
+def test_reid_requires_same_label():
+    vt = VelocityTracker()
+    canon0, _ = _touch(vt, 1, seq=0, box=FULL, label="vessel")
+    canon1, _ = _touch(vt, 2, seq=1, box=HULL, label="buoy")
+    assert canon1 != canon0
+
+
+def test_reid_never_fuses_person_tracks():
+    # Two people in the water near each other must stay two MOB targets.
+    box_a = dict(x=100.0, y=380.0, w=30.0, h=20.0)
+    box_b = dict(x=110.0, y=380.0, w=30.0, h=20.0)  # overlapping footprint
+    vt = VelocityTracker()
+    canon0, _ = _touch(vt, 1, seq=0, box=box_a, label="person")
+    canon1, _ = _touch(vt, 2, seq=1, box=box_b, label="person")
+    assert canon1 != canon0
+
+
+def test_reid_rejects_disjoint_horizontal_footprint():
+    vt = VelocityTracker()
+    far = dict(HULL, x=HULL["x"] + 500.0)  # same waterline, elsewhere in frame
+    canon0, _ = _touch(vt, 1, seq=0, box=HULL)
+    canon1, _ = _touch(vt, 2, seq=1, box=far)
+    assert canon1 != canon0
+
+
+def test_reid_rejects_misaligned_waterline():
+    vt = VelocityTracker()
+    # Same horizontal extent but floating well above the hull's bottom edge
+    # (e.g. superstructure detected separately): NOT the same waterline.
+    floating = dict(x=100.0, y=200.0, w=200.0, h=40.0)
+    canon0, _ = _touch(vt, 1, seq=0, box=HULL)
+    canon1, _ = _touch(vt, 2, seq=1, box=floating)
+    assert canon1 != canon0
+
+
+def test_reid_window_expires():
+    vt = VelocityTracker(reid_max_gap=5)
+    canon0, _ = _touch(vt, 1, seq=0, box=FULL)
+    # A matching box appearing long after the gap window is a NEW target.
+    canon1, _ = _touch(vt, 2, seq=10, box=HULL)
+    assert canon1 != canon0
+
+
+def test_reid_can_be_disabled():
+    vt = VelocityTracker(reid=False)
+    _, disp0 = _touch(vt, 1, seq=0, box=FULL)
+    canon1, disp1 = _touch(vt, 2, seq=1, box=HULL)
+    assert canon1 == 2 and disp1 != disp0
+
+
+def test_reid_co_occurring_partial_and_full_share_the_display_id():
+    # Both boxes in the SAME frame (nested duplicate detection).
+    vt = VelocityTracker()
+    _, disp0 = _touch(vt, 1, seq=0, box=FULL)
+    _, disp1 = _touch(vt, 2, seq=0, box=HULL)
+    assert disp1 == disp0
+
+
+def test_reid_alias_dies_with_pruned_track():
+    vt = VelocityTracker()
+    canon0, _ = _touch(vt, 1, seq=0, box=FULL)
+    canon1, _ = _touch(vt, 2, seq=1, box=HULL)
+    assert canon1 == canon0
+    # Target gone: prune everything well past max_idle.
+    vt.prune(set(), seq=100, max_idle=10)
+    assert vt.display_id(canon0) is None
+    # The backend resurrects raw id 2 much later for something new at the same
+    # spot: it must start fresh (the old identity/alias state is gone).
+    canon2, disp2 = _touch(vt, 2, seq=101, box=HULL)
+    assert canon2 == 2 and disp2 is not None
