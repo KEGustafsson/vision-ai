@@ -50,6 +50,12 @@ FROM ${EXPORT_BASE} AS export
 # pip-install build deps and write the exported ONNX.
 USER root
 WORKDIR /export
+# Some revisions of the Ultralytics base mark their Python "externally managed"
+# (PEP 668), making a bare `pip install` refuse to run. This stage is a
+# throwaway build environment whose only job is to emit the ONNX — there is no
+# system to protect — so tell pip to install anyway. Older pips (pre-23.1)
+# ignore the variable, so this is a no-op on bases without the marker.
+ENV PIP_BREAK_SYSTEM_PACKAGES=1
 # Acquire the YOLOv8n weights deterministically. A clean checkout has NO
 # models/yolov8n.pt (weights are gitignored), so requiring it as a build input
 # would make the image unbuildable from a fresh clone. Instead: use a hand-placed
