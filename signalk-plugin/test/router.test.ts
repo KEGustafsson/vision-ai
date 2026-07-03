@@ -1,0 +1,200 @@
+import { describe, it, expect } from 'vitest';
+import http from 'http';
+import { AddressInfo } from 'net';
+import { MjpegPartAligner, multipartBoundary, registerRoutes, SharedState } from '../src/router';
+
+// ---- helpers ---------------------------------------------------------------
+
+function part(boundary: string, body: Buffer | string, withLength = true): Buffer {
+  const b = Buffer.from(body);
+  const headers =
+    `--${boundary}\r\nContent-Type: image/jpeg\r\n` +
+    (withLength ? `Content-Length: ${b.length}\r\n` : '') +
+    '\r\n';
+  return Buffer.concat([Buffer.from(headers), b, Buffer.from('\r\n')]);
+}
+
+/** Parse a multipart byte stream strictly (as a browser would): every part must
+ * carry its declared Content-Length in full, ending at a boundary. Returns the
+ * bodies; throws on any truncated or malformed part. */
+function parseStrict(stream: Buffer, boundary: string): string[] {
+  const marker = `--${boundary}`;
+  const bodies: string[] = [];
+  let off = 0;
+  while (off < stream.length) {
+    // skip inter-part CRLFs
+    while (stream[off] === 0x0d || stream[off] === 0x0a) off++;
+    if (off >= stream.length) break;
+    if (stream.subarray(off, off + marker.length).toString() !== marker) {
+      throw new Error(`expected boundary at ${off}`);
+    }
+    const headerEnd = stream.indexOf('\r\n\r\n', off);
+    if (headerEnd < 0) throw new Error('unterminated part headers');
+    const headers = stream.subarray(off, headerEnd).toString();
+    const m = /content-length:\s*(\d+)/i.exec(headers);
+    if (!m) throw new Error('part without Content-Length');
+    const bodyStart = headerEnd + 4;
+    const bodyEnd = bodyStart + Number(m[1]);
+    if (bodyEnd > stream.length) throw new Error('truncated part body');
+    bodies.push(stream.subarray(bodyStart, bodyEnd).toString());
+    off = bodyEnd;
+  }
+  return bodies;
+}
+
+describe('multipartBoundary', () => {
+  it('extracts the boundary token', () => {
+    expect(multipartBoundary('multipart/x-mixed-replace; boundary=frame')).toBe('frame');
+    expect(multipartBoundary('multipart/x-mixed-replace; boundary="quoted"')).toBe('quoted');
+  });
+  it('falls back to "frame" when absent', () => {
+    expect(multipartBoundary(undefined)).toBe('frame');
+    expect(multipartBoundary('text/plain')).toBe('frame');
+  });
+});
+
+describe('MjpegPartAligner', () => {
+  it('forwards complete parts and reassembles arbitrarily split chunks', () => {
+    const a = new MjpegPartAligner('frame', 'frame');
+    const input = Buffer.concat([part('frame', 'AAAA'), part('frame', 'BBBBBB')]);
+    const out: Buffer[] = [];
+    // Feed one byte at a time — worst-case TCP fragmentation.
+    for (let i = 0; i < input.length; i++) out.push(...a.push(input.subarray(i, i + 1)));
+    const bodies = parseStrict(Buffer.concat(out), 'frame');
+    expect(bodies).toEqual(['AAAA', 'BBBBBB']);
+  });
+
+  it('never emits a truncated part (container killed mid-frame)', () => {
+    const a = new MjpegPartAligner('frame', 'frame');
+    const whole = part('frame', 'GOODFRAME');
+    const truncated = part('frame', 'DOOMEDFRAME').subarray(0, 20); // dies mid-part
+    const out = [...a.push(whole), ...a.push(truncated)];
+    // The truncated tail stays buffered and dies with the aligner; a fresh
+    // aligner (new upstream connection) then continues cleanly.
+    const b = new MjpegPartAligner('frame', 'frame');
+    out.push(...b.push(part('frame', 'AFTERRESTART')));
+    const bodies = parseStrict(Buffer.concat(out), 'frame');
+    expect(bodies).toEqual(['GOODFRAME', 'AFTERRESTART']);
+  });
+
+  it('re-emits parts under the client boundary when a restarted container uses a new one', () => {
+    const a = new MjpegPartAligner('other', 'frame');
+    const out = a.push(part('other', 'X'));
+    expect(parseStrict(Buffer.concat(out), 'frame')).toEqual(['X']);
+  });
+
+  it('splits on the next boundary when Content-Length is missing', () => {
+    const a = new MjpegPartAligner('frame', 'frame');
+    const input = Buffer.concat([part('frame', 'NOLEN1', false), part('frame', 'WITHLEN')]);
+    const out = a.push(input);
+    expect(out.length).toBe(2);
+    expect(out[0].toString()).toContain('NOLEN1');
+    expect(out[1].toString()).toContain('WITHLEN');
+  });
+
+  it('throws when a part exceeds the buffer cap instead of buffering forever', () => {
+    const a = new MjpegPartAligner('frame', 'frame');
+    const head = Buffer.from(`--frame\r\nContent-Length: ${64 * 1024 * 1024}\r\n\r\n`);
+    expect(() => {
+      a.push(head);
+      a.push(Buffer.alloc(1024));
+    }).toThrow();
+  });
+});
+
+// ---- proxyStream end-to-end: container restart must not stall the stream ----
+
+type Handler = (req: any, res: any) => void;
+
+function buildRouter(containerUrl: string): Map<string, Handler> {
+  const routes = new Map<string, Handler>();
+  const router = {
+    use: () => {},
+    get: (path: string, h: Handler) => routes.set(path, h),
+    post: () => {},
+  };
+  const shared: SharedState = {
+    targets: [],
+    ownShip: {} as any,
+    system: { activeCamera: 'forward', cameras: ['forward'], detectionEnabled: true, maxTargets: 20 },
+    setDetection: () => {},
+    setMaxTargets: () => {},
+    client: () => ({ streamUrl: () => `${containerUrl}/stream/forward.mjpg` }) as any,
+  };
+  registerRoutes(router, shared, () => ({ containerUrl }) as any);
+  return routes;
+}
+
+function startFakeContainer(port: number, tag: string): Promise<http.Server> {
+  const sockets = new Set<any>();
+  const server = http.createServer((_req, res) => {
+    res.writeHead(200, { 'content-type': 'multipart/x-mixed-replace; boundary=frame' });
+    const iv = setInterval(() => res.write(part('frame', `FRAME-${tag}`)), 25);
+    res.on('close', () => clearInterval(iv));
+  });
+  server.on('connection', (s) => {
+    sockets.add(s);
+    s.on('close', () => sockets.delete(s));
+  });
+  (server as any).killHard = () =>
+    new Promise<void>((resolve) => {
+      server.close(() => resolve());
+      // Destroy mid-write so the last part is truncated — the exact failure
+      // mode of a container being taken down while streaming.
+      for (const s of sockets) s.destroy();
+      sockets.clear();
+    });
+  return new Promise((resolve) => server.listen(port, () => resolve(server)));
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+describe('proxyStream across a container restart', () => {
+  it('keeps the browser connection open and resumes with only whole parts', async () => {
+    const PORT = 18790;
+    let container = await startFakeContainer(PORT, 'GEN1');
+    const routes = buildRouter(`http://127.0.0.1:${PORT}`);
+
+    const plugin = http.createServer((req, res) => {
+      (res as any).set = (k: string, v: string) => res.setHeader(k, v);
+      (res as any).status = (c: number) => ((res.statusCode = c), res);
+      (res as any).json = (o: unknown) => res.end(JSON.stringify(o));
+      (req as any).params = { camera: 'forward' };
+      routes.get('/stream/:camera')!(req, res);
+    });
+    await new Promise<void>((r) => plugin.listen(PORT + 1, () => r()));
+
+    const received: Buffer[] = [];
+    let ended = false;
+    const clientReq = http.get(`http://127.0.0.1:${PORT + 1}/stream/forward`, (res) => {
+      res.on('data', (c: Buffer) => received.push(c));
+      res.on('end', () => (ended = true));
+      res.on('error', () => (ended = true));
+    });
+
+    try {
+      await sleep(300);
+      const beforeKill = parseStrict(Buffer.concat(received), 'frame');
+      expect(beforeKill.length).toBeGreaterThan(2);
+      expect(beforeKill.every((b) => b === 'FRAME-GEN1')).toBe(true);
+
+      await (container as any).killHard();
+      await sleep(200);
+      expect(ended).toBe(false); // browser connection must stay open
+
+      container = await startFakeContainer(PORT, 'GEN2');
+      await sleep(1600); // retry loop re-dials within ~1s
+
+      // parseStrict throws if ANY forwarded part is truncated — this is the
+      // regression this test exists for (a mid-part splice permanently desyncs
+      // the browser's multipart parser with no error event to recover on).
+      const all = parseStrict(Buffer.concat(received), 'frame');
+      expect(all.filter((b) => b === 'FRAME-GEN2').length).toBeGreaterThan(2);
+      expect(ended).toBe(false);
+    } finally {
+      clientReq.destroy();
+      await (container as any).killHard();
+      await new Promise<void>((r) => plugin.close(() => r()));
+    }
+  }, 15000);
+});

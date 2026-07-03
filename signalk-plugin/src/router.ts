@@ -86,22 +86,116 @@ function proxy(targetUrl: string, res: any): void {
 // MJPEG stream on its own — and a closed multipart stream fires neither `error`
 // nor `load` — so on a container restart the frame just freezes until a manual
 // reload. Instead we keep the *browser's* connection open and re-dial the
-// container behind it: the client sees a brief pause, then frames resume. The
-// multipart boundary is identical across reconnects, so the browser resyncs at
-// the next `--frame` marker (at most one frame is glitched at the seam).
+// container behind it: the client sees a brief pause, then frames resume.
 // Upstream statuses worth retrying — the container is up but briefly not ready
 // (booting, restarting). Any other non-2xx (401/403/404, ...) is permanent and
 // is surfaced to the browser instead of retried.
 const RETRYABLE_STATUS = new Set([500, 502, 503, 504]);
 
+// The splice between the dying and the fresh upstream MUST land on a part
+// boundary. A container that is killed mid-frame leaves the browser's multipart
+// parser waiting for the rest of a truncated Content-Length'd JPEG; raw bytes
+// from the new connection are then swallowed as that frame's remainder and
+// (verified in Chromium) the parser never resyncs — the video freezes for good,
+// with no `error` event to recover on. So instead of piping raw bytes we
+// re-frame the upstream through MjpegPartAligner: buffer each multipart part,
+// forward it only once complete, and DROP any truncated tail when the upstream
+// dies. The browser then only ever sees whole parts, and a reconnect is
+// indistinguishable from a slow frame.
+const MAX_PART_BYTES = 32 * 1024 * 1024; // way above any real JPEG frame
+
+/** Boundary token of a multipart/x-mixed-replace content-type ("frame" if absent). */
+export function multipartBoundary(contentType: string | undefined): string {
+  const m = /boundary="?([^";\s]+)"?/i.exec(contentType || '');
+  return m ? m[1] : 'frame';
+}
+
+/**
+ * Re-frames an MJPEG byte stream into complete multipart parts.
+ *
+ * Feed it raw upstream chunks; it returns only whole parts (boundary line +
+ * headers + full body), re-emitted under `clientBoundary` — the boundary the
+ * browser was promised in the initial response headers — so a restarted
+ * container with a different boundary still splices cleanly. Anything buffered
+ * when the upstream dies is simply discarded with the instance (one aligner per
+ * upstream connection), which is exactly the mid-part-truncation fix.
+ */
+export class MjpegPartAligner {
+  private buf: Buffer = Buffer.alloc(0);
+  private readonly marker: Buffer;
+  private readonly clientMarker: Buffer;
+
+  constructor(upstreamBoundary: string, clientBoundary: string) {
+    this.marker = Buffer.from(`--${upstreamBoundary}`);
+    this.clientMarker = Buffer.from(`--${clientBoundary}`);
+  }
+
+  /**
+   * Append upstream bytes and return every part that is now complete.
+   * Throws if no part completes within MAX_PART_BYTES (malformed upstream);
+   * the caller should drop the connection and let the retry loop re-dial.
+   */
+  push(chunk: Buffer): Buffer[] {
+    this.buf = this.buf.length ? Buffer.concat([this.buf, chunk]) : chunk;
+    const out: Buffer[] = [];
+    for (;;) {
+      const start = this.buf.indexOf(this.marker);
+      if (start < 0) {
+        // No boundary yet: keep only a tail that could still be a marker prefix
+        // (start-of-stream preamble or a stray CRLF between parts is dropped).
+        if (this.buf.length > this.marker.length) {
+          this.buf = this.buf.subarray(this.buf.length - this.marker.length);
+        }
+        break;
+      }
+      if (start > 0) this.buf = this.buf.subarray(start); // trim preamble/CRLF
+      const headerEnd = this.buf.indexOf('\r\n\r\n');
+      if (headerEnd < 0) {
+        if (this.buf.length > MAX_PART_BYTES) throw new Error('mjpeg part header too large');
+        break; // headers still arriving
+      }
+      const headers = this.buf.subarray(0, headerEnd).toString('latin1');
+      const lenMatch = /content-length:\s*(\d+)/i.exec(headers);
+      let partEnd: number;
+      if (lenMatch) {
+        partEnd = headerEnd + 4 + Number(lenMatch[1]);
+        if (this.buf.length < partEnd) {
+          if (partEnd > MAX_PART_BYTES) throw new Error('mjpeg part too large');
+          break; // body still arriving
+        }
+      } else {
+        // No Content-Length: the part runs to the next boundary marker.
+        const next = this.buf.indexOf(this.marker, headerEnd + 4);
+        if (next < 0) {
+          if (this.buf.length > MAX_PART_BYTES) throw new Error('mjpeg part too large');
+          break;
+        }
+        partEnd = next;
+      }
+      // Re-emit under the browser's boundary, and always terminate with CRLF
+      // (a source CRLF left in the buffer is trimmed as preamble next round).
+      out.push(Buffer.concat([
+        this.clientMarker,
+        this.buf.subarray(this.marker.length, partEnd),
+        Buffer.from('\r\n'),
+      ]));
+      this.buf = this.buf.subarray(partEnd);
+    }
+    return out;
+  }
+}
+
 function proxyStream(targetUrl: string, res: any): void {
   const mod = targetUrl.startsWith('https') ? https : http;
   let closed = false;
   let headersWritten = false;
+  // Boundary token promised to the browser in the initial response headers;
+  // every later upstream's parts are re-emitted under it (see MjpegPartAligner).
+  let clientBoundary: string | null = null;
   let current: any = null;
   let retrying = false;
   // The in-flight request, so a browser disconnect can cancel it before its
-  // response callback fires and pipes onto an already-closed response.
+  // response callback fires and writes onto an already-closed response.
   let req: http.ClientRequest | null = null;
 
   const scheduleRetry = () => {
@@ -136,7 +230,9 @@ function proxyStream(targetUrl: string, res: any): void {
         }
         return;
       }
+      const upBoundary = multipartBoundary(up.headers['content-type']);
       if (!headersWritten) {
+        clientBoundary = upBoundary;
         res.writeHead(up.statusCode, {
           'content-type': up.headers['content-type'] || 'multipart/x-mixed-replace',
           'cache-control': 'no-store, no-cache, must-revalidate, max-age=0',
@@ -145,9 +241,28 @@ function proxyStream(targetUrl: string, res: any): void {
         });
         headersWritten = true;
       }
-      up.pipe(res, { end: false }); // keep res open across reconnects
+      // Forward whole parts only (never a truncated one), applying backpressure
+      // manually since we no longer pipe. The aligner is per-connection, so a
+      // partial part buffered when this upstream dies is discarded with it.
+      const aligner = new MjpegPartAligner(upBoundary, clientBoundary || upBoundary);
+      up.on('data', (chunk: Buffer) => {
+        if (closed || up !== current) return; // stale upstream must not write
+        let parts: Buffer[];
+        try {
+          parts = aligner.push(chunk);
+        } catch {
+          up.destroy(); // malformed/oversized part: re-dial via onTerminal
+          return;
+        }
+        for (const part of parts) {
+          if (!res.write(part)) {
+            up.pause();
+            res.once('drain', () => up.resume());
+          }
+        }
+      });
       // One terminal event per upstream, and ignore a stale upstream once a
-      // newer one is live, so two upstreams can never pipe into res at once.
+      // newer one is live, so two upstreams can never write into res at once.
       let done = false;
       const onTerminal = () => {
         if (done || up !== current) return;
@@ -156,6 +271,7 @@ function proxyStream(targetUrl: string, res: any): void {
       };
       up.on('end', onTerminal);
       up.on('error', onTerminal);
+      up.on('close', onTerminal); // belt-and-braces: some teardowns skip end/error
     });
     req = r;
     // Guard only the time-to-first-byte; a healthy stream is long-lived.
