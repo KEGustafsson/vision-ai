@@ -50,7 +50,12 @@ TargetManagement:
   # not drawn while lost, they just retain the number.
   maxShadowTrackingAge: 240
   # Stop tracking a target at this age if it never matched a detector bbox.
-  earlyTerminationAge: 1
+  # Raised from the stock/prior value of 1: a marina scene sits many boats
+  # right at the confidence floor, so a single missed frame (wave chop, a
+  # momentary NMS flicker) must not kill an unconfirmed candidate before it
+  # can reach probationAge (3) — that was silently discarding real boats one
+  # miss into their life.
+  earlyTerminationAge: 3
 
 TrajectoryManagement:
   useUncoveredAreaDetection: 0
@@ -126,11 +131,14 @@ VisualTracker:
   # (DeepStream 6.x/7.x reads this section — not the old "DCF:" one.)
   visualTrackerType: 1
   # Colour-names features discriminate hulls cheaply; HOG adds compute for
-  # little gain on water. Feature map level 2 (stock perf): raise toward 5
-  # for more discrimination if the Nano has headroom.
+  # little gain on water. Feature map level raised from the stock-perf 2 to 4:
+  # profiling showed the Orin Nano's GPU sits ~90% idle on this pipeline (RAM,
+  # not compute, is the constraint), so the extra visual-tracker resolution is
+  # nearly free and sharpens re-association between similar-looking hulls
+  # moored side by side.
   useColorNames: 1
   useHog: 0
-  featureImgSizeLevel: 2
+  featureImgSizeLevel: 4
   # Where the correlation filter focuses inside the bbox. The stock -0.2
   # biases UP toward a pedestrian's upper body; on water the visually stable
   # signature is the hull around the centreline (masts are thin, waterline

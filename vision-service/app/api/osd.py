@@ -81,7 +81,12 @@ class _MetaWriter:
     def line(self, x1, y1, x2, y2, colour, width=2):
         d = self._slot(lines=1)
         ln = d.line_params[d.num_lines]
-        ln.x1, ln.y1, ln.x2, ln.y2 = int(x1), int(y1), int(x2), int(y2)
+        # NvOSD_LineParams fields are unsigned; a coasting/extrapolated box
+        # that has drifted off the left/top edge produces a negative
+        # coordinate that pyds rejects outright (raises, skipping the whole
+        # frame's overlay). Clamp to the canvas edge instead.
+        ln.x1, ln.y1, ln.x2, ln.y2 = (max(0, int(x1)), max(0, int(y1)),
+                                       max(0, int(x2)), max(0, int(y2)))
         ln.line_width = width
         ln.line_color.set(*colour)
         d.num_lines += 1
