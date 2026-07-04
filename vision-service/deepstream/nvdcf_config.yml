@@ -25,9 +25,14 @@ BaseConfig:
 TargetManagement:
   # Enable bbox unclipping when a target is partially outside the frame.
   enableBboxUnClipping: 1
-  # Max simultaneous tracked targets per camera stream (matches detector
-  # max_det; the stock preset's 150 wastes tracker state on a marine scene).
-  maxTargetsPerStream: 20
+  # Max simultaneous tracked targets per camera stream. This cap counts
+  # SHADOW-tracked targets too (lost ids kept alive up to
+  # maxShadowTrackingAge, 20 s here) — once full, NEW detections are
+  # discarded, so it must be sized for live targets (detector max_det = 20)
+  # PLUS shadow headroom, or a burst of dropouts could block a genuinely new
+  # target (worst case: a person) from ever being tracked. 3x max_det keeps
+  # that failure mode away while still far below the stock preset's 150.
+  maxTargetsPerStream: 60
   # IOU threshold: if a new detection overlaps an existing target more than
   # this, it won't create a duplicate target.
   minIouDiff4NewTarget: 0.5

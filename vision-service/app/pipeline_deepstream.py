@@ -77,7 +77,7 @@ from .detector.classmap import (
     is_person_in_water,
     label_for_model,
 )
-from .detector.stabilizer import TrackStabilizer, cap_targets_sticky
+from .detector.stabilizer import TrackStabilizer, cap_targets_sticky, make_stabilizer
 from .detector.tracker import VelocityTracker, reid_options
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
 from .pipeline import _drop_contained_targets  # shared geometry filter, same package
@@ -307,21 +307,7 @@ class DeepStreamPipeline:
         d = self.settings.detector
         for i, cam in enumerate(self.settings.cameras):
             self._src_idx_to_name[i] = cam.name
-            stab = TrackStabilizer(
-                confirm_frames=d.stabilize_confirm_frames,
-                max_coast_frames=d.stabilize_max_coast_frames,
-                hysteresis_ratio=d.stabilize_hysteresis_ratio,
-                ema_alpha=d.stabilize_ema_alpha,
-                coast_velocity_factor=d.stabilize_coast_velocity_factor,
-                person_confirm_frames=d.stabilize_person_confirm_frames,
-                smooth=d.stabilize_smooth,
-                smooth_window=d.stabilize_smooth_window,
-                jump_tol=d.stabilize_jump_tol,
-                jump_confirm=d.stabilize_jump_confirm_frames,
-                lock_hits=d.stabilize_lock_hits,
-                lock_coast_factor=d.stabilize_lock_coast_factor,
-                conf_weight=d.stabilize_conf_weight,
-            ) if d.stabilize else None
+            stab = make_stabilizer(d)
             with self._lock:
                 self._states[cam.name] = _StreamState(
                     cam=cam, settings=self.settings, stabilizer=stab,

@@ -52,6 +52,29 @@ from dataclasses import dataclass, field, replace
 from .base import RawTrack
 
 
+def make_stabilizer(det) -> "TrackStabilizer | None":
+    """TrackStabilizer from a DetectorConfig, or ``None`` when stabilization
+    is disabled. Shared by both pipeline backends so the config-to-parameter
+    mapping cannot drift between them (mirrors ``tracker.reid_options``)."""
+    if not det.stabilize:
+        return None
+    return TrackStabilizer(
+        confirm_frames=det.stabilize_confirm_frames,
+        max_coast_frames=det.stabilize_max_coast_frames,
+        hysteresis_ratio=det.stabilize_hysteresis_ratio,
+        ema_alpha=det.stabilize_ema_alpha,
+        coast_velocity_factor=det.stabilize_coast_velocity_factor,
+        person_confirm_frames=det.stabilize_person_confirm_frames,
+        smooth=det.stabilize_smooth,
+        smooth_window=det.stabilize_smooth_window,
+        jump_tol=det.stabilize_jump_tol,
+        jump_confirm=det.stabilize_jump_confirm_frames,
+        lock_hits=det.stabilize_lock_hits,
+        lock_coast_factor=det.stabilize_lock_coast_factor,
+        conf_weight=det.stabilize_conf_weight,
+    )
+
+
 class _BoxSmoother:
     """Rolling average over the track's recent raw boxes, guarded by a jump
     gate (see module docstring). Judges each raw box only against boxes

@@ -11,7 +11,7 @@ All layers run identically on every backend (`mock`, `jetson`/TensorRT,
 
 ## The stack, bottom to top
 
-```
+```text
 YOLO detections (per frame, flickery)
   │
   ▼

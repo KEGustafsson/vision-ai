@@ -19,7 +19,7 @@ from .camera import create_source
 from .config import CameraConfig, Settings
 from .detector import create_detector
 from .detector.classmap import is_person_in_water
-from .detector.stabilizer import TrackStabilizer, cap_targets_sticky
+from .detector.stabilizer import cap_targets_sticky, make_stabilizer
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
 from .schemas import (
     Backend,
@@ -105,22 +105,7 @@ class CameraWorker(threading.Thread):
         )
         # Per-camera flicker damping: keeps a detected track alive (coasted)
         # across short dropouts instead of blinking it off. State is per camera.
-        d = settings.detector
-        self._stabilizer = TrackStabilizer(
-            confirm_frames=d.stabilize_confirm_frames,
-            max_coast_frames=d.stabilize_max_coast_frames,
-            hysteresis_ratio=d.stabilize_hysteresis_ratio,
-            ema_alpha=d.stabilize_ema_alpha,
-            coast_velocity_factor=d.stabilize_coast_velocity_factor,
-            person_confirm_frames=d.stabilize_person_confirm_frames,
-            smooth=d.stabilize_smooth,
-            smooth_window=d.stabilize_smooth_window,
-            jump_tol=d.stabilize_jump_tol,
-            jump_confirm=d.stabilize_jump_confirm_frames,
-            lock_hits=d.stabilize_lock_hits,
-            lock_coast_factor=d.stabilize_lock_coast_factor,
-            conf_weight=d.stabilize_conf_weight,
-        ) if d.stabilize else None
+        self._stabilizer = make_stabilizer(settings.detector)
         # Runtime-adjustable via /control.
         self.confidence = settings.detector.confidence
         # Drop detections closer than this (m); seeded from config, owned by the
