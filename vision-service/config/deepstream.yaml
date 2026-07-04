@@ -42,10 +42,23 @@ detector:
   # Stabilizer is still applied in Python on top of nvtracker output
   stabilize: true
   stabilize_confirm_frames: 3
+  # Base coast window kept short so a young/uncertain track dies fast (~0.7s at
+  # 12 FPS) and never lingers as a phantom false target.
   stabilize_max_coast_frames: 8
   stabilize_hysteresis_ratio: 0.6
   stabilize_ema_alpha: 0.4
-  stabilize_coast_velocity_factor: 0.4
+  # A PROVEN track (>= stabilize_lock_hits fresh detections) rides out a longer
+  # dropout: 8 * 3.0 = 24 frames (~2s at 12 FPS), so an established vessel
+  # occluded by a wave/wake keeps its box while NvDCF still holds its id in
+  # shadow. Extended only for locked tracks — not the base window — so the
+  # longer hold never applies to unproven tracks.
+  stabilize_lock_coast_factor: 3.0
+  # Conservative velocity: only 25% of the (already window-averaged) pixel
+  # velocity is applied per missed frame, so a coasted box holds near its last
+  # position and drifts gently rather than being flung off-target on a stale
+  # estimate over the now-longer coast window. Also matters most for a
+  # man-overboard target, whose apparent motion is dominated by own-ship drift.
+  stabilize_coast_velocity_factor: 0.25
   max_area_frac: 0.4
   contained_frac: 0.8
   # Which detection model to run. Exactly ONE model is active at a time — they
