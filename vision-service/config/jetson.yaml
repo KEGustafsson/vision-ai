@@ -32,8 +32,11 @@ detector:
   stabilize_ema_alpha: 0.3
   # Fraction of velocity used while coasting (0 = freeze box, 1 = full predict).
   # Damps a dashed/coasted box so it doesn't drift fast off the object; lower
-  # this toward 0 if the predicted box still races ahead.
-  stabilize_coast_velocity_factor: 0.4
+  # this toward 0 if the predicted box still races ahead. Held conservative so a
+  # coasted box holds near its last position over this backend's already-long
+  # coast window rather than drifting on a stale estimate (matters most for a
+  # man-overboard target, whose apparent motion is dominated by own-ship drift).
+  stabilize_coast_velocity_factor: 0.25
   # Batch both cameras into one inference. Tried on this Jetson but didn't pay
   # off: the two camera threads rarely align within the rendezvous window (each
   # does variable post-processing after detect), so avg batch ~1.1, and the
