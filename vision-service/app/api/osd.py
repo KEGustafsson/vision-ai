@@ -49,6 +49,12 @@ def _dim(colour: tuple) -> tuple:
     return (r * 0.6, g * 0.6, b * 0.6, a)
 
 
+def _rect_overlaps(a: tuple, b: tuple) -> bool:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    return ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1
+
+
 class _MetaWriter:
     """Acquire NvDsDisplayMeta from the batch pool on demand and roll over to a
     fresh one before any element array overflows ``_MAX_ELEMENTS``."""
@@ -91,7 +97,27 @@ class _MetaWriter:
         ln.line_color.set(*colour)
         d.num_lines += 1
 
-    def text(self, s, x, y, colour, font_size=11):
+    def text(self, s, x, y, colour, font_size=11, placed=None):
+        # nvdsosd doesn't expose font metrics to Python, so the plate footprint
+        # is an approximation (avg glyph width ~0.62x font_size) — good enough
+        # to keep labels from grossly overlapping, not pixel-exact like
+        # overlay.py's cv2.getTextSize.
+        pad = 3
+        tw = font_size * 0.62 * len(s) + 2 * pad
+        th = font_size + 2 * pad
+
+        def _rect_at(cy):
+            return (x, cy, x + tw, cy + th)
+
+        if placed is not None:
+            step = th + 2
+            for cand in (y, y + step, max(0, y - step), y + 2 * step, max(0, y - 2 * step)):
+                r = _rect_at(cand)
+                if not any(_rect_overlaps(r, p) for p in placed):
+                    y = cand
+                    break
+            placed.append(_rect_at(y))
+
         d = self._slot(labels=1)
         t = d.text_params[d.num_labels]
         t.display_text = s
@@ -135,6 +161,9 @@ def draw_event(pyds, batch_meta, frame_meta, event: DetectionEvent) -> None:
         y = int(event.horizon_y)
         mw.line(0, y, width, y, _HORIZON, width=1)
 
+    # Rects already placed this frame, so adjacent targets' labels fan out
+    # instead of one plate stacking over another (see _MetaWriter.text).
+    placed: list = []
     for t in event.targets:
         colour = _severity_colour(t)
         bx, by = int(t.bbox.x), int(t.bbox.y)
@@ -150,10 +179,10 @@ def draw_event(pyds, batch_meta, frame_meta, event: DetectionEvent) -> None:
             dim = _dim(colour)
             for x1, y1, x2, y2 in _dashed_edges(bx, by, bx + bw, by + bh):
                 mw.line(x1, y1, x2, y2, dim)
-            mw.text(label + " ~", bx, ty, dim)
+            mw.text(label + " ~", bx, ty, dim, placed=placed)
         else:
             mw.rect(bx, by, bw, bh, colour)
-            mw.text(label, bx, ty, colour)
+            mw.text(label, bx, ty, colour, placed=placed)
 
     hud = (f"{event.camera}  {event.inference.backend.value}  "
            f"{event.inference.latency_ms:.0f}ms  n={len(event.targets)}")

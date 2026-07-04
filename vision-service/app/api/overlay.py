@@ -16,20 +16,50 @@ _FONT = cv2.FONT_HERSHEY_SIMPLEX
 _BG_COLOUR = (0, 0, 0)  # black plate behind text for contrast over sky/water
 
 
+def _rect_overlaps(a: tuple, b: tuple) -> bool:
+    ax0, ay0, ax1, ay1 = a
+    bx0, by0, bx1, by1 = b
+    return ax0 < bx1 and bx0 < ax1 and ay0 < by1 and by0 < ay1
+
+
 def _draw_label(image: np.ndarray, text: str, org: tuple, fg: tuple,
-                scale: float = 0.5, thickness: int = 1) -> None:
+                scale: float = 0.5, thickness: int = 1,
+                placed: list | None = None) -> None:
     """Draw *text* on a filled black plate so it stays readable over any
     background. *org* is the text baseline-left (same anchor as cv2.putText);
-    the plate and text are clamped to stay fully on-frame."""
-    x, y = int(org[0]), int(org[1])
+    the plate and text are clamped to stay fully on-frame.
+
+    If *placed* is given, the plate is nudged to the first of a few candidate
+    baselines (above/below the requested one) that doesn't overlap a rect
+    already in *placed* — so labels on adjacent targets fan out instead of one
+    plate stacking over another. Each drawn plate's rect is appended to
+    *placed* for the next call to check against."""
+    x = int(org[0])
     (tw, th), base = cv2.getTextSize(text, _FONT, scale, thickness)
     h, w = image.shape[:2]
     pad = 3
-    # Keep the whole label (plate included) inside the frame.
     x = max(0, min(x, w - tw - 2 * pad))
-    y = max(th + pad, min(y, h - base - pad))
-    cv2.rectangle(image, (x, y - th - pad), (x + tw + 2 * pad, y + base + pad),
-                  _BG_COLOUR, cv2.FILLED)
+
+    def _rect_at(cy: int) -> tuple:
+        cy = max(th + pad, min(cy, h - base - pad))
+        return cy, (x, cy - th - pad, x + tw + 2 * pad, cy + base + pad)
+
+    y = int(org[1])
+    if placed is None:
+        y, rect = _rect_at(y)
+    else:
+        step = th + base + 2 * pad + 2
+        rect = None
+        for cand in (y, y + step, y - step, y + 2 * step, y - 2 * step):
+            cy, r = _rect_at(cand)
+            if not any(_rect_overlaps(r, p) for p in placed):
+                y, rect = cy, r
+                break
+        if rect is None:
+            y, rect = _rect_at(y)
+        placed.append(rect)
+
+    cv2.rectangle(image, (rect[0], rect[1]), (rect[2], rect[3]), _BG_COLOUR, cv2.FILLED)
     cv2.putText(image, text, (x + pad, y), _FONT, scale, fg, thickness, cv2.LINE_AA)
 
 
@@ -73,6 +103,9 @@ def annotate(image: np.ndarray, event: DetectionEvent) -> np.ndarray:
         y = int(event.horizon_y)
         cv2.line(img, (0, y), (img.shape[1], y), (200, 200, 200), 1)
 
+    # Rects already placed this frame, so adjacent targets' labels fan out
+    # instead of one plate stacking over another (see _draw_label).
+    placed: list = []
     for t in event.targets:
         colour = _severity_colour(t)
         x, y, w, h = int(t.bbox.x), int(t.bbox.y), int(t.bbox.w), int(t.bbox.h)
@@ -87,10 +120,10 @@ def annotate(image: np.ndarray, event: DetectionEvent) -> np.ndarray:
             # box/info persist without claiming a fresh detection.
             dim = tuple(int(c * 0.6) for c in colour)
             _dashed_rect(img, (x, y), (x + w, y + h), dim)
-            _draw_label(img, label + " ~", (x, max(y - 6, 12)), dim)
+            _draw_label(img, label + " ~", (x, max(y - 6, 12)), dim, placed=placed)
         else:
             cv2.rectangle(img, (x, y), (x + w, y + h), colour, 2)
-            _draw_label(img, label, (x, max(y - 6, 12)), colour)
+            _draw_label(img, label, (x, max(y - 6, 12)), colour, placed=placed)
 
     hud = f"{event.camera}  {event.inference.backend.value}  {event.inference.latency_ms:.0f}ms  n={len(event.targets)}"
     _draw_label(img, hud, (10, 24), (255, 255, 255), scale=0.6)
