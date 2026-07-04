@@ -130,6 +130,33 @@ class _MetaWriter:
         t.text_bg_clr.set(*_BLACK)  # black plate behind text, like overlay.py
         d.num_labels += 1
 
+    def text_block(self, lines, x, y, colour, font_size=11, placed=None):
+        """Draw *lines* as separate plated rows stacked top-to-bottom, *y*
+        being the top of the whole block. Declutter (see :meth:`text`) is
+        applied to the block as a unit, so a target's id/bearing/range stay
+        grouped together and move as one when nudged clear of a neighbour."""
+        pad = 3
+        spacing = 2
+        line_h = font_size + 2 * pad
+        total_h = line_h * len(lines) + spacing * (len(lines) - 1)
+        max_tw = max(font_size * 0.62 * len(s) for s in lines) + 2 * pad
+
+        def _rect_at(top):
+            return (x, top, x + max_tw, top + total_h)
+
+        top = y
+        if placed is not None:
+            step = total_h + 4
+            for cand in (y, y + step, max(0, y - step), y + 2 * step, max(0, y - 2 * step)):
+                r = _rect_at(cand)
+                if not any(_rect_overlaps(r, p) for p in placed):
+                    top = cand
+                    break
+            placed.append(_rect_at(top))
+
+        for i, s in enumerate(lines):
+            self.text(s, x, top + i * (line_h + spacing), colour, font_size=font_size)
+
     def flush(self):
         if self._dm is not None:
             self._pyds.nvds_add_display_meta_to_frame(self._fm, self._dm)
@@ -161,28 +188,31 @@ def draw_event(pyds, batch_meta, frame_meta, event: DetectionEvent) -> None:
         y = int(event.horizon_y)
         mw.line(0, y, width, y, _HORIZON, width=1)
 
-    # Rects already placed this frame, so adjacent targets' labels fan out
-    # instead of one plate stacking over another (see _MetaWriter.text).
+    # Rects already placed this frame, so adjacent targets' label blocks fan
+    # out instead of one plate stacking over another (see _MetaWriter.text_block).
     placed: list = []
     for t in event.targets:
         colour = _severity_colour(t)
         bx, by = int(t.bbox.x), int(t.bbox.y)
         bw, bh = int(t.bbox.w), int(t.bbox.h)
-        brg = f"{t.geometry.relative_bearing_deg:+.0f}deg"
-        rng = f"{t.geometry.range_m:.0f}m" if t.geometry.range_m is not None else "?"
         tid = f"#{t.track_id}" if t.track_id is not None else ""
-        label = f"{t.label}{tid} {brg} {rng}"
+        id_line = f"{t.label}{tid}"
+        brg_line = f"{t.geometry.relative_bearing_deg:+.0f}deg"
+        rng_line = f"{t.geometry.range_m:.0f}m" if t.geometry.range_m is not None else "?"
         if t.is_person_in_water:
-            label = "MOB! " + label
-        ty = max(by - 18, 0)
+            id_line = "MOB! " + id_line
+        # Three-line block (id / bearing / range) instead of one crowded line —
+        # easier to read, and the block declutters as a unit so the lines for
+        # one target never get split apart from a neighbour's nudge.
+        ty = max(by - 54, 0)
         if t.coasting:
             dim = _dim(colour)
             for x1, y1, x2, y2 in _dashed_edges(bx, by, bx + bw, by + bh):
                 mw.line(x1, y1, x2, y2, dim)
-            mw.text(label + " ~", bx, ty, dim, placed=placed)
+            mw.text_block([id_line + " ~", brg_line, rng_line], bx, ty, dim, placed=placed)
         else:
             mw.rect(bx, by, bw, bh, colour)
-            mw.text(label, bx, ty, colour, placed=placed)
+            mw.text_block([id_line, brg_line, rng_line], bx, ty, colour, placed=placed)
 
     hud = (f"{event.camera}  {event.inference.backend.value}  "
            f"{event.inference.latency_ms:.0f}ms  n={len(event.targets)}")

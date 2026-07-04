@@ -63,6 +63,51 @@ def _draw_label(image: np.ndarray, text: str, org: tuple, fg: tuple,
     cv2.putText(image, text, (x + pad, y), _FONT, scale, fg, thickness, cv2.LINE_AA)
 
 
+def _draw_label_block(image: np.ndarray, lines: list, org: tuple, fg: tuple,
+                      scale: float = 0.5, thickness: int = 1,
+                      placed: list | None = None) -> None:
+    """Draw *lines* as separate plated rows stacked top-to-bottom. *org* is
+    the bottom-left of the whole block (i.e. just above the target box); the
+    block grows upward from there. Declutter (see :func:`_draw_label`) is
+    applied to the block as a unit, so a target's id/bearing/range stay
+    grouped together and move as one when nudged clear of a neighbour."""
+    x = int(org[0])
+    h, w = image.shape[:2]
+    pad, spacing = 3, 2
+    sizes = [cv2.getTextSize(t, _FONT, scale, thickness) for t in lines]
+    line_h = max(th + base for (tw, th), base in sizes) + 2 * pad
+    total_h = line_h * len(lines) + spacing * (len(lines) - 1)
+    max_tw = max(tw for (tw, th), base in sizes)
+    x = max(0, min(x, w - max_tw - 2 * pad))
+
+    def _rect_from_bottom(b: int) -> tuple:
+        b = max(total_h, min(b, h))
+        return b, (x, b - total_h, x + max_tw + 2 * pad, b)
+
+    bottom0 = int(org[1])
+    if placed is None:
+        bottom, rect = _rect_from_bottom(bottom0)
+    else:
+        step = total_h + 4
+        rect = None
+        for cand in (bottom0, bottom0 + step, bottom0 - step, bottom0 + 2 * step, bottom0 - 2 * step):
+            b, r = _rect_from_bottom(cand)
+            if not any(_rect_overlaps(r, p) for p in placed):
+                bottom, rect = b, r
+                break
+        if rect is None:
+            bottom, rect = _rect_from_bottom(bottom0)
+        placed.append(rect)
+
+    top = rect[1]
+    for i, (text, ((tw, th), base)) in enumerate(zip(lines, sizes)):
+        line_top = top + i * (line_h + spacing)
+        baseline_y = line_top + th + pad
+        cv2.rectangle(image, (x, line_top), (x + tw + 2 * pad, line_top + line_h),
+                      _BG_COLOUR, cv2.FILLED)
+        cv2.putText(image, text, (x + pad, baseline_y), _FONT, scale, fg, thickness, cv2.LINE_AA)
+
+
 def _format_timestamp(ts: str) -> str:
     """Turn the event's ISO-8601 UTC timestamp (e.g. ``2026-05-31T12:34:56.789Z``)
     into a compact, human-readable ``2026-05-31 12:34:56 UTC`` for the overlay."""
@@ -109,21 +154,26 @@ def annotate(image: np.ndarray, event: DetectionEvent) -> np.ndarray:
     for t in event.targets:
         colour = _severity_colour(t)
         x, y, w, h = int(t.bbox.x), int(t.bbox.y), int(t.bbox.w), int(t.bbox.h)
-        brg = f"{t.geometry.relative_bearing_deg:+.0f}deg"
-        rng = f"{t.geometry.range_m:.0f}m" if t.geometry.range_m is not None else "?"
         tid = f"#{t.track_id}" if t.track_id is not None else ""
-        label = f"{t.label}{tid} {brg} {rng}"
+        id_line = f"{t.label}{tid}"
+        brg_line = f"{t.geometry.relative_bearing_deg:+.0f}deg"
+        rng_line = f"{t.geometry.range_m:.0f}m" if t.geometry.range_m is not None else "?"
         if t.is_person_in_water:
-            label = "MOB! " + label
+            id_line = "MOB! " + id_line
+        # Three-line block (id / bearing / range) instead of one crowded line —
+        # easier to read, and the block declutters as a unit so the lines for
+        # one target never get split apart from a neighbour's nudge.
         if t.coasting:
             # Predicted (not detected this frame): dashed + dimmed colour so the
             # box/info persist without claiming a fresh detection.
             dim = tuple(int(c * 0.6) for c in colour)
             _dashed_rect(img, (x, y), (x + w, y + h), dim)
-            _draw_label(img, label + " ~", (x, max(y - 6, 12)), dim, placed=placed)
+            _draw_label_block(img, [id_line + " ~", brg_line, rng_line],
+                              (x, max(y - 6, 12)), dim, placed=placed)
         else:
             cv2.rectangle(img, (x, y), (x + w, y + h), colour, 2)
-            _draw_label(img, label, (x, max(y - 6, 12)), colour, placed=placed)
+            _draw_label_block(img, [id_line, brg_line, rng_line],
+                              (x, max(y - 6, 12)), colour, placed=placed)
 
     hud = f"{event.camera}  {event.inference.backend.value}  {event.inference.latency_ms:.0f}ms  n={len(event.targets)}"
     _draw_label(img, hud, (10, 24), (255, 255, 255), scale=0.6)
