@@ -105,6 +105,8 @@ DataAssociator:
   matchingScoreWeight4VisualSimilarity: 0.6
   matchingScoreWeight4SizeSimilarity: 0.0
   matchingScoreWeight4Iou: 0.4
+  tentativeDetectorConfidence: 0.2008
+  minMatchingScore4TentativeIou: 0.5296
 
 StateEstimator:
   # SIMPLE Kalman filter on location/size/velocity (stock perf values). The
