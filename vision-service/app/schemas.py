@@ -67,7 +67,10 @@ class Geometry(BaseModel):
 
 
 class PixelVelocity(BaseModel):
-    """Centroid velocity in pixels per processed frame, from track history."""
+    """Velocity of the bbox bottom-center (waterline anchor) in pixels per
+    processed frame, from track history. Anchored at the waterline rather than
+    the centroid so it stays clean when the detected extent of a vessel flips
+    between partial (hull) and full (hull + mast)."""
 
     vx: float = 0.0
     vy: float = 0.0

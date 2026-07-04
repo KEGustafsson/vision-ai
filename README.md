@@ -230,6 +230,7 @@ for the build, model selection, and tuning.
 - [Vision container API](docs/container-api.md)
 - [SignalK `vision.*` paths](docs/signalk-paths.md)
 - [Geometry & calibration](docs/geometry.md)
+- [Tracking stability (id lock & anti-flicker)](docs/tracking-stability.md)
 - [Jetson setup & deployment](docs/jetson-setup.md)
 - [Dev quickstart (end-to-end)](docs/dev-quickstart.md)
 - [Onboard verification runbook](docs/onboard-verification.md)

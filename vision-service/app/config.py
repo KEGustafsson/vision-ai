@@ -107,6 +107,12 @@ class DetectorConfig(BaseModel):
     # detection is dropped and the larger containing one is kept. A
     # person-in-water is never dropped (MOB safety). 1.0 disables.
     contained_frac: float = 0.8
+    # Sticky max-targets cap: when more targets are live than max_det allows, a
+    # target emitted last frame keeps its slot unless a challenger's confidence
+    # beats it by this margin. Stops two near-tied targets from swapping the
+    # last slot every few frames (the loser blinks in and out of the overlay
+    # and target list). person always ranks first regardless. 0 disables.
+    max_det_sticky_margin: float = 0.05
     # Drop any detection whose estimated range is below this many metres (own-hull
     # artifacts / very-near clutter). Applied EARLY — before events and the
     # annotated overlay — so neither surfaces a too-close object. person is exempt
@@ -141,6 +147,82 @@ class DetectorConfig(BaseModel):
     # its last spot, 1 = full extrapolation). Damps a noisy velocity so a
     # coasted (dashed) box doesn't drift fast off the object across dropouts.
     stabilize_coast_velocity_factor: float = 0.4
+    # Box smoothing: every emitted box is the rolling AVERAGE of the track's
+    # last stabilize_smooth_window raw boxes. Deliberately simple (operator
+    # decision): no motion model, no prediction, no extent-holding — the box
+    # just follows the detections, with per-frame jitter and shape flips
+    # spread across the window instead of snapping. Bigger window = calmer but
+    # laggier (a mover's box trails by about half the window). 1 disables.
+    stabilize_smooth: bool = True
+    stabilize_smooth_window: int = 5
+    # Jump gate on the smoothed box: real objects don't teleport, so a raw box
+    # whose center leaps more than this fraction of the box's larger dimension
+    # per elapsed frame — or whose width/height changes by more than
+    # (1 + this) per elapsed frame — is a FALSE measurement: it is not
+    # averaged in and the held average is emitted instead. Judged only against
+    # boxes already seen (no motion estimate). 0 disables the gate.
+    stabilize_jump_tol: float = 0.35
+    # An out-of-gate box observed this many CONSECUTIVE frames is real (the
+    # target genuinely is elsewhere / another size): the average restarts
+    # there. In-gate frames reset the count, so a recurring lone spike (glint,
+    # marina cluster box) never accumulates acceptance.
+    stabilize_jump_confirm_frames: int = 3
+    # Track lock (the ByteTrack track_buffer / NvDCF shadow-tracking idea): a
+    # track seen at least this many frames has proven itself real and may
+    # coast stabilize_lock_coast_factor times longer than
+    # stabilize_max_coast_frames before it is dropped, so an established
+    # vessel rides out a longer dropout (wave occlusion, a wake burst) with
+    # its box and id intact while a young track still dies fast. 0 disables.
+    stabilize_lock_hits: int = 30
+    stabilize_lock_coast_factor: float = 2.0
+    # Weight each box in the smoothing window by its detection confidence
+    # (StrongSORT's NSA-Kalman idea, arXiv:2202.13514, applied to the rolling
+    # average): a marginal low-confidence measurement perturbs the shown box
+    # less than a solid detection. false => plain unweighted average.
+    stabilize_conf_weight: bool = True
+    # Waterline re-identification: keep ONE detection id on a vessel whose box
+    # alternates between partial and full extents (hull only <-> hull + mast).
+    # The backend trackers (ByteTrack/NvDCF) associate by box IoU, so that shape
+    # jump mints a fresh track id and the same target flickers between two ids;
+    # re-id aliases the new id back when both boxes stand on the same waterline
+    # footprint (see app/detector/tracker.py resolve()). person is always exempt
+    # (two swimmers must never be fused into one MOB target). Trade-off: two
+    # same-label targets that genuinely share a footprint (one passing close
+    # behind another) can be fused while they overlap; the thresholds below
+    # keep that window narrow.
+    reid: bool = True
+    # How many frames back a disappeared track can be re-identified (~4 s at
+    # 10 fps), so a vessel that drops out for a few seconds re-acquires its id
+    # instead of appearing as a new target. A NEW vessel arriving in the spot
+    # is kept from inheriting the id by the width-similarity and
+    # motion-prediction gates below, not by keeping this window tight.
+    reid_max_gap_frames: int = 40
+    # Minimum horizontal overlap, as a fraction of the narrower box's width.
+    reid_min_x_overlap: float = 0.5
+    # Max bottom-edge (waterline) misalignment, as a fraction of the SHORTER
+    # box's height (the hull) — a mast-height tolerance would bridge two
+    # vertically separate targets.
+    reid_bottom_tol_frac: float = 0.35
+    # Max waterline-width mismatch (wider/narrower) between the candidate and
+    # the stored footprint. A partial/full flip preserves the hull's width (a
+    # mast adds height, not width), so a larger mismatch is a DIFFERENT vessel
+    # that must not inherit the id.
+    reid_max_width_ratio: float = 1.6
+    # Buffered matching (C-BIoU, arXiv:2211.14317): the re-id gates RELAX as
+    # the dropout grows — the footprint-overlap window and the waterline
+    # tolerance widen by this fraction of the narrower box's dimension per
+    # missed frame (velocity prediction is less certain the longer the target
+    # was unseen), capped at reid_buffer_max_frac. A fresh partial/full flip
+    # is still judged tightly. 0 disables the widening.
+    reid_buffer_frac_per_frame: float = 0.03
+    reid_buffer_max_frac: float = 0.25
+    # Direction-consistency gate (OC-SORT's observation-centric momentum,
+    # arXiv:2203.14360): a track moving at or above this speed (px/frame) is
+    # only re-identified by a candidate displaced broadly ALONG its direction
+    # of travel — a box appearing clearly BEHIND a mover is a different
+    # vessel, even where the buffered gate would geometrically accept it.
+    # Counterbalances the widened matching space above. 0 disables.
+    reid_dir_min_speed_px: float = 2.0
     # Batch both cameras into a single inference (needs a batch-capable engine).
     # Removes the one-camera-at-a-time detector serialization. Falls back to
     # per-camera inference automatically when the engine is batch=1.

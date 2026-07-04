@@ -3,7 +3,13 @@
 #
 # Performance-tuned for 2 cameras at 12 FPS on Jetson Orin Nano.
 # Reference: /opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/
-#            config_tracker_NvDCF_perf.yml
+#            config_tracker_NvDCF_perf.yml (and *_accuracy.yml for ReAssoc)
+#
+# FORMAT NOTE: DeepStream 6.x/7.x section names. The unified tracker library
+# parses with OpenCV FileStorage and SILENTLY IGNORES unknown sections/keys —
+# an old DeepStream 5.x-style "DCF:" section (as this file once used) is
+# dropped wholesale and the visual tracker just runs on defaults, so keep the
+# section names exactly as in the stock 7.x presets.
 #
 # If this file is not recognised by your DeepStream version, substitute the
 # path to the stock performance preset:
@@ -18,7 +24,15 @@ BaseConfig:
 
 TargetManagement:
   # Enable bbox unclipping when a target is partially outside the frame.
-  enableBBoxUnClipping: 1
+  enableBboxUnClipping: 1
+  # Max simultaneous tracked targets per camera stream. This cap counts
+  # SHADOW-tracked targets too (lost ids kept alive up to
+  # maxShadowTrackingAge, 20 s here) — once full, NEW detections are
+  # discarded, so it must be sized for live targets (detector max_det = 20)
+  # PLUS shadow headroom, or a burst of dropouts could block a genuinely new
+  # target (worst case: a person) from ever being tracked. 3x max_det keeps
+  # that failure mode away while still far below the stock preset's 150.
+  maxTargetsPerStream: 60
   # IOU threshold: if a new detection overlaps an existing target more than
   # this, it won't create a duplicate target.
   minIouDiff4NewTarget: 0.5
@@ -36,26 +50,105 @@ TargetManagement:
   # not drawn while lost, they just retain the number.
   maxShadowTrackingAge: 240
   # Stop tracking a target at this age if it never matched a detector bbox.
-  earlyTerminationAge: 1
+  # Raised from the stock/prior value of 1: a marina scene sits many boats
+  # right at the confidence floor, so a single missed frame (wave chop, a
+  # momentary NMS flicker) must not kill an unconfirmed candidate before it
+  # can reach probationAge (3) — that was silently discarding real boats one
+  # miss into their life.
+  earlyTerminationAge: 3
 
 TrajectoryManagement:
   useUncoveredAreaDetection: 0
+  # Motion-based re-association (DeepStream 6.2+): when a shadow track's
+  # trajectory, projected forward by its own motion, matches a newly born
+  # tracklet in position/velocity/size, the newborn is re-linked to the old
+  # ID instead of keeping a fresh one. This is the tracker-level cure for the
+  # id switch a long dropout otherwise causes (the Python waterline re-id
+  # then only has to repair partial/full extent flips). Purely motion-based —
+  # needs no ReID network, so it is nearly free on the Orin Nano.
+  enableReAssoc: 1
+  # Trajectory-projection windows, rescaled from the stock accuracy preset
+  # (tuned for ~30 FPS pedestrians) to this pipeline's ~12 FPS and slow
+  # marine relative motion: require ~1.5 s of history before a tracklet may
+  # be projected, prepare the projection from the last ~4 s, and project
+  # ~5 s ahead.
+  minTrajectoryLength4Projection: 18
+  prepLength4TrajectoryProjection: 48
+  trajectoryProjectionLength: 60
+  # How far back in time (frames) a candidate tracklet may reach to match a
+  # lost one: 120 ≈ 10 s at 12 FPS, half the shadow age, so re-association
+  # covers wave/wake occlusions without bridging two different passers-by
+  # across the whole 20 s shadow window.
+  maxTrackletMatchingTimeSearchRange: 120
+  # Matching gates (stock accuracy-preset values): angular / speed / size
+  # agreement between the projected and the candidate tracklet.
+  maxAngle4TrackletMatching: 67
+  minSpeedSimilarity4TrackletMatching: 0.0574
+  minBboxSizeSimilarity4TrackletMatching: 0.1013
+  minTrackletMatchingScore: 0.2940
+  minMatchingScore4Overall: 0.6622
+  trajectoryProjectionProcessNoiseScale: 0.5331
+  trajectoryProjectionMeasurementNoiseScale: 90.828
+  trackletSpacialSearchRegionScale: 0.0175
 
-DCF:
-  # Max simultaneous tracked targets per camera stream.
-  maxTargetsPerStream: 20
-  # Filter learning rate (lower = smoother but slower to adapt).
-  filterLr: 0.15
-  filterChannelSize: 1
-  gaussianSigma: 1.0
-  # Feature map size level: 1=smallest/fastest (good for 12 FPS on Orin Nano).
-  featureImgSizeLevel: 1
-  UpdateWithGoodDetectionOnly: 0
-  # Search region padding: larger = can track faster-moving objects.
-  SearchRegionPaddingScale: 1
-  minDetectorConfidence: 0.1
-  minTrackerConfidence: 0.2
-  # Colour names feature improves discrimination between similar targets.
+DataAssociator:
+  dataAssociatorType: 0
+  # Cascaded matching (1): confirmed targets get matched before tentative
+  # ones, so a flickery newborn can't steal a confirmed vessel's detection.
+  associationMatcherType: 1
+  checkClassMatch: 1
+  # Score gates/weights: stock perf-preset values except size similarity —
+  # the stock 0.6 gate breaks association when the detected extent flips
+  # between hull-only and hull+mast (a large legitimate size jump for the
+  # SAME target), which is this pipeline's dominant id-flicker mode. Visual
+  # similarity (the DCF correlation response) carries the discrimination
+  # instead.
+  minMatchingScore4Overall: 0.0
+  minMatchingScore4SizeSimilarity: 0.4
+  minMatchingScore4Iou: 0.0
+  minMatchingScore4VisualSimilarity: 0.7
+  matchingScoreWeight4VisualSimilarity: 0.6
+  matchingScoreWeight4SizeSimilarity: 0.0
+  matchingScoreWeight4Iou: 0.4
+  tentativeDetectorConfidence: 0.2008
+  minMatchingScore4TentativeIou: 0.5296
+
+StateEstimator:
+  # SIMPLE Kalman filter on location/size/velocity (stock perf values). The
+  # relatively high tracker measurement noise keeps the state trusting
+  # detector boxes over DCF localisation, which suits a strong detector at
+  # low frame rate.
+  stateEstimatorType: 1
+  processNoiseVar4Loc: 2.0
+  processNoiseVar4Size: 1.0
+  processNoiseVar4Vel: 0.1
+  measurementNoiseVar4Detector: 4.0
+  measurementNoiseVar4Tracker: 16.0
+
+VisualTracker:
+  # NvDCF correlation-filter visual tracking: what keeps a target locked
+  # BETWEEN detector hits and scores visual similarity for association.
+  # (DeepStream 6.x/7.x reads this section — not the old "DCF:" one.)
+  visualTrackerType: 1
+  # Colour-names features discriminate hulls cheaply; HOG adds compute for
+  # little gain on water. Feature map level raised from the stock-perf 2 to 4:
+  # profiling showed the Orin Nano's GPU sits ~90% idle on this pipeline (RAM,
+  # not compute, is the constraint), so the extra visual-tracker resolution is
+  # nearly free and sharpens re-association between similar-looking hulls
+  # moored side by side.
   useColorNames: 1
   useHog: 0
-  useHighPrecisionFeature: 0
+  featureImgSizeLevel: 4
+  # Where the correlation filter focuses inside the bbox. The stock -0.2
+  # biases UP toward a pedestrian's upper body; on water the visually stable
+  # signature is the hull around the centreline (masts are thin, waterline
+  # foam churns), so keep the focus centred.
+  featureFocusOffsetFactor_y: 0.0
+  # Search-region padding around the predicted position (1-3): 2 gives the
+  # filter room for wave-induced apparent motion between 12 FPS frames.
+  searchRegionPaddingScale: 2
+  # Filter learning rate (stock perf): low = long visual memory, so a few
+  # frames of spray/occlusion don't overwrite what the target looks like.
+  filterLr: 0.075
+  filterChannelWeightsLr: 0.1
+  gaussianSigma: 0.75

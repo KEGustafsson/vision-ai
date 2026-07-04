@@ -1,0 +1,27 @@
+# Marine-tuned ByteTrack association config (Ultralytics tracker format).
+# Select via detector.tracker: config/trackers/bytetrack_marine.yaml
+#
+# Rationale vs the Ultralytics stock bytetrack.yaml, for slow-relative-motion
+# marine targets at the pipeline's ~10-12 FPS:
+#
+# * track_buffer 90 (~7-9 s)  — a lost track keeps its identity alive far
+#   longer before termination. Vessels vanish behind swell/wakes for seconds
+#   at a time; the stock 30 (~2.5 s) terminates the id and re-detection then
+#   mints a fresh one (an id flicker the waterline re-id has to repair).
+# * match_thresh 0.7          — slightly looser IoU association. Pitch/roll
+#   moves every box a little between frames; the stock 0.8 breaks association
+#   on the bigger wave-induced jumps and splits the track.
+# * new_track_thresh 0.4      — a brand-new track needs a solid detection to
+#   be born. Glints and foam produce weak one-frame detections that at the
+#   stock 0.25 each mint a short-lived id (visible as number churn).
+# * track_high_thresh 0.25 / track_low_thresh 0.1 — keep BYTE's two-pass
+#   association: weak (0.1-0.25) detections cannot create or confirm tracks
+#   but CAN keep an existing one matched, which is exactly what damps
+#   confidence-dip flicker on a real target.
+tracker_type: bytetrack
+track_high_thresh: 0.25
+track_low_thresh: 0.1
+new_track_thresh: 0.4
+track_buffer: 90
+match_thresh: 0.7
+fuse_score: True

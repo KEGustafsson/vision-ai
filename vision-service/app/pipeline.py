@@ -19,7 +19,7 @@ from .camera import create_source
 from .config import CameraConfig, Settings
 from .detector import create_detector
 from .detector.classmap import is_person_in_water
-from .detector.stabilizer import TrackStabilizer
+from .detector.stabilizer import cap_targets_sticky, make_stabilizer
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
 from .schemas import (
     Backend,
@@ -105,15 +105,7 @@ class CameraWorker(threading.Thread):
         )
         # Per-camera flicker damping: keeps a detected track alive (coasted)
         # across short dropouts instead of blinking it off. State is per camera.
-        d = settings.detector
-        self._stabilizer = TrackStabilizer(
-            confirm_frames=d.stabilize_confirm_frames,
-            max_coast_frames=d.stabilize_max_coast_frames,
-            hysteresis_ratio=d.stabilize_hysteresis_ratio,
-            ema_alpha=d.stabilize_ema_alpha,
-            coast_velocity_factor=d.stabilize_coast_velocity_factor,
-            person_confirm_frames=d.stabilize_person_confirm_frames,
-        ) if d.stabilize else None
+        self._stabilizer = make_stabilizer(settings.detector)
         # Runtime-adjustable via /control.
         self.confidence = settings.detector.confidence
         # Drop detections closer than this (m); seeded from config, owned by the
@@ -123,6 +115,8 @@ class CameraWorker(threading.Thread):
         # driven by the SignalK plugin's object-type selection via /control.
         self.allowed_labels: set | None = (
             set(settings.detector.classes) if settings.detector.classes else None)
+        # Track ids emitted in the last event, for the sticky max-targets cap.
+        self._emitted_ids: set = set()
         self.error: str | None = None
 
     def stop(self) -> None:
@@ -336,9 +330,10 @@ class CameraWorker(threading.Thread):
         # duplicate nested boxes) before ranking/capping.
         targets = _drop_contained_targets(
             targets, self._settings.detector.contained_frac)
-        targets = sorted(
-            targets, key=lambda t: t.confidence, reverse=True
-        )[:self._settings.detector.max_det]
+        targets = cap_targets_sticky(
+            targets, self._settings.detector.max_det, self._emitted_ids,
+            self._settings.detector.max_det_sticky_margin)
+        self._emitted_ids = {t.track_id for t in targets if t.track_id is not None}
 
         return DetectionEvent(
             camera=self._cam.name,

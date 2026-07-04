@@ -13,6 +13,13 @@ detector:
   model_engine: yolov8n.engine   # dynamic batch 1-2 engine (also kept as yolov8n_b2.engine); note the compose VISION_MODEL_ENGINE env overrides this
   confidence: 0.35
   imgsz: 640
+  # Marine-tuned ByteTrack association (repo-local preset): ~7.5 s track
+  # buffer keeps a lost id alive through swell/wake dropouts, looser
+  # match_thresh tolerates wave-induced box jumps, higher new_track_thresh
+  # stops glints minting one-frame ids. Swap to
+  # config/trackers/botsort_marine.yaml to add camera-motion compensation
+  # (sparse optical flow) when pitch/roll breaks association — costs CPU.
+  tracker: config/trackers/bytetrack_marine.yaml
   # Anti-flicker stabilizer, tuned on a 60s capture of live aft/forward tracks
   # (offline replay of the real stabilizer over recorded detections). max_coast
   # is frames of persistence at ~12fps (20 ~= 1.7s): higher = fewer flicker gaps

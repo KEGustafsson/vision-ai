@@ -129,7 +129,7 @@
       "type": "object"
     },
     "PixelVelocity": {
-      "description": "Centroid velocity in pixels per processed frame, from track history.",
+      "description": "Velocity of the bbox bottom-center (waterline anchor) in pixels per\nprocessed frame, from track history. Anchored at the waterline rather than\nthe centroid so it stays clean when the detected extent of a vessel flips\nbetween partial (hull) and full (hull + mast).",
       "properties": {
         "vx": {
           "default": 0.0,

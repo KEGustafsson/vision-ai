@@ -69,7 +69,12 @@ that schema, so the two sides cannot silently drift.
   `app/detector/tracker.py`. Freed numbers rotate to the back of the pool, so an
   id is reused only after the rest of the range has been cycled through. Note the
   range is per camera, so `forward` and `aft` may both show e.g. `30` for
-  different objects.
+  different objects. The id also survives the detector re-acquiring the same
+  vessel with a different box extent (hull only vs hull + mast): a new raw
+  track whose box stands on the **waterline footprint** (aligned bottom edge,
+  overlapping horizontal extent) of a recently seen same-label track is
+  re-identified as that track and keeps its id (`detector.reid*` settings;
+  `person` is exempt so two nearby MOB targets are never fused).
 - **`is_person_in_water`** is decided in the container (person whose waterline is
   below the horizon) so MOB latency is one frame, not a round-trip.
 - **`coasting`** (default `false`) is `true` when the track stabilizer is
