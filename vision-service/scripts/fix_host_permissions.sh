@@ -22,7 +22,13 @@ for dir in "${dirs[@]}"; do
         echo "skip: $dir does not exist" >&2
         continue
     fi
-    setfacl -m u:10001:rwx "$dir"
-    setfacl -d -m u:10001:rwx "$dir"
-    echo "ok: UID 10001 can read/write $dir"
+    # -R covers pre-existing files/subdirs too, not just ones created after
+    # this runs. setfacl reports "Operation not permitted" per-entry (without
+    # aborting the recursion) for anything owned by a different UID we can't
+    # re-ACL non-root (e.g. UID 10001's own prior output) -- harmless, since
+    # that UID already has owner access to its own files. Don't let those
+    # expected per-file warnings (non-zero exit) abort the rest of this script.
+    setfacl -R -m u:10001:rwx "$dir" || true
+    setfacl -R -d -m u:10001:rwx "$dir" || true
+    echo "ok: UID 10001 can read/write $dir (existing + future files)"
 done
