@@ -1,6 +1,6 @@
 # nvinfer primary GIE config for the Roboflow Marine Surveillance model
 # (YOLOv8s, 7 classes). Selected by detector.model=marine-surveillance in the YAML.
-# Only ONE detection model runs at a time — this config replaces pgie_yolov8n.txt
+# Only ONE detection model runs at a time — this config replaces pgie_yolo11n.txt
 # when marine-surveillance is selected; the models are never active together.
 #
 # MODEL SOURCE
@@ -21,7 +21,7 @@
 # CUSTOM PARSER
 # =============
 # Same libnvdsinfer_custom_impl_Yolo.so as the COCO/forward-watch models (build it
-# once on the Jetson — see pgie_yolov8n.txt). The training script's stock export is
+# once on the Jetson — see pgie_yolo11n.txt). The training script's stock export is
 # rewritten to the [N,6] head this parser decodes by convert_to_deepstream.py.
 
 [property]

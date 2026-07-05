@@ -12,7 +12,7 @@
 # DeepStream-capable image (built from vision-service/Dockerfile.deepstream).
 #
 # Camera URLs come from .env (same keys as the jetson override). The first start
-# is slow: nvinfer builds the TensorRT engine from deepstream/yolov8n_ds.onnx into
+# is slow: nvinfer builds the TensorRT engine from deepstream/yolo11n_ds.onnx into
 # the bind-mounted models/ dir — give the board free RAM for that build (the engine
 # then persists, so later starts are fast).
 services:

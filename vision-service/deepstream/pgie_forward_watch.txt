@@ -1,6 +1,6 @@
 # nvinfer primary GIE config for the forward-watch marine obstacle model
 # (YOLOv8n, 6 classes). Selected by detector.model=forward-watch in the YAML.
-# Only ONE detection model runs at a time — this config replaces pgie_yolov8n.txt
+# Only ONE detection model runs at a time — this config replaces pgie_yolo11n.txt
 # when forward-watch is selected; the two are never active together.
 #
 # MODEL SOURCE
@@ -25,7 +25,7 @@
 # CUSTOM PARSER
 # =============
 # Uses the same libnvdsinfer_custom_impl_Yolo.so as the COCO model — build it
-# once on the Jetson (see pgie_yolov8n.txt for the steps). The COCO ONNX is made
+# once on the Jetson (see pgie_yolo11n.txt for the steps). The COCO ONNX is made
 # parser-ready at build time by DeepStream-Yolo's export_yoloV8.py; the
 # forward-watch ONNX is made parser-ready by scripts/convert_to_deepstream.py
 # (both produce the identical [N,6] head this parser decodes).

@@ -17,7 +17,7 @@
 # Two stages:
 #   1. export  — pulls the public Ultralytics Jetson image (the SAME base the
 #                jetson Dockerfile uses, so it's already cached after a jetson
-#                build) and produces a deepstream-yolo-compatible YOLOv8n ONNX.
+#                build) and produces a deepstream-yolo-compatible YOLO11n ONNX.
 #                Using the marcoslucianops export script GUARANTEES the ONNX layout
 #                matches the custom nvinfer parser baked in stage 2 (the Ultralytics
 #                default export is NOT compatible with that parser).
@@ -50,27 +50,26 @@ FROM ${EXPORT_BASE} AS export
 # pip-install build deps and write the exported ONNX.
 USER root
 WORKDIR /export
-# Acquire the YOLOv8n weights deterministically. A clean checkout has NO
-# models/yolov8n.pt (weights are gitignored), so requiring it as a build input
+# Acquire the YOLO11n weights deterministically. A clean checkout has NO
+# models/yolo11n.pt (weights are gitignored), so requiring it as a build input
 # would make the image unbuildable from a fresh clone. Instead: use a hand-placed
 # offline copy if the operator left one in models/, else let Ultralytics (present
 # in the export base) fetch the official weights into the workdir. The build
 # already needs the network for the base images, so the online path adds nothing.
-# Pin the model artifact by content hash, not just the mutable upstream filename,
-# so a clean build can't silently bake in different yolov8n.pt bits (reproducibility
-# + provenance). This is the canonical Ultralytics YOLOv8n checkpoint hash. Override
-# when intentionally changing the model (--build-arg YOLOV8N_SHA256=<hash>), or set
-# it empty to skip the check.
-ARG YOLOV8N_SHA256=f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36
+# Pin the model artifact by content hash for reproducibility/provenance: pass
+# --build-arg YOLO11N_SHA256=<sha256 of yolo11n.pt> to enforce it. Left EMPTY by
+# default (check skipped) because the canonical hash is not vendored here — set it
+# once you have pinned the exact YOLO11n weights you intend to ship.
+ARG YOLO11N_SHA256=
 COPY models/ ./models/
-RUN if [ -f models/yolov8n.pt ]; then \
-        cp models/yolov8n.pt yolov8n.pt; \
+RUN if [ -f models/yolo11n.pt ]; then \
+        cp models/yolo11n.pt yolo11n.pt; \
     else \
-        python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt')"; \
+        python3 -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"; \
     fi \
-    && test -f yolov8n.pt \
-    && if [ -n "${YOLOV8N_SHA256}" ]; then \
-         echo "${YOLOV8N_SHA256}  yolov8n.pt" | sha256sum -c -; \
+    && test -f yolo11n.pt \
+    && if [ -n "${YOLO11N_SHA256}" ]; then \
+         echo "${YOLO11N_SHA256}  yolo11n.pt" | sha256sum -c -; \
        fi
 # onnx + onnxslim back the export script's --simplify; pull the same DeepStream-Yolo
 # repo stage 2 builds the parser from, so the export and the parser stay in lockstep.
@@ -78,12 +77,12 @@ RUN if [ -f models/yolov8n.pt ]; then \
 # routes through the dynamo exporter); onnx/onnxslim back the script's --simplify.
 RUN pip install --no-cache-dir onnx onnxslim onnxscript \
     && git clone --depth 1 https://github.com/marcoslucianops/DeepStream-Yolo /tmp/ds-yolo \
-    && cp /tmp/ds-yolo/utils/export_yoloV8.py . \
-    && python3 export_yoloV8.py -w yolov8n.pt -s 768 --opset 16 --dynamic --simplify \
-    # The script names the output after the weights (yolov8n.onnx). Normalise it.
-    && (test -f yolov8n.onnx && mv yolov8n.onnx yolov8n_ds.onnx \
-        || mv yolov8n.pt.onnx yolov8n_ds.onnx) \
-    && ls -l yolov8n_ds.onnx
+    && cp /tmp/ds-yolo/utils/export_yolo11.py . \
+    && python3 export_yolo11.py -w yolo11n.pt -s 768 --opset 16 --dynamic --simplify \
+    # The script names the output after the weights (yolo11n.onnx). Normalise it.
+    && (test -f yolo11n.onnx && mv yolo11n.onnx yolo11n_ds.onnx \
+        || mv yolo11n.pt.onnx yolo11n_ds.onnx) \
+    && ls -l yolo11n_ds.onnx
 
 # ── Stage 2: DeepStream runtime (base set by DS_BASE, declared at top) ─────────
 FROM ${DS_BASE} AS runtime
@@ -130,7 +129,7 @@ COPY config ./config
 # container goes permanently unhealthy after the start period.
 COPY scripts ./scripts
 # deepstream/ carries the host-compiled parser (libnvdsinfer_custom_impl_Yolo.so,
-# exporting NvDsInferParseYolo — see pgie_yolov8n.txt) plus the nvinfer/tracker
+# exporting NvDsInferParseYolo — see pgie_yolo11n.txt) plus the nvinfer/tracker
 # configs and labels. Rebuild the .so with scripts/build_yolo_parser.sh if the
 # DeepStream version changes.
 COPY deepstream ./deepstream
@@ -140,9 +139,9 @@ COPY deepstream ./deepstream
 # which shadows this baked copy — and the *.onnx is gitignored, so a fresh clone's
 # host deepstream/ has none. So ALSO stage a copy outside the mount; the entrypoint
 # below seeds it into the bind-mounted deepstream/ on first run. nvinfer then
-# builds the TRT engine next to it (persisted via the mount). See pgie_yolov8n.txt.
-COPY --from=export /export/yolov8n_ds.onnx ./deepstream/yolov8n_ds.onnx
-COPY --from=export /export/yolov8n_ds.onnx ./deepstream-default/yolov8n_ds.onnx
+# builds the TRT engine next to it (persisted via the mount). See pgie_yolo11n.txt.
+COPY --from=export /export/yolo11n_ds.onnx ./deepstream/yolo11n_ds.onnx
+COPY --from=export /export/yolo11n_ds.onnx ./deepstream-default/yolo11n_ds.onnx
 
 # Entrypoint: seed the default COCO ONNX into the (bind-mounted, possibly empty)
 # deepstream/ dir when it's absent, so `docker compose ... up --build` works from a
@@ -151,8 +150,8 @@ COPY --from=export /export/yolov8n_ds.onnx ./deepstream-default/yolov8n_ds.onnx
 RUN cat > /usr/local/bin/deepstream-entrypoint.sh <<'SH' && chmod +x /usr/local/bin/deepstream-entrypoint.sh
 #!/bin/sh
 set -eu
-seed=/opt/vision-service/deepstream-default/yolov8n_ds.onnx
-dest=/opt/vision-service/deepstream/yolov8n_ds.onnx
+seed=/opt/vision-service/deepstream-default/yolo11n_ds.onnx
+dest=/opt/vision-service/deepstream/yolo11n_ds.onnx
 if [ ! -f "$dest" ] && [ -f "$seed" ]; then
     if cp "$seed" "$dest" 2>/dev/null; then
         echo "deepstream-entrypoint: seeded default ONNX -> $dest"
@@ -165,7 +164,7 @@ exec "$@"
 SH
 
 # Only ONE detection model runs at a time (detector.model in deepstream.yaml).
-# The COCO model (yolov8n_ds.onnx, above) is the default. To run the alternative
+# The COCO model (yolo11n_ds.onnx, above) is the default. To run the alternative
 # forward-watch marine model instead, fetch its ONNX into deepstream/ BEFORE the
 # build so the `COPY deepstream` above bakes it in:
 #   python3 scripts/download_forward_watch.py

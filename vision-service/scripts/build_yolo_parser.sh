@@ -46,7 +46,7 @@ echo "Installed -> $DEST/libnvdsinfer_custom_impl_Yolo.so"
 nm -D "$DEST/libnvdsinfer_custom_impl_Yolo.so" \
     | grep -qE " T .*${EXPECTED_SYMBOL}$" || {
     echo "ERROR: expected parser symbol '${EXPECTED_SYMBOL}' not found in .so" >&2
-    echo "Check DS_YOLO_REF or update parse-bbox-func-name in pgie_yolov8n.txt" >&2
+    echo "Check DS_YOLO_REF or update parse-bbox-func-name in pgie_yolo11n.txt" >&2
     exit 1
 }
 echo "Parser symbol '${EXPECTED_SYMBOL}' verified."

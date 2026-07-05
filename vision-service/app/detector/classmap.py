@@ -31,7 +31,7 @@ MODEL_MARINE_SURVEILLANCE = "marine-surveillance"
 
 # Model name -> nvinfer config file (relative to the deepstream/ directory).
 MODEL_PGIE_CONFIG = {
-    MODEL_COCO: "pgie_yolov8n.txt",
+    MODEL_COCO: "pgie_yolo11n.txt",
     MODEL_FORWARD_WATCH: "pgie_forward_watch.txt",
     MODEL_MARINE_SURVEILLANCE: "pgie_marine_surveillance.txt",
 }

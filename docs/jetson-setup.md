@@ -140,13 +140,14 @@ together. Pick it with `detector.model` in `config/deepstream.yaml` (or the
 
 | `detector.model` | nvinfer config | classes |
 |---|---|---|
-| `coco` (default) | `deepstream/pgie_yolov8n.txt` | 80 COCO (person, vessel, buoy, …) |
+| `coco` (default) | `deepstream/pgie_yolo11n.txt` | 80 COCO (person, vessel, buoy, …) |
 | `forward-watch` | `deepstream/pgie_forward_watch.txt` | 6 marine (ship, boat, debris, buoy, kayak, log) |
 | `marine-surveillance` | `deepstream/pgie_marine_surveillance.txt` | 7 marine (boat, buoy, kayak, sailboat, speedboat, vessel, warship) |
 
-The two models share the same YOLOv8n architecture, 640×640 input, and the same
-deepstream-yolo custom parser — only the ONNX, label file, and
-`num-detected-classes` differ, so switching is purely a config change.
+All models use a deepstream-yolo-compatible YOLO ONNX and the SAME custom parser
+(YOLO11 shares YOLOv8's output layout) — only the ONNX weights, input size, label
+file, and `num-detected-classes` differ, so switching is purely a config change.
+(`coco` is YOLO11n at 768×768; the marine models are YOLOv8n/s at 640×640.)
 
 `coco` keeps person/man-overboard detection; `forward-watch` drops it but adds
 debris/kayak/log. The `forward-watch.onnx` is **not** vendored — fetch it before

@@ -50,13 +50,15 @@ Prerequisites
   cp /tmp/ds-yolo/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so \\
       vision-service/deepstream/
 
-  # Export raw YOLOv8n ONNX (no end-to-end NMS — deepstream-yolo requirement):
-  python -c "from ultralytics import YOLO; YOLO('models/yolov8n.pt').export(
-      format='onnx', simplify=True, opset=17, imgsz=640)"
-  # nvinfer auto-builds yolov8n_ds.engine on first run; or pre-build with trtexec:
-  # trtexec --onnx=models/yolov8n.onnx --fp16 --saveEngine=models/yolov8n_ds.engine \\
-  #         --minShapes=images:1x3x640x640 --optShapes=images:2x3x640x640 \\
-  #         --maxShapes=images:2x3x640x640
+  # Export raw YOLO11n ONNX (no end-to-end NMS — deepstream-yolo requirement),
+  # sized to match detector.imgsz:
+  cp /tmp/ds-yolo/utils/export_yolo11.py .
+  python3 export_yolo11.py -w models/yolo11n.pt -s 768 --opset 16 --dynamic --simplify
+  # nvinfer auto-builds the engine on first run; or pre-build with trtexec:
+  # trtexec --onnx=deepstream/yolo11n_ds.onnx --fp16 \\
+  #         --saveEngine=deepstream/yolo11n_ds.onnx_b2_gpu0_fp16.engine \\
+  #         --minShapes=images:1x3x768x768 --optShapes=images:2x3x768x768 \\
+  #         --maxShapes=images:2x3x768x768
 """
 
 from __future__ import annotations
