@@ -39,21 +39,23 @@ The first line of defence is the association tracker itself. For the
 Ultralytics backends the repo ships **marine-tuned presets** in
 `vision-service/config/trackers/`:
 
-- **`bytetrack_marine.yaml`** (default in `jetson` mode) — [ByteTrack][bytetrack]
-  with `track_buffer: 90` (~7.5 s of shadow life for a lost id, vs the stock
-  ~2.5 s), looser `match_thresh: 0.7` (pitch/roll shifts every box a little
-  between frames), and `new_track_thresh: 0.4` (a glint can't mint a
-  one-frame id). ByteTrack's two-pass BYTE association is itself an
-  anti-flicker device: weak detections (0.1–0.25) can't create tracks but can
-  *keep an existing one matched* through a confidence dip.
-- **`botsort_marine.yaml`** — same tuning on [BoT-SORT][botsort], adding
-  **camera-motion compensation** (`gmc_method: sparseOptFlow`): the
-  frame-to-frame global transform is estimated from the background and
-  subtracted before association, so the boat's own pitch/roll/yaw no longer
-  reads as every target jumping at once. Costs CPU; switch to it when a
-  seaway visibly breaks association. Native appearance re-id (`with_reid`)
-  is left off — it is extra GPU work and the waterline re-id below already
-  recovers identity.
+- **`bytetrack_marine.yaml`** — [ByteTrack][bytetrack] with `track_buffer: 90`
+  (~7.5 s of shadow life for a lost id, vs the stock ~2.5 s), looser
+  `match_thresh: 0.7` (pitch/roll shifts every box a little between frames),
+  and `new_track_thresh: 0.4` (a glint can't mint a one-frame id). ByteTrack's
+  two-pass BYTE association is itself an anti-flicker device: weak detections
+  (0.1–0.25) can't create tracks but can *keep an existing one matched*
+  through a confidence dip. Fall back to this preset if the Jetson CPU is
+  saturated or GMC misbehaves on a near-featureless sea (no flow anchors).
+- **`botsort_marine.yaml`** (default in `jetson` mode) — same tuning on
+  [BoT-SORT][botsort], adding **camera-motion compensation**
+  (`gmc_method: sparseOptFlow`): the frame-to-frame global transform is
+  estimated from the background and subtracted before association, so the
+  boat's own pitch/roll/yaw no longer reads as every target jumping at once —
+  the biggest cause of association breaks in a seaway. Costs some CPU per
+  frame (optical flow). Native appearance re-id (`with_reid`) is left off —
+  it is extra GPU work and the waterline re-id below already recovers
+  identity.
 
 The DeepStream backend (the production target) gets the equivalent — and
 more — from [NvDCF][nvdcf] in `vision-service/deepstream/nvdcf_config.yml`:
@@ -75,6 +77,12 @@ more — from [NvDCF][nvdcf] in `vision-service/deepstream/nvdcf_config.yml`:
   match before tentative ones, so a flickery newborn can't steal a confirmed
   vessel's detection; the size-similarity gate is relaxed (0.6 → 0.4) so a
   hull-only ↔ hull+mast extent flip doesn't break association at the source.
+- **REGULAR state estimator** (`stateEstimatorType: 2`, upgraded from
+  `SIMPLE`): a Kalman filter on location/size/velocity that actually honours
+  the configured noise covariances, so a vessel changing range is predicted
+  more smoothly. **Not yet validated on-box** — the noise vars were tuned for
+  `SIMPLE`; if a maneuvering target's box visibly lags, revert to
+  `stateEstimatorType: 1` or lower `measurementNoiseVar4Detector`.
 
 ## Layer 2 — waterline re-identification (`VelocityTracker.resolve`)
 
@@ -157,7 +165,7 @@ targets can't swap the last slot (and blink) on every confidence wobble.
 | (deepstream) same vessel gets a new id after every dropout | check `enableReAssoc: 1` is set and the config uses 6.x/7.x section names (a 5.x `DCF:` block is silently ignored) |
 | Same vessel alternates between two numbers | waterline re-id gates too tight: `reid_min_x_overlap`, `reid_buffer_frac_per_frame` |
 | A departed vessel's id lands on a newcomer | tighten `reid_max_width_ratio`, raise `reid_dir_min_speed_px`, lower `reid_max_gap_frames` |
-| Everything loses lock together in a seaway | switch to `config/trackers/botsort_marine.yaml` (camera-motion compensation) |
+| Everything loses lock together in a seaway | already on `botsort_marine.yaml` (GMC) by default in `jetson` mode; check `gmc_method` didn't get reverted, or a near-featureless sea is starving optical flow of anchors |
 | Boxes jitter / breathe | raise `stabilize_smooth_window`; check `stabilize_conf_weight` is on |
 | Phantom box lingers after a target leaves | lower `stabilize_max_coast_frames` / `stabilize_lock_coast_factor` |
 | Numbers churn upward in a busy scene | raise `new_track_thresh` in the tracker preset; check the confirm debounce |

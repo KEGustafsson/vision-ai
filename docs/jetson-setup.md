@@ -79,10 +79,10 @@ What the single build does for you:
 
 - **ONNX export** — the build's stage-1 `export` runs on the public Ultralytics
   Jetson base (the same base the jetson path uses, so it's already cached if you
-  built that image first; otherwise it's pulled fresh) and fetches the YOLOv8n
+  built that image first; otherwise it's pulled fresh) and fetches the YOLO11n
   weights itself. To build OFFLINE, drop the weights at
-  `vision-service/models/yolov8n.pt` first (`python3 scripts/download_models.py`)
-  and the build uses them as-is.
+  `vision-service/models/yolo11n.pt` first (`python3 scripts/download_models.py
+  --model yolo11n.pt`) and the build uses them as-is.
 - **Custom parser** — `deepstream/libnvdsinfer_custom_impl_Yolo.so` is committed
   and baked in, so no compile step is required. Rebuild it only when the
   DeepStream version changes: `vision-service/scripts/build_yolo_parser.sh` (needs
