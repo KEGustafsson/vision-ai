@@ -177,7 +177,7 @@ The most efficient backend — every stage runs on the GPU (see
 detection model is **YOLO11n** (COCO, 768×768) — a different model generation
 than the `jetson`/`torch-*` backends above, which run YOLOv8. Two marine-tuned
 alternatives (YOLOv8-based) are also selectable; see
-[Detection model selection](docs/jetson-setup.md#detection-model-selection).
+[Detection model selection](docs/jetson-deepstream.md#detection-model-selection).
 The image builds from a clean clone in one command (it exports the ONNX and
 bakes the committed parser itself; nvinfer builds the TensorRT engine on first
 start):
@@ -195,8 +195,9 @@ export VISION_JETSON_BASE="ultralytics/ultralytics@sha256:<digest>"
 docker compose -f docker-compose.deepstream.yml up -d --build
 ```
 
-See [Jetson setup & deployment](docs/jetson-setup.md) for prerequisites,
-calibration, model selection, and tuning.
+See [Jetson setup & deployment](docs/jetson-setup.md) for shared prerequisites
+and camera calibration, and [DeepStream GPU pipeline](docs/jetson-deepstream.md)
+for this backend's model selection and tuning.
 
 ## DeepStream architecture
 
@@ -228,7 +229,7 @@ calibration. A per-camera PTS guard in the probe drops `nvstreammux` frame repea
 so output never exceeds the camera's input rate.
 
 See [Architecture & data flow](docs/architecture.md#inference-backends) for how
-this fits the wider system and [Jetson setup & deployment](docs/jetson-setup.md)
+this fits the wider system and [DeepStream GPU pipeline](docs/jetson-deepstream.md)
 for the build, model selection, and tuning.
 
 ## Documentation
@@ -239,7 +240,8 @@ for the build, model selection, and tuning.
 - [SignalK `vision.*` paths](docs/signalk-paths.md)
 - [Geometry & calibration](docs/geometry.md)
 - [Tracking stability (id lock & anti-flicker)](docs/tracking-stability.md)
-- [Jetson setup & deployment](docs/jetson-setup.md)
+- [Jetson setup & deployment](docs/jetson-setup.md) (`jetson` backend)
+- [DeepStream GPU pipeline](docs/jetson-deepstream.md) (`deepstream` backend)
 - [Dev quickstart (end-to-end)](docs/dev-quickstart.md)
 - [Onboard verification runbook](docs/onboard-verification.md)
 

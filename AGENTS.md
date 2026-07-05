@@ -44,7 +44,10 @@ Essential docs to consult before changing the relevant area:
 - `docs/container-api.md` — the container's REST/WS/MJPEG endpoints
 - `docs/signalk-paths.md` — the `vision.*` and `notifications.*` paths produced
 - `docs/geometry.md` — monocular bearing/range model & calibration
-- `docs/jetson-setup.md` — `jetson` and `deepstream` GPU backends
+- `docs/jetson-setup.md` — `jetson` (Ultralytics/TensorRT) GPU backend, plus
+  prerequisites/calibration/autostart shared with `deepstream`
+- `docs/jetson-deepstream.md` — `deepstream` GPU backend: build, tuning, model
+  selection
 - `docs/dev-quickstart.md` — end-to-end mock run
 - `docs/onboard-verification.md` — on-water verification runbook
 

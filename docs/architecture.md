@@ -50,7 +50,7 @@ chosen by `VISION_MODE`/`detector.backend`; all of them emit the identical
   (`pipeline_deepstream.py`). Default detection model is **YOLO11n** (COCO,
   768×768) — a different model generation than the other backends above,
   which run YOLOv8; two YOLOv8-based marine alternatives are also selectable
-  (see [Detection model selection](jetson-setup.md#detection-model-selection)).
+  (see [Detection model selection](jetson-deepstream.md#detection-model-selection)).
   Frames stay in NVMM end to end:
 
   ![DeepStream GStreamer pipeline, fully GPU-resident in NVMM: rtspsrc → nvv4l2decoder → optional nvdewarper → nvstreammux (batches both cameras) → nvinfer (TensorRT) → nvtracker (NvDCF); then per camera after nvstreamdemux: nvvideoconvert (RGBA) → a pad probe that reads metadata only → nvstreamdemux → nvdsosd (GPU overlay) → nvjpegenc (I420 to JPEG) → appsink → LatestFrame. Detection metadata also feeds the bearing/range geometry into the DetectionEvent without copying any pixels.](images/deepstream-pipeline.svg)
