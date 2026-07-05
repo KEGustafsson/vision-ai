@@ -114,11 +114,17 @@ DataAssociator:
   minMatchingScore4TentativeIou: 0.5296
 
 StateEstimator:
-  # SIMPLE Kalman filter on location/size/velocity (stock perf values). The
-  # relatively high tracker measurement noise keeps the state trusting
-  # detector boxes over DCF localisation, which suits a strong detector at
-  # low frame rate.
-  stateEstimatorType: 1
+  # REGULAR Kalman filter on location/size/velocity. Upgraded from SIMPLE (1):
+  # REGULAR actually uses the process/measurement noise covariances defined
+  # below (SIMPLE only partially honours them), so it models size *velocity*
+  # too — a vessel changing range (and thus apparent size) is predicted more
+  # smoothly, which steadies both the box and the shadow-track projection used
+  # for motion re-association. The relatively high tracker measurement noise
+  # still keeps the state trusting detector boxes over DCF localisation.
+  # VALIDATE ON-BOX: the noise vars below were tuned for SIMPLE; if REGULAR
+  # over-smooths (box lags a maneuvering target) revert to 1 or lower
+  # measurementNoiseVar4Detector.
+  stateEstimatorType: 2
   processNoiseVar4Loc: 2.0
   processNoiseVar4Size: 1.0
   processNoiseVar4Vel: 0.1
@@ -131,14 +137,14 @@ VisualTracker:
   # (DeepStream 6.x/7.x reads this section — not the old "DCF:" one.)
   visualTrackerType: 1
   # Colour-names features discriminate hulls cheaply; HOG adds compute for
-  # little gain on water. Feature map level raised from the stock-perf 2 to 4:
-  # profiling showed the Orin Nano's GPU sits ~90% idle on this pipeline (RAM,
-  # not compute, is the constraint), so the extra visual-tracker resolution is
-  # nearly free and sharpens re-association between similar-looking hulls
-  # moored side by side.
+  # little gain on water. Feature map level raised from the stock-perf 2 to 5
+  # (the maximum; range is 1..5): profiling showed the Orin Nano's GPU sits
+  # ~90% idle on this pipeline (RAM, not compute, is the constraint), so the
+  # extra visual-tracker resolution is nearly free and sharpens re-association
+  # between similar-looking hulls moored side by side.
   useColorNames: 1
   useHog: 0
-  featureImgSizeLevel: 4
+  featureImgSizeLevel: 5
   # Where the correlation filter focuses inside the bbox. The stock -0.2
   # biases UP toward a pedestrian's upper body; on water the visually stable
   # signature is the hull around the centreline (masts are thin, waterline

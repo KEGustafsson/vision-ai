@@ -13,13 +13,15 @@ detector:
   model_engine: yolov8n.engine   # dynamic batch 1-2 engine (also kept as yolov8n_b2.engine); note the compose VISION_MODEL_ENGINE env overrides this
   confidence: 0.35
   imgsz: 640
-  # Marine-tuned ByteTrack association (repo-local preset): ~7.5 s track
-  # buffer keeps a lost id alive through swell/wake dropouts, looser
-  # match_thresh tolerates wave-induced box jumps, higher new_track_thresh
-  # stops glints minting one-frame ids. Swap to
-  # config/trackers/botsort_marine.yaml to add camera-motion compensation
-  # (sparse optical flow) when pitch/roll breaks association — costs CPU.
-  tracker: config/trackers/bytetrack_marine.yaml
+  # Marine-tuned BoT-SORT association (repo-local preset): same track buffer /
+  # match / new-track tuning as bytetrack_marine.yaml PLUS camera-motion
+  # compensation (gmc_method: sparseOptFlow) — it subtracts the boat's
+  # pitch/roll/yaw between frames so ego-motion no longer reads as every target
+  # jumping at once, the biggest cause of association breaks in a seaway. Costs
+  # some CPU per frame (optical flow). Revert to
+  # config/trackers/bytetrack_marine.yaml if the Jetson CPU is saturated or GMC
+  # misbehaves on a near-featureless sea (no flow anchors).
+  tracker: config/trackers/botsort_marine.yaml
   # Anti-flicker stabilizer, tuned on a 60s capture of live aft/forward tracks
   # (offline replay of the real stabilizer over recorded detections). max_coast
   # is frames of persistence at ~12fps (20 ~= 1.7s): higher = fewer flicker gaps
