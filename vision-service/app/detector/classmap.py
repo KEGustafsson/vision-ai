@@ -4,9 +4,9 @@ person-in-water (man-overboard candidate) rule.
 Exactly ONE detection model is active at a time (selected via
 ``detector.model``). Supported models:
 
-  ``"coco"`` — **COCO YOLOv8n** (80 classes, the default)
-    COCO ids relevant to the marine domain: 0=person, 8=boat.  Class id 80
-    is an extension we reserve for "buoy".
+  ``"coco"`` — **COCO** (80 classes, the default); YOLOv8n on torch/tensorrt,
+    YOLO11n on DeepStream. COCO ids relevant to the marine domain: 0=person,
+    8=boat.  Class id 80 is an extension we reserve for "buoy".
 
   ``"forward-watch"`` — **forward-watch** (6 marine-specific classes)
     0=ship, 1=boat, 2=debris, 3=buoy, 4=kayak, 5=log.

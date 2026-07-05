@@ -43,7 +43,8 @@ Prerequisites
   sudo apt-get install deepstream-7.1
   pip install /opt/nvidia/deepstream/deepstream/lib/pyds-*.whl
 
-  # Build custom YOLOv8 nvinfer parser (C, one-time on Jetson):
+  # Build custom deepstream-yolo nvinfer parser (C, one-time on Jetson; shared
+  # by YOLOv8- and YOLO11-format output):
   git clone https://github.com/marcoslucianops/DeepStream-Yolo /tmp/ds-yolo
   CUDA_VER=$(nvcc --version | grep -oP 'V\\K[0-9]+\\.[0-9]+') \\
       make -C /tmp/ds-yolo/nvdsinfer_custom_impl_Yolo
@@ -769,8 +770,10 @@ class DeepStreamPipeline:
             src.connect("pad-added", self._on_src_pad_added, depay)
 
         # nvinfer: TensorRT inference. Reads the batched NVMM buffer directly —
-        # no host-side copy. Uses custom deepstream-yolo parser for YOLOv8 output.
-        # The config (and thus the model) is selected by detector.model above.
+        # no host-side copy. Uses custom deepstream-yolo parser for YOLOv8-format
+        # output (YOLO11 shares the same layout, so the SAME .so parses both —
+        # see config/deepstream.yaml). The default `coco` model is YOLO11n; the
+        # config (and thus the model) is selected by detector.model above.
         pgie = make("nvinfer", "pgie",
                     config_file_path=pgie_cfg,
                     batch_size=n)

@@ -6,7 +6,9 @@
 #
 # Unlike the TensorRT image, the DeepStream pipeline does NOT need torch/ultralytics
 # at runtime — nvinfer does inference. Those are only used in the build's export
-# stage to produce the YOLOv8n ONNX. So this list is just the web stack + numpy.
+# stage to produce the YOLO11n ONNX (the default `coco` model; the YOLOv8-based
+# marine alternatives are converted from a pre-exported ONNX, not built here). So
+# this list is just the web stack + numpy.
 fastapi>=0.110,<0.140
 starlette>=0.46,<1.4   # cap explicitly: FastAPI imposes no upper bound (see constraints.txt)
 uvicorn[standard]>=0.29,<0.50

@@ -1,7 +1,7 @@
 # signalk-vision-ai
 
 SignalK server plugin for the [Marine Vision-AI](../README.md) system. Consumes
-detection events from the YOLOv8 vision container, enriches them with own-ship
+detection events from the YOLO-based vision container, enriches them with own-ship
 navigation, fuses with AIS, computes CPA/TCPA, raises notifications, publishes
 the `vision.*` tree, and serves a captain webapp.
 
