@@ -1,6 +1,6 @@
 # Marine Vision-AI 🛥️📡
 
-A **"visual radar"** for boats: two cameras (forward + aft) feeding a YOLOv8
+A **"visual radar"** for boats: two cameras (forward + aft) feeding a YOLO
 detector on an **NVIDIA Jetson Orin Nano Super**, turned into georeferenced,
 AIS-fused, navigation-aware situational awareness inside **[SignalK](https://signalk.org)**.
 
@@ -56,20 +56,21 @@ drift.
 
 | Component | Path | Stack |
 |-----------|------|-------|
-| Vision service | [`vision-service/`](vision-service/) | Python, FastAPI, Ultralytics YOLOv8, OpenCV, TensorRT or DeepStream (Jetson) |
+| Vision service | [`vision-service/`](vision-service/) | Python, FastAPI, OpenCV, Ultralytics YOLOv8 (torch/TensorRT) or YOLO11n (DeepStream) |
 | SignalK plugin | [`signalk-plugin/`](signalk-plugin/) | TypeScript, ws, ajv |
 
 ### From pixels to targets
 
 Every detection runs the same pipeline: the camera frame is decoded and a
-YOLOv8 + ByteTrack pass yields a tracked bounding box; the container turns that
-box's **pixel column** into a relative **bearing** and its **waterline row**
-into a **range** (monocular geometry — see [Geometry & calibration](docs/geometry.md));
-the plugin then fuses in the boat's own heading and position to georeference the
-target, correlates it against AIS, and raises any MOB / collision / dark-target
-alerts.
+YOLO detector + tracker pass yields a tracked bounding box (model and tracker
+depend on the backend — see [Deployment modes](#deployment-modes) below);
+the container turns that box's **pixel column** into a relative **bearing** and
+its **waterline row** into a **range** (monocular geometry — see
+[Geometry & calibration](docs/geometry.md)); the plugin then fuses in the
+boat's own heading and position to georeference the target, correlates it
+against AIS, and raises any MOB / collision / dark-target alerts.
 
-![The full detection process: the container decodes a camera frame, detects and tracks objects with YOLOv8 + ByteTrack, computes a relative bearing from the pixel column and a range from the horizon depression or known size, then filters and emits a DetectionEvent; the plugin enriches it to a true bearing and lat/lon, fuses it with AIS, estimates CPA/TCPA, raises notifications, and publishes synthetic AIS vessels and vision.* paths to SignalK.](docs/images/detection-process.svg)
+![The full detection process: the container decodes a camera frame, detects and tracks objects with a YOLO detector and tracker, computes a relative bearing from the pixel column and a range from the horizon depression or known size, then filters and emits a DetectionEvent; the plugin enriches it to a true bearing and lat/lon, fuses it with AIS, estimates CPA/TCPA, raises notifications, and publishes synthetic AIS vessels and vision.* paths to SignalK.](docs/images/detection-process.svg)
 
 ### Bearing & range from one camera
 
@@ -154,7 +155,9 @@ docker compose -f docker-compose.yml -f docker-compose.mock.yml up
 
 ### `jetson` — Ultralytics YOLOv8 on TensorRT
 
-Decode in a GStreamer pipeline, inference + ByteTrack in Python. Optional
+Decode in a GStreamer pipeline, inference + tracking (BoT-SORT with
+camera-motion compensation by default; see
+[Tracking stability](docs/tracking-stability.md)) in Python. Optional
 `server.hw_jpeg` offloads the MJPEG encode to the Jetson NVJPG block
 (`nvjpegenc`) instead of CPU `cv2.imencode`. TensorRT engines are
 device-specific, so build the engine **on the Jetson** once before running:
@@ -170,9 +173,14 @@ docker compose -f docker-compose.jetson.yml up -d
 ### `deepstream` — fully GPU-resident NVIDIA DeepStream
 
 The most efficient backend — every stage runs on the GPU (see
-[DeepStream architecture](#deepstream-architecture) for the design). The image
-builds from a clean clone in one command (it exports the ONNX and bakes the
-committed parser itself; nvinfer builds the TensorRT engine on first start):
+[DeepStream architecture](#deepstream-architecture) for the design). Default
+detection model is **YOLO11n** (COCO, 768×768) — a different model generation
+than the `jetson`/`torch-*` backends above, which run YOLOv8. Two marine-tuned
+alternatives (YOLOv8-based) are also selectable; see
+[Detection model selection](docs/jetson-setup.md#detection-model-selection).
+The image builds from a clean clone in one command (it exports the ONNX and
+bakes the committed parser itself; nvinfer builds the TensorRT engine on first
+start):
 
 ```bash
 docker compose -f docker-compose.deepstream.yml up -d --build

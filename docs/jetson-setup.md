@@ -170,7 +170,7 @@ python3 scripts/download_forward_watch.py     # downloads AND converts → deeps
 > `pip install onnx onnxruntime`). To convert an ONNX you already have:
 > `python3 scripts/convert_to_deepstream.py forward-watch.onnx --inplace`. After
 > replacing the ONNX, delete any cached `*_gpu0_fp16.engine` so nvinfer rebuilds
-> it. COCO needs no conversion — its build-time `export_yoloV8.py` already emits
+> it. COCO needs no conversion — its build-time `export_yolo11.py` already emits
 > the parser layout.
 
 ### marine-surveillance (train on-box)
