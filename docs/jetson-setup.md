@@ -128,9 +128,14 @@ allocation can OOM (`failed to activate bufferpool`); restart them after.
 - **Non-root:** the runtime image runs as a non-root user (UID 10001, in the
   `video` group for GPU access). nvinfer writes the TRT engine into the
   bind-mounted `deepstream/` and `models/`, so those host dirs must be writable by
-  UID 10001 (as the jetson image already requires for `models/`). If your nvidia
-  container runtime denies GPU access to non-root, set `user: root` on the
-  deepstream compose service as a documented exception.
+  UID 10001 (as the jetson image already requires for `models/`). Run
+  `vision-service/scripts/fix_host_permissions.sh` once per host to grant this via
+  ACL (`setfacl`) without changing ownership or opening the dirs to everyone. A
+  container stuck restart-looping with `WARN could not write .../yolo11n_ds.onnx`
+  or `ERROR: Cannot access ONNX file` in its logs means this hasn't been run (or
+  the dirs were recreated since). If your nvidia container runtime denies GPU
+  access to non-root, set `user: root` on the deepstream compose service as a
+  documented exception instead.
 
 ## Detection model selection
 
