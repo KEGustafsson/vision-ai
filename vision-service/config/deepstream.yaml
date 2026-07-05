@@ -80,7 +80,7 @@ detector:
   contained_frac: 0.8
   # Which detection model to run. Exactly ONE model is active at a time — they
   # are never run together. Switch this value and restart to change models:
-  #   coco                -> COCO YOLOv8n, 80 classes (person/vessel/buoy/...),
+  #   coco                -> COCO YOLO11n, 80 classes (person/vessel/buoy/...),
   #                          uses deepstream/pgie_yolo11n.txt + yolo11n_ds.onnx
   #   forward-watch       -> forward-watch marine model, 6 classes
   #                          (ship/boat/debris/buoy/kayak/log),

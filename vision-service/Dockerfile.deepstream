@@ -75,8 +75,17 @@ RUN if [ -f models/yolo11n.pt ]; then \
 # repo stage 2 builds the parser from, so the export and the parser stay in lockstep.
 # onnxscript is required by this image's torch.onnx.export path (newer torch
 # routes through the dynamo exporter); onnx/onnxslim back the script's --simplify.
+# DS_YOLO_REF pins the DeepStream-Yolo revision so the exported ONNX layout
+# stays in lockstep with the parser .so, which scripts/build_yolo_parser.sh
+# builds from the SAME pinned commit (its DS_YOLO_REF default). Keep the two in
+# sync when upgrading — an unpinned export could drift the ONNX head away from
+# the committed parser and silently zero out detections.
+ARG DS_YOLO_REF=68769f3
 RUN pip install --no-cache-dir onnx onnxslim onnxscript \
-    && git clone --depth 1 https://github.com/marcoslucianops/DeepStream-Yolo /tmp/ds-yolo \
+    # Full clone (not --depth 1): a shallow fetch cannot resolve a short SHA
+    # like 68769f3 on GitHub. A failed checkout aborts the build (&&-chain).
+    && git clone https://github.com/marcoslucianops/DeepStream-Yolo /tmp/ds-yolo \
+    && git -C /tmp/ds-yolo checkout --quiet "${DS_YOLO_REF}" \
     && cp /tmp/ds-yolo/utils/export_yolo11.py . \
     && python3 export_yolo11.py -w yolo11n.pt -s 768 --opset 16 --dynamic --simplify \
     # The script names the output after the weights (yolo11n.onnx). Normalise it.
