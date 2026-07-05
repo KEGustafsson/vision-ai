@@ -71,7 +71,7 @@ curl -s $NANO/health | jq
 **PASS:** `status:"ok"`, `mode:"jetson"`, `backend:"tensorrt"` (NOT `mock`),
 both cameras listed, `camera_errors:{}`, an `active_camera`.
 **FAIL → backend mock/torch:** engine not found/loaded → check
-`models/yolov8n.engine` and `VISION_MODEL_ENGINE`; rebuild with
+`models/yolo11n.engine` and `VISION_MODEL_ENGINE`; rebuild with
 `scripts/export_engine.py` on the Jetson.
 **FAIL → camera_errors non-empty:** go to 2.2 debug.
 
@@ -96,7 +96,7 @@ curl -s "$NANO/events/recent?n=5" | jq '.[] | {cam:.camera, seq:.frame_seq, back
 timeout 20 tegrastats --interval 1000 | tee $OUT/tegrastats.log
 ```
 **PASS:** `frame_seq` advancing for both cameras; `latency_ms` consistent with a
-usable FPS (YOLOv8n target ≈ 15–20 FPS / camera; with two cameras the context
+usable FPS (YOLO11n target ≈ 15–20 FPS / camera; with two cameras the context
 loop prioritises one); no thermal throttling in `tegrastats` (watch the temps
 and the `... GR3D_FREQ` load). Record measured FPS and peak temp.
 
@@ -279,7 +279,7 @@ timeout 600 tegrastats --interval 2000 | tee $OUT/soak-tegrastats.log   # 10 min
 | container `(unhealthy)` in `docker ps` | `curl $NANO/health` | maps to `status:"degraded"`/unreachable — same as the two rows above |
 | `bearingTrue`/`position` null | own-ship heading/position | fix nav source; see 4.1 |
 | range mostly null / wild | `horizon_y`, `calibration_status` | calibrate (Phase 7) |
-| low FPS / hot | `nvpmodel`, both cameras full-rate | set MAXN+`jetson_clocks`; rely on context-camera prioritisation; prefer v8n |
+| low FPS / hot | `nvpmodel`, both cameras full-rate | set MAXN+`jetson_clocks`; rely on context-camera prioritisation; prefer yolo11n |
 | RTSP creds visible in `/config` | should be redacted | regression — check `rest.get_config` |
 
 ---

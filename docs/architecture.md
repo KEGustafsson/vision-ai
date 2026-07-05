@@ -42,14 +42,15 @@ chosen by `VISION_MODE`/`detector.backend`; all of them emit the identical
 `DetectionEvent`, so the plugin is backend-agnostic:
 
 - **`mock`** — synthetic frames + deterministic detector (laptop dev/demo).
-- **`torch-cpu` / `torch-cuda`** — Ultralytics YOLOv8 in PyTorch.
-- **`jetson` (TensorRT)** — YOLOv8 `.engine` via Ultralytics; GStreamer HW decode,
+- **`torch-cpu` / `torch-cuda`** — Ultralytics YOLO11 in PyTorch.
+- **`jetson` (TensorRT)** — YOLO11 `.engine` via Ultralytics; GStreamer HW decode,
   inference + tracking (BoT-SORT with camera-motion compensation by default —
   see [Tracking stability](tracking-stability.md)) in Python.
 - **`deepstream`** — a fully GPU-resident NVIDIA DeepStream pipeline
   (`pipeline_deepstream.py`). Default detection model is **YOLO11n** (COCO,
-  768×768) — a different model generation than the other backends above,
-  which run YOLOv8; two YOLOv8-based marine alternatives are also selectable
+  768×768) — the same model generation as the other backends above (they run
+  it at 640×640 instead); two YOLOv8-based marine alternatives are also
+  selectable
   (see [Detection model selection](jetson-deepstream.md#detection-model-selection)).
   Frames stay in NVMM end to end:
 

@@ -1,8 +1,8 @@
-"""Export a YOLOv8 .pt model to a TensorRT .engine (run ON the Jetson).
+"""Export a YOLO11 .pt model to a TensorRT .engine (run ON the Jetson).
 
-    python scripts/export_engine.py --weights models/yolov8n.pt --imgsz 640
+    python scripts/export_engine.py --weights models/yolo11n.pt --imgsz 640
 
-Produces models/yolov8n.engine (FP16). INT8 needs a calibration dataset; see
+Produces models/yolo11n.engine (FP16). INT8 needs a calibration dataset; see
 docs/jetson-setup.md.
 """
 
@@ -13,7 +13,7 @@ import argparse
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--weights", default="models/yolov8n.pt")
+    ap.add_argument("--weights", default="models/yolo11n.pt")
     ap.add_argument("--imgsz", type=int, default=640)
     # FP16 is the default on Jetson; pass --no-half to export an FP32 engine.
     ap.add_argument("--no-half", dest="half", action="store_false", default=True,

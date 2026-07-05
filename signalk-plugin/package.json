@@ -1,7 +1,7 @@
 {
   "name": "signalk-vision-ai",
   "version": "1.0.0",
-  "description": "Marine Vision-AI: YOLOv8 visual radar, AIS fusion, MOB & collision detection for SignalK",
+  "description": "Marine Vision-AI: YOLO visual radar, AIS fusion, MOB & collision detection for SignalK",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",

@@ -16,8 +16,8 @@ cameras:
 
 detector:
   backend: mock
-  model_pt: yolov8n.pt
-  model_engine: yolov8n.engine
+  model_pt: yolo11n.pt
+  model_engine: yolo11n.engine
   confidence: 0.35
   imgsz: 640
   max_det: 20

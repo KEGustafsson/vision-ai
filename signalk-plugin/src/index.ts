@@ -1,6 +1,6 @@
 // Marine Vision-AI SignalK plugin entrypoint.
 //
-// Consumes detection events from the YOLOv8 vision container, enriches them
+// Consumes detection events from the YOLO vision container, enriches them
 // with own-ship navigation, fuses with AIS, computes CPA/TCPA, raises
 // notifications, and publishes the vision.* tree. Also serves a captain webapp
 // and proxies the annotated video stream (see router.ts).
@@ -395,7 +395,7 @@ export = function (app: ServerApp): Plugin {
     id: pluginId,
     name: 'Marine Vision-AI',
     description:
-      'YOLOv8 visual radar: georeferenced targets, AIS fusion / dark-target ' +
+      'YOLO visual radar: georeferenced targets, AIS fusion / dark-target ' +
       'alerts, man-overboard and collision (CPA/TCPA) detection.',
     schema,
     uiSchema,

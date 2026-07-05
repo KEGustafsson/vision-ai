@@ -25,7 +25,7 @@ services:
       VISION_MODE: jetson
       VISION_CAMERA_FORWARD_URL: ${VISION_CAMERA_FORWARD_URL}
       VISION_CAMERA_AFT_URL: ${VISION_CAMERA_AFT_URL}
-      VISION_MODEL_ENGINE: yolov8n.engine
+      VISION_MODEL_ENGINE: yolo11n.engine
     volumes:
       - ./vision-service/models:/opt/vision-service/models
       # Site calibration (horizon_y, height_m, hfov, bearing offsets) lives in
