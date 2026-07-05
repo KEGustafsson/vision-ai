@@ -235,7 +235,8 @@ class DetectorConfig(BaseModel):
     # person, so decoding with the wrong table mislabels every detection) and,
     # on DeepStream, also the nvinfer config. On torch/tensorrt backends this
     # must match the weights loaded via model_pt/model_engine:
-    #   "coco"                -> COCO YOLOv8n, 80 classes (person/vessel/buoy/...)
+    #   "coco"                -> COCO, 80 classes (person/vessel/buoy/...); YOLOv8n
+    #                            on torch/tensorrt, YOLO11n on DeepStream
     #   "forward-watch"       -> forward-watch marine model, 6 classes
     #                            (ship/boat/debris/buoy/kayak/log)
     #   "marine-surveillance" -> Roboflow Marine Surveillance YOLOv8s, 7 classes

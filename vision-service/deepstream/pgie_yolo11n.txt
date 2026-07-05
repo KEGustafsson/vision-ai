@@ -1,21 +1,18 @@
-# nvinfer primary GIE config for YOLOv8n (DeepStream 7.x / JetPack 6)
+# nvinfer primary GIE config for YOLO11n (DeepStream 7.x / JetPack 6)
 #
 # ENGINE FORMAT REQUIREMENT
 # =========================
-# This config expects a YOLOv8n ONNX engine WITHOUT end-to-end NMS.
-# The Ultralytics default export (export_engine.py) bakes NMS into the engine,
-# which is incompatible with the deepstream-yolo custom parser below.
-#
-# To export the correct engine for DeepStream:
-#   python -c "
-#   from ultralytics import YOLO
-#   YOLO('models/yolov8n.pt').export(
-#       format='onnx', simplify=True, opset=17, imgsz=640)
-#   "
-#   # Then build TRT engine from the ONNX (DeepStream does this on first run
-#   # if model-engine-file does not exist, using the engine-create-func):
-#   cp models/yolov8n.onnx deepstream/yolov8n_ds.onnx
-#   # OR use trtexec manually and set model-engine-file accordingly.
+# This config expects a YOLO11n ONNX WITHOUT end-to-end NMS, exported with the
+# marcoslucianops DeepStream-Yolo export script (NOT the Ultralytics default
+# export, which bakes NMS in and is incompatible with the custom parser below).
+# Dockerfile.deepstream does this automatically; to reproduce by hand:
+#   git clone https://github.com/marcoslucianops/DeepStream-Yolo /tmp/ds-yolo
+#   cp /tmp/ds-yolo/utils/export_yolo11.py .
+#   python3 export_yolo11.py -w yolo11n.pt -s 768 --opset 16 --dynamic --simplify
+#   mv yolo11n.onnx deepstream/yolo11n_ds.onnx
+#   # nvinfer then builds the TRT engine from the ONNX on first run (if
+#   # model-engine-file does not exist), or use trtexec and set it accordingly.
+#   # -s 768 MUST match detector.imgsz in deepstream.yaml (drives tracker_width).
 #
 # CUSTOM PARSER (deepstream-yolo)
 # ================================
@@ -27,9 +24,11 @@
 #   cp nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so \
 #       /path/to/vision-ai/vision-service/deepstream/
 
-# NOTE: the keys below mirror the official deepstream-yolo YOLOv8 sample
-# (config_infer_primary_yoloV8.txt) so they stay in lockstep with the parser
+# NOTE: the keys below mirror the official deepstream-yolo YOLO11 sample
+# (config_infer_primary_yolo11.txt) so they stay in lockstep with the parser
 # (.so) and the ONNX that Dockerfile.deepstream builds from the SAME repo.
+# YOLO11 shares YOLOv8's output layout, so the SAME NvDsInferParseYolo parser
+# (.so) and COCO labels apply — only the ONNX weights change.
 [property]
 gpu-id=0
 
@@ -42,11 +41,11 @@ net-scale-factor=0.0039215697906911373
 # ONNX (baked in this dir) → nvinfer auto-builds the TRT engine on first run and
 # writes it to ../models (bind-mounted, so the engine persists across recreates).
 # Both paths are relative to THIS config file's directory.
-onnx-file=yolov8n_ds.onnx
+onnx-file=yolo11n_ds.onnx
 # Prebuilt engine baked into this dir (deepstream-yolo names it <onnx>_b<N>_gpu0_fp16
 # when nvinfer builds from the ONNX). Deserialised on startup — no ~7.5-min rebuild.
 # Delete it (and rebuild the image) to force a fresh build, e.g. after a TRT/HW change.
-model-engine-file=yolov8n_ds.onnx_b2_gpu0_fp16.engine
+model-engine-file=yolo11n_ds.onnx_b2_gpu0_fp16.engine
 
 labelfile-path=labels_coco.txt
 

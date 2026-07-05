@@ -21,7 +21,7 @@
   <g>
     <rect x="208" y="112" width="150" height="100" rx="8" fill="#dbeafe" stroke="#2563eb"/>
     <text x="283" y="148" text-anchor="middle" font-size="13" font-weight="600" fill="#1e3a8a">Detect + track</text>
-    <text x="283" y="168" text-anchor="middle" font-size="11.5" fill="#1e40af">YOLOv8 + ByteTrack</text>
+    <text x="283" y="168" text-anchor="middle" font-size="11.5" fill="#1e40af">YOLO + tracker</text>
     <text x="283" y="185" text-anchor="middle" font-size="11.5" fill="#1e40af">&#8594; bbox, track_id</text>
   </g>
   <g>

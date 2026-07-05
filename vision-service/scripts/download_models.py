@@ -1,15 +1,17 @@
-"""Download YOLOv8 weights to ``vision-service/models/<model>`` deterministically.
+"""Download Ultralytics weights to ``vision-service/models/<model>`` deterministically.
 
 Ultralytics auto-downloads on first use, but it writes into its own private cache
 (or the current working directory), NOT the path the rest of the system expects.
-The DeepStream image build (``COPY models/yolov8n.pt`` in the export stage), the
-TensorRT engine export (``export_engine.py --weights models/yolov8n.pt``) and the
-docs all key off ``models/yolov8n.pt`` — so this writes the weights to exactly
-that path rather than leaving them in a cache the next step can't find.
+The DeepStream image build's export stage looks for ``models/yolo11n.pt``, the
+TensorRT engine export (``export_engine.py --weights models/yolov8n.pt``) looks
+for ``models/yolov8n.pt``, and the docs key off both — so this writes the weights
+to exactly the path the caller asks for rather than leaving them in a cache the
+next step can't find.
 
 Usage::
 
-    python3 scripts/download_models.py                 # -> models/yolov8n.pt
+    python3 scripts/download_models.py                 # -> models/yolov8n.pt (jetson/marine backend)
+    python3 scripts/download_models.py --model yolo11n.pt   # -> models/yolo11n.pt (deepstream backend)
     python3 scripts/download_models.py --model yolov8s.pt
     python3 scripts/download_models.py --model /path/to/local.pt   # copies it in
 """
@@ -26,7 +28,8 @@ MODELS = Path(__file__).resolve().parent.parent / "models"
 
 # Known-good content hashes for pinned model artifacts, so the offline/download
 # flow enforces the same provenance the DeepStream image build does
-# (Dockerfile.deepstream ARG YOLOV8N_SHA256). Keep these in sync.
+# (Dockerfile.deepstream ARG YOLO11N_SHA256, left empty/unpinned by default).
+# Keep these in sync.
 KNOWN_SHA256 = {
     "yolov8n.pt": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
 }
@@ -50,8 +53,9 @@ def _verify(dest: Path, skip: bool) -> None:
         raise SystemExit(
             f"{dest.name} sha256 mismatch: expected {expected}, got {actual}. "
             f"The upstream artifact changed (or the file is corrupt). If this is an "
-            f"intentional model update, update KNOWN_SHA256 and "
-            f"Dockerfile.deepstream's YOLOV8N_SHA256, or pass --no-verify."
+            f"intentional model update, update KNOWN_SHA256 and the matching "
+            f"pinned SHA256 build-arg in whichever Dockerfile consumes it, or "
+            f"pass --no-verify."
         )
     print(f"verified {dest.name} sha256 {actual}")
 

@@ -12,7 +12,7 @@ vertical position relative to the horizon). Those two numbers are everything the
 plugin needs to place the object on the chart once it adds the boat's own heading
 and position.
 
-![Full process from pixels to georeferenced targets: the container decodes a camera frame, detects and tracks with YOLOv8 + ByteTrack to get a bounding box and track id, derives a relative bearing from the pixel column and a range from the horizon depression or known size with a confidence, applies operator filters, and emits a DetectionEvent. The plugin enriches it to a true bearing and lat/lon, fuses with AIS, computes CPA/TCPA, raises MOB / collision / dark-target notifications, and publishes synthetic AIS vessels and vision.* paths.](images/detection-process.svg)
+![Full process from pixels to georeferenced targets: the container decodes a camera frame, detects and tracks with a YOLO detector and tracker to get a bounding box and track id, derives a relative bearing from the pixel column and a range from the horizon depression or known size with a confidence, applies operator filters, and emits a DetectionEvent. The plugin enriches it to a true bearing and lat/lon, fuses with AIS, computes CPA/TCPA, raises MOB / collision / dark-target notifications, and publishes synthetic AIS vessels and vision.* paths.](images/detection-process.svg)
 
 The two measurements below — bearing and range — are the geometry container's
 entire job. Everything downstream is navigation math done by the plugin.

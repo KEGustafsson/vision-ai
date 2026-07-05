@@ -13,7 +13,7 @@
   <!-- vision service -->
   <rect x="270" y="90" width="240" height="120" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
   <text x="390" y="120" text-anchor="middle" font-size="15" font-weight="700" fill="#1e3a8a">vision-service (Python)</text>
-  <text x="390" y="146" text-anchor="middle" font-size="12.5" fill="#1e40af">YOLOv8 + ByteTrack</text>
+  <text x="390" y="146" text-anchor="middle" font-size="12.5" fill="#1e40af">YOLO detector + tracker</text>
   <text x="390" y="166" text-anchor="middle" font-size="12.5" fill="#1e40af">+ monocular geometry</text>
   <text x="390" y="186" text-anchor="middle" font-size="12.5" fill="#1e40af">(bearing / range)</text>
 

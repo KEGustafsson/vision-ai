@@ -34,7 +34,7 @@ keeps the two sides from drifting. Do not edit the generated JSON by hand.
 
 | Component | Path | Stack |
 |-----------|------|-------|
-| Vision service | `vision-service/` | Python 3.11, FastAPI, Ultralytics YOLOv8, OpenCV, TensorRT / DeepStream |
+| Vision service | `vision-service/` | Python 3.11, FastAPI, OpenCV, YOLO11n (DeepStream, production) or Ultralytics YOLOv8 (torch/TensorRT) |
 | SignalK plugin | `signalk-plugin/` | TypeScript, `ws`, `ajv` |
 
 Essential docs to consult before changing the relevant area:
@@ -44,7 +44,10 @@ Essential docs to consult before changing the relevant area:
 - `docs/container-api.md` — the container's REST/WS/MJPEG endpoints
 - `docs/signalk-paths.md` — the `vision.*` and `notifications.*` paths produced
 - `docs/geometry.md` — monocular bearing/range model & calibration
-- `docs/jetson-setup.md` — `jetson` and `deepstream` GPU backends
+- `docs/jetson-setup.md` — `jetson` (Ultralytics/TensorRT) GPU backend, plus
+  prerequisites/calibration/autostart shared with `deepstream`
+- `docs/jetson-deepstream.md` — `deepstream` GPU backend: build, tuning, model
+  selection
 - `docs/dev-quickstart.md` — end-to-end mock run
 - `docs/onboard-verification.md` — on-water verification runbook
 

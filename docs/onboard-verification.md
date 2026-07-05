@@ -20,7 +20,8 @@
   `VISION_CAMERA_AFT_URL` or `config/jetson.yaml`).
 - Whether a **TensorRT `.engine`** has been built, and whether a **maritime
   model** is in use (stock COCO only detects `person`/`boat`; `buoy` and robust
-  person-in-water need a marine-trained model — see `docs/jetson-setup.md`).
+  person-in-water need a marine-trained model — see
+  `docs/jetson-deepstream.md#detection-model-selection`).
 - Calibration values if known: camera **height above waterline (m)**, **HFOV
   (deg)**, mounting **yaw offset**, and **horizon row (px)** — used in Phase 7.
 
@@ -274,7 +275,7 @@ timeout 600 tegrastats --interval 2000 | tee $OUT/soak-tegrastats.log   # 10 min
 | `camera_errors` set | RTSP URL, GStreamer | verify URL; test `MODE=cpu`; check L4T multimedia/`nvv4l2decoder` |
 | `vision.system.*` absent in SignalK | plugin `containerUrl`, reachability | fix URL; confirm WS connects |
 | `notifications.vision.containerDown` | container reachable on `containerUrl`? | container crashed/stopped or wrong URL — `docker ps` (look for non-`(healthy)`), restart it |
-| `notifications.vision.containerDegraded` | message detail (camera vs pipeline) | camera stall → 2.2; repeated `pipeline restarted Nx` → see `jetson-setup.md` |
+| `notifications.vision.containerDegraded` | message detail (camera vs pipeline) | camera stall → 2.2; repeated `pipeline restarted Nx` → see `jetson-deepstream.md` (deepstream backend's auto-recovery) |
 | container `(unhealthy)` in `docker ps` | `curl $NANO/health` | maps to `status:"degraded"`/unreachable — same as the two rows above |
 | `bearingTrue`/`position` null | own-ship heading/position | fix nav source; see 4.1 |
 | range mostly null / wild | `horizon_y`, `calibration_status` | calibrate (Phase 7) |

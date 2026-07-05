@@ -11,7 +11,7 @@ from app.detector.classmap import (
 
 
 def test_registry_covers_all_models():
-    assert MODEL_PGIE_CONFIG[MODEL_COCO] == "pgie_yolov8n.txt"
+    assert MODEL_PGIE_CONFIG[MODEL_COCO] == "pgie_yolo11n.txt"
     assert MODEL_PGIE_CONFIG[MODEL_FORWARD_WATCH] == "pgie_forward_watch.txt"
     assert MODEL_PGIE_CONFIG[MODEL_MARINE_SURVEILLANCE] == "pgie_marine_surveillance.txt"
 

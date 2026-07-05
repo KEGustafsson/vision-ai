@@ -4,31 +4,48 @@
 #   sudo apt-get install deepstream-7.1
 #   pip install /opt/nvidia/deepstream/deepstream/lib/pyds-*.whl
 #
-# Build the custom YOLOv8 nvinfer parser once:
+# Build the custom YOLO nvinfer parser once (same .so serves YOLOv8/YOLO11):
 #   git clone https://github.com/marcoslucianops/DeepStream-Yolo /tmp/ds-yolo
 #   CUDA_VER=$(nvcc --version | grep -oP 'V\K[0-9]+\.[0-9]+') \
 #     make -C /tmp/ds-yolo/nvdsinfer_custom_impl_Yolo
 #   cp /tmp/ds-yolo/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so \
 #     vision-service/deepstream/
 #
-# Export a raw YOLOv8n ONNX (no end-to-end NMS — required by deepstream-yolo):
-#   python -c "from ultralytics import YOLO; YOLO('models/yolov8n.pt').export(
-#       format='onnx', simplify=True, opset=17, imgsz=640)"
-#   # nvinfer will auto-build yolov8n_ds.engine on first run; or pre-build with
-#   # trtexec: trtexec --onnx=models/yolov8n.onnx --fp16 \
-#   #           --saveEngine=models/yolov8n_ds.engine --minShapes=images:1x3x640x640 \
-#   #           --optShapes=images:2x3x640x640 --maxShapes=images:2x3x640x640
+# Export a raw YOLO11n ONNX (no end-to-end NMS — required by deepstream-yolo)
+# with the marcoslucianops export script at the SAME size as detector.imgsz:
+#   cp /tmp/ds-yolo/utils/export_yolo11.py .
+#   python3 export_yolo11.py -w models/yolo11n.pt -s 768 --opset 16 --dynamic --simplify
+#   mv yolo11n.onnx deepstream/yolo11n_ds.onnx
+#   # nvinfer will auto-build the engine on first run; or pre-build with trtexec:
+#   #   trtexec --onnx=deepstream/yolo11n_ds.onnx --fp16 \
+#   #           --saveEngine=deepstream/yolo11n_ds.onnx_b2_gpu0_fp16.engine \
+#   #           --minShapes=images:1x3x768x768 --optShapes=images:2x3x768x768 \
+#   #           --maxShapes=images:2x3x768x768
 
 mode: deepstream
 
 detector:
   backend: deepstream
-  # Raw-export engine (see comments above) — NOT the Ultralytics end-to-end engine
-  model_engine: yolov8n_ds.engine
-  model_pt: yolov8n.pt
+  # Raw-export engine (see comments above) — NOT the Ultralytics end-to-end engine.
+  # (Cosmetic for the deepstream backend: nvinfer takes its ONNX/engine from the
+  # pgie config, not from here. Kept in sync for clarity.)
+  model_engine: yolo11n_ds.engine
+  model_pt: yolo11n.pt
   confidence: 0.35
   track_floor: 0.10
-  imgsz: 640
+  # Inference resolution. Raised 640 -> 768 to recover pixels on distant/small
+  # targets (swimmers, far vessels): the cameras stream 1280x960 and nvinfer
+  # down-scales to this square, so a bigger square = more pixels-per-object at
+  # range. The Orin Nano GPU sits ~90% idle here so the extra compute is nearly
+  # free (RAM is the real budget — 768 is ~1.44x the 640 activation footprint;
+  # step to 896/960 only if `nvidia-smi`/tegrastats shows headroom).
+  # COUPLING: for the DeepStream backend this value only sets the NvDCF
+  # tracker_width (pipeline_deepstream.py). The ACTUAL nvinfer input size is
+  # baked into the ONNX at export time, so it MUST be kept in sync with the
+  # `-s 768` passed to export_yolo11.py in Dockerfile.deepstream. After changing
+  # it, delete any stale *_gpu0_fp16.engine in the mounted deepstream/ dir so
+  # nvinfer rebuilds at the new size.
+  imgsz: 768
   # Native camera/display/geometry resolution. nvstreammux outputs this size and
   # nvinfer rescales it to imgsz on the GPU for inference. Detection bboxes and
   # horizon_y below are in THIS coordinate space (these domes stream 1280x960).
@@ -63,8 +80,8 @@ detector:
   contained_frac: 0.8
   # Which detection model to run. Exactly ONE model is active at a time — they
   # are never run together. Switch this value and restart to change models:
-  #   coco                -> COCO YOLOv8n, 80 classes (person/vessel/buoy/...),
-  #                          uses deepstream/pgie_yolov8n.txt + yolov8n_ds.onnx
+  #   coco                -> COCO YOLO11n, 80 classes (person/vessel/buoy/...),
+  #                          uses deepstream/pgie_yolo11n.txt + yolo11n_ds.onnx
   #   forward-watch       -> forward-watch marine model, 6 classes
   #                          (ship/boat/debris/buoy/kayak/log),
   #                          uses deepstream/pgie_forward_watch.txt + forward-watch.onnx

@@ -43,20 +43,23 @@ Prerequisites
   sudo apt-get install deepstream-7.1
   pip install /opt/nvidia/deepstream/deepstream/lib/pyds-*.whl
 
-  # Build custom YOLOv8 nvinfer parser (C, one-time on Jetson):
+  # Build custom deepstream-yolo nvinfer parser (C, one-time on Jetson; shared
+  # by YOLOv8- and YOLO11-format output):
   git clone https://github.com/marcoslucianops/DeepStream-Yolo /tmp/ds-yolo
   CUDA_VER=$(nvcc --version | grep -oP 'V\\K[0-9]+\\.[0-9]+') \\
       make -C /tmp/ds-yolo/nvdsinfer_custom_impl_Yolo
   cp /tmp/ds-yolo/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so \\
       vision-service/deepstream/
 
-  # Export raw YOLOv8n ONNX (no end-to-end NMS — deepstream-yolo requirement):
-  python -c "from ultralytics import YOLO; YOLO('models/yolov8n.pt').export(
-      format='onnx', simplify=True, opset=17, imgsz=640)"
-  # nvinfer auto-builds yolov8n_ds.engine on first run; or pre-build with trtexec:
-  # trtexec --onnx=models/yolov8n.onnx --fp16 --saveEngine=models/yolov8n_ds.engine \\
-  #         --minShapes=images:1x3x640x640 --optShapes=images:2x3x640x640 \\
-  #         --maxShapes=images:2x3x640x640
+  # Export raw YOLO11n ONNX (no end-to-end NMS — deepstream-yolo requirement),
+  # sized to match detector.imgsz:
+  cp /tmp/ds-yolo/utils/export_yolo11.py .
+  python3 export_yolo11.py -w models/yolo11n.pt -s 768 --opset 16 --dynamic --simplify
+  # nvinfer auto-builds the engine on first run; or pre-build with trtexec:
+  # trtexec --onnx=deepstream/yolo11n_ds.onnx --fp16 \\
+  #         --saveEngine=deepstream/yolo11n_ds.onnx_b2_gpu0_fp16.engine \\
+  #         --minShapes=images:1x3x768x768 --optShapes=images:2x3x768x768 \\
+  #         --maxShapes=images:2x3x768x768
 """
 
 from __future__ import annotations
@@ -767,8 +770,10 @@ class DeepStreamPipeline:
             src.connect("pad-added", self._on_src_pad_added, depay)
 
         # nvinfer: TensorRT inference. Reads the batched NVMM buffer directly —
-        # no host-side copy. Uses custom deepstream-yolo parser for YOLOv8 output.
-        # The config (and thus the model) is selected by detector.model above.
+        # no host-side copy. Uses custom deepstream-yolo parser for YOLOv8-format
+        # output (YOLO11 shares the same layout, so the SAME .so parses both —
+        # see config/deepstream.yaml). The default `coco` model is YOLO11n; the
+        # config (and thus the model) is selected by detector.model above.
         pgie = make("nvinfer", "pgie",
                     config_file_path=pgie_cfg,
                     batch_size=n)
