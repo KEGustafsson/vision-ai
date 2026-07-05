@@ -1,11 +1,11 @@
-# CPU mode: real YOLOv8 inference on CPU, frames from a video file or RTSP
+# CPU mode: real YOLO11 inference on CPU, frames from a video file or RTSP
 # (software decode). Useful for testing real detections without a Jetson.
 mode: cpu
 mock_source: synthetic   # set to a video file path, or use RTSP urls below
 
 detector:
   backend: torch-cpu
-  model_pt: yolov8n.pt
+  model_pt: yolo11n.pt
   confidence: 0.35
 
 server:

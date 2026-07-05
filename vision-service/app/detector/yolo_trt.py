@@ -1,4 +1,4 @@
-"""TensorRT YOLOv8 backend for the Jetson Orin Nano.
+"""TensorRT YOLO11 backend for the Jetson Orin Nano.
 
 Ultralytics loads a ``.engine`` file the same way as a ``.pt`` file, so this is
 a thin specialisation of :class:`YoloTorchDetector` pinned to device 0 with the

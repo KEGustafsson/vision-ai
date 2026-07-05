@@ -69,8 +69,8 @@ class GeometryConfig(BaseModel):
 
 class DetectorConfig(BaseModel):
     backend: str = "mock"              # mock | torch-cpu | torch-cuda | tensorrt
-    model_pt: str = "yolov8n.pt"
-    model_engine: str = "yolov8n.engine"
+    model_pt: str = "yolo11n.pt"
+    model_engine: str = "yolo11n.engine"
     confidence: float = 0.35           # publish threshold (worker-side filter)
     # Lower floor fed to YOLO/ByteTrack so runtime /control can both raise AND
     # lower the effective confidence; the worker filters at `confidence`.
@@ -235,8 +235,8 @@ class DetectorConfig(BaseModel):
     # person, so decoding with the wrong table mislabels every detection) and,
     # on DeepStream, also the nvinfer config. On torch/tensorrt backends this
     # must match the weights loaded via model_pt/model_engine:
-    #   "coco"                -> COCO, 80 classes (person/vessel/buoy/...); YOLOv8n
-    #                            on torch/tensorrt, YOLO11n on DeepStream
+    #   "coco"                -> COCO, 80 classes (person/vessel/buoy/...); YOLO11n
+    #                            on torch/tensorrt and on DeepStream
     #   "forward-watch"       -> forward-watch marine model, 6 classes
     #                            (ship/boat/debris/buoy/kayak/log)
     #   "marine-surveillance" -> Roboflow Marine Surveillance YOLOv8s, 7 classes

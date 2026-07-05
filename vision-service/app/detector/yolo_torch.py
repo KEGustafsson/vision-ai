@@ -1,4 +1,4 @@
-"""YOLOv8 detection + ByteTrack tracking via the Ultralytics PyTorch backend.
+"""YOLO11 detection + ByteTrack tracking via the Ultralytics PyTorch backend.
 
 Runs on CPU (dev/fallback) or CUDA. The Jetson TensorRT backend
 (:mod:`yolo_trt`) shares this class with a different weights file.

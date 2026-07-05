@@ -3,9 +3,10 @@
 The `deepstream` backend — a fully GPU-resident alternative to the Ultralytics/
 TensorRT `jetson` backend covered in
 [Jetson setup & deployment](jetson-setup.md). It's a **different pipeline**,
-not a tuning variant: different model (YOLO11n vs YOLOv8n by default),
-different tracker (NvDCF vs BoT-SORT), different image (`Dockerfile.deepstream`
-vs `Dockerfile`), different compose file. It shares only the basics with the
+not a tuning variant: both default to the same model generation (YOLO11n), but
+a different tracker (NvDCF vs BoT-SORT), different image
+(`Dockerfile.deepstream` vs `Dockerfile`), different compose file. It shares
+only the basics with the
 Ultralytics path — see [Jetson setup & deployment](jetson-setup.md) for:
 
 - [§1 Prerequisites](jetson-setup.md#1-prerequisites-on-the-jetson) (JetPack,

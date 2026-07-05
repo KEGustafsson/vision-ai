@@ -2,17 +2,15 @@
 
 Ultralytics auto-downloads on first use, but it writes into its own private cache
 (or the current working directory), NOT the path the rest of the system expects.
-The DeepStream image build's export stage looks for ``models/yolo11n.pt``, the
-TensorRT engine export (``export_engine.py --weights models/yolov8n.pt``) looks
-for ``models/yolov8n.pt``, and the docs key off both — so this writes the weights
-to exactly the path the caller asks for rather than leaving them in a cache the
-next step can't find.
+Both the DeepStream image build's export stage and the TensorRT engine export
+(``export_engine.py --weights models/yolo11n.pt``) look for ``models/yolo11n.pt``,
+and the docs key off both — so this writes the weights to exactly the path the
+caller asks for rather than leaving them in a cache the next step can't find.
 
 Usage::
 
-    python3 scripts/download_models.py                 # -> models/yolov8n.pt (jetson/marine backend)
-    python3 scripts/download_models.py --model yolo11n.pt   # -> models/yolo11n.pt (deepstream backend)
-    python3 scripts/download_models.py --model yolov8s.pt
+    python3 scripts/download_models.py                 # -> models/yolo11n.pt (jetson/deepstream backend)
+    python3 scripts/download_models.py --model yolo11s.pt
     python3 scripts/download_models.py --model /path/to/local.pt   # copies it in
 """
 
@@ -32,6 +30,9 @@ MODELS = Path(__file__).resolve().parent.parent / "models"
 # Keep these in sync.
 KNOWN_SHA256 = {
     "yolov8n.pt": "f59b3d833e2ff32e194b5bb8e08d211dc7c5bdf144b90d2c8412c47ccfc83b36",
+    # yolo11n.pt intentionally left unpinned: no verified hash recorded yet.
+    # Pin it here (and in Dockerfile.deepstream's YOLO11N_SHA256 build-arg) once
+    # you've verified an artifact on real hardware.
 }
 
 
@@ -64,8 +65,8 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument(
         "--model",
-        default="yolov8n.pt",
-        help="A known Ultralytics asset name (e.g. yolov8n.pt) to download, or a "
+        default="yolo11n.pt",
+        help="A known Ultralytics asset name (e.g. yolo11n.pt) to download, or a "
              "path to an existing .pt file to copy into models/.",
     )
     ap.add_argument(

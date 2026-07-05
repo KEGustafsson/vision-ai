@@ -56,7 +56,7 @@ drift.
 
 | Component | Path | Stack |
 |-----------|------|-------|
-| Vision service | [`vision-service/`](vision-service/) | Python, FastAPI, OpenCV, YOLO11n (DeepStream, production) or Ultralytics YOLOv8 (torch/TensorRT) |
+| Vision service | [`vision-service/`](vision-service/) | Python, FastAPI, OpenCV, YOLO11n (DeepStream, production) or Ultralytics YOLO11 (torch/TensorRT) |
 | SignalK plugin | [`signalk-plugin/`](signalk-plugin/) | TypeScript, ws, ajv |
 
 ### From pixels to targets
@@ -159,9 +159,10 @@ docker compose -f docker-compose.yml -f docker-compose.mock.yml up
 
 The backend actually run in production (see [Demo](#demo)) — every stage runs
 on the GPU (see [DeepStream architecture](#deepstream-architecture) for the
-design). Default detection model is **YOLO11n** (COCO, 768×768) — a different
-model generation than the `jetson`/`torch-*` backends below, which run
-YOLOv8. Two marine-tuned alternatives (YOLOv8-based) are also selectable; see
+design). Default detection model is **YOLO11n** (COCO, 768×768) — the `jetson`/`torch-*`
+backends below run the same YOLO11n weights (COCO, 640×640) via Ultralytics
+instead of DeepStream's nvinfer. Two marine-tuned alternatives (YOLOv8-based)
+are also selectable; see
 [Detection model selection](docs/jetson-deepstream.md#detection-model-selection).
 The image builds from a clean clone in one command (it exports the ONNX and
 bakes the committed parser itself; nvinfer builds the TensorRT engine on first
@@ -184,7 +185,7 @@ See [Jetson setup & deployment](docs/jetson-setup.md) for shared prerequisites
 and camera calibration, and [DeepStream GPU pipeline](docs/jetson-deepstream.md)
 for this backend's model selection and tuning.
 
-### `jetson` — Ultralytics YOLOv8 on TensorRT (alternative backend)
+### `jetson` — Ultralytics YOLO11 on TensorRT (alternative backend)
 
 Decode in a GStreamer pipeline, inference + tracking (BoT-SORT with
 camera-motion compensation by default; see
@@ -195,8 +196,8 @@ device-specific, so build the engine **on the Jetson** once before running:
 
 ```bash
 cd vision-service
-python3 scripts/download_models.py --model yolov8n.pt
-python3 scripts/export_engine.py --weights models/yolov8n.pt --imgsz 640  # → models/yolov8n.engine
+python3 scripts/download_models.py --model yolo11n.pt
+python3 scripts/export_engine.py --weights models/yolo11n.pt --imgsz 640  # → models/yolo11n.engine
 cd ..
 docker compose -f docker-compose.jetson.yml up -d
 ```

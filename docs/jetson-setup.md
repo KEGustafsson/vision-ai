@@ -2,7 +2,7 @@
 
 Target: **NVIDIA Jetson Orin Nano Super**, JetPack 6.x (CUDA 12.6, TensorRT 10.3).
 
-This covers the **`jetson` backend** (Ultralytics YOLOv8 on TensorRT, Python
+This covers the **`jetson` backend** (Ultralytics YOLO11 on TensorRT, Python
 decode/inference/track loop). There's also a **`deepstream` backend** — a
 different pipeline entirely (different model, tracker, image, compose file) —
 covered in [DeepStream GPU pipeline](jetson-deepstream.md). It shares this
@@ -24,15 +24,17 @@ Ultralytics loads a `.engine` exactly like a `.pt`. Build it **on the Jetson**
 
 ```bash
 cd vision-service
-python3 scripts/download_models.py --model yolov8n.pt
-python3 scripts/export_engine.py --weights models/yolov8n.pt --imgsz 640
-# → models/yolov8n.engine  (FP16)
+python3 scripts/download_models.py --model yolo11n.pt
+python3 scripts/export_engine.py --weights models/yolo11n.pt --imgsz 640
+# → models/yolo11n.engine  (FP16)
 ```
 
-Expected throughput: YOLOv8n ≈ 15–20 FPS, YOLOv8s ≈ 8–12 FPS at 640 (FP16).
-INT8 adds ~25–35% but needs a calibration dataset — see the Ultralytics TensorRT
-guide. With two cameras, the plugin's context control prioritises one camera so
-you don't pay full rate on both simultaneously.
+Expected throughput: YOLO11n ≈ 15–20 FPS, YOLO11s ≈ 8–12 FPS at 640 (FP16) —
+similar ballpark to YOLOv8n/s at the same input size; re-measure on your board
+before relying on these. INT8 adds ~25–35% but needs a calibration dataset —
+see the Ultralytics TensorRT guide. With two cameras, the plugin's context
+control prioritises one camera so you don't pay full rate on both
+simultaneously.
 
 ## 3. Camera URLs & calibration
 
@@ -61,7 +63,7 @@ policy) and enable the plugin in the SignalK admin UI.
 
 ## DeepStream backend (alternative)
 
-For the fully GPU-resident pipeline — different model (YOLO11n vs YOLOv8n),
+For the fully GPU-resident pipeline — same model generation (YOLO11n) but a
 different tracker (NvDCF vs BoT-SORT), different image and compose file — see
 [DeepStream GPU pipeline](jetson-deepstream.md). It covers that backend's
 build/run, tuning, runtime behaviour, detection model selection, and

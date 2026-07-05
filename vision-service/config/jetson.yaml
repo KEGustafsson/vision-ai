@@ -10,7 +10,7 @@ mode: jetson
 
 detector:
   backend: tensorrt
-  model_engine: yolov8n.engine   # dynamic batch 1-2 engine (also kept as yolov8n_b2.engine); note the compose VISION_MODEL_ENGINE env overrides this
+  model_engine: yolo11n.engine   # dynamic batch 1-2 engine (also kept as yolo11n_b2.engine); note the compose VISION_MODEL_ENGINE env overrides this
   confidence: 0.35
   imgsz: 640
   # Marine-tuned BoT-SORT association (repo-local preset): same track buffer /
