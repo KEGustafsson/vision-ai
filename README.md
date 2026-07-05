@@ -56,7 +56,7 @@ drift.
 
 | Component | Path | Stack |
 |-----------|------|-------|
-| Vision service | [`vision-service/`](vision-service/) | Python, FastAPI, OpenCV, Ultralytics YOLOv8 (torch/TensorRT) or YOLO11n (DeepStream) |
+| Vision service | [`vision-service/`](vision-service/) | Python, FastAPI, OpenCV, YOLO11n (DeepStream, production) or Ultralytics YOLOv8 (torch/TensorRT) |
 | SignalK plugin | [`signalk-plugin/`](signalk-plugin/) | TypeScript, ws, ajv |
 
 ### From pixels to targets
@@ -125,15 +125,17 @@ and bring the whole stack up with Docker — see the `mock` mode under
 
 Three run modes, selected by `VISION_MODE`; all emit the same `DetectionEvent`.
 Each has a **self-contained compose file** (a single `-f`, no base needed).
-`deepstream` builds and runs from a clean clone in one command — no prior image
-build, no manual model step. `jetson` needs one device-specific step first: build
-the TensorRT engine on the board (engines aren't portable), then run.
+`deepstream` is the **production backend** (see [Demo](#demo)) and builds and
+runs from a clean clone in one command — no prior image build, no manual model
+step. `jetson` is the alternative Ultralytics/TensorRT backend; it needs one
+device-specific step first: build the TensorRT engine on the board (engines
+aren't portable), then run.
 
 | Mode | Where | Command |
 |------|-------|---------|
 | **`mock`** | any laptop, no GPU/cameras | `docker compose up` |
-| **`jetson`** | Jetson, TensorRT | build the engine once (below), then `docker compose -f docker-compose.jetson.yml up -d` |
-| **`deepstream`** | Jetson, full-GPU pipeline | `docker compose -f docker-compose.deepstream.yml up -d --build` |
+| **`deepstream`** | Jetson, full-GPU pipeline (production) | `docker compose -f docker-compose.deepstream.yml up -d --build` |
+| **`jetson`** | Jetson, TensorRT (alternative) | build the engine once (below), then `docker compose -f docker-compose.jetson.yml up -d` |
 
 Set the camera URLs first for the GPU modes (`.env` or exported):
 
@@ -153,30 +155,13 @@ docker compose -f docker-compose.yml -f docker-compose.mock.yml up
 # SignalK:  http://localhost:3000     Captain view: http://localhost:3000/signalk-vision-ai/
 ```
 
-### `jetson` — Ultralytics YOLOv8 on TensorRT
+### `deepstream` — fully GPU-resident NVIDIA DeepStream (production backend)
 
-Decode in a GStreamer pipeline, inference + tracking (BoT-SORT with
-camera-motion compensation by default; see
-[Tracking stability](docs/tracking-stability.md)) in Python. Optional
-`server.hw_jpeg` offloads the MJPEG encode to the Jetson NVJPG block
-(`nvjpegenc`) instead of CPU `cv2.imencode`. TensorRT engines are
-device-specific, so build the engine **on the Jetson** once before running:
-
-```bash
-cd vision-service
-python3 scripts/download_models.py --model yolov8n.pt
-python3 scripts/export_engine.py --weights models/yolov8n.pt --imgsz 640  # → models/yolov8n.engine
-cd ..
-docker compose -f docker-compose.jetson.yml up -d
-```
-
-### `deepstream` — fully GPU-resident NVIDIA DeepStream
-
-The most efficient backend — every stage runs on the GPU (see
-[DeepStream architecture](#deepstream-architecture) for the design). Default
-detection model is **YOLO11n** (COCO, 768×768) — a different model generation
-than the `jetson`/`torch-*` backends above, which run YOLOv8. Two marine-tuned
-alternatives (YOLOv8-based) are also selectable; see
+The backend actually run in production (see [Demo](#demo)) — every stage runs
+on the GPU (see [DeepStream architecture](#deepstream-architecture) for the
+design). Default detection model is **YOLO11n** (COCO, 768×768) — a different
+model generation than the `jetson`/`torch-*` backends below, which run
+YOLOv8. Two marine-tuned alternatives (YOLOv8-based) are also selectable; see
 [Detection model selection](docs/jetson-deepstream.md#detection-model-selection).
 The image builds from a clean clone in one command (it exports the ONNX and
 bakes the committed parser itself; nvinfer builds the TensorRT engine on first
@@ -198,6 +183,23 @@ docker compose -f docker-compose.deepstream.yml up -d --build
 See [Jetson setup & deployment](docs/jetson-setup.md) for shared prerequisites
 and camera calibration, and [DeepStream GPU pipeline](docs/jetson-deepstream.md)
 for this backend's model selection and tuning.
+
+### `jetson` — Ultralytics YOLOv8 on TensorRT (alternative backend)
+
+Decode in a GStreamer pipeline, inference + tracking (BoT-SORT with
+camera-motion compensation by default; see
+[Tracking stability](docs/tracking-stability.md)) in Python. Optional
+`server.hw_jpeg` offloads the MJPEG encode to the Jetson NVJPG block
+(`nvjpegenc`) instead of CPU `cv2.imencode`. TensorRT engines are
+device-specific, so build the engine **on the Jetson** once before running:
+
+```bash
+cd vision-service
+python3 scripts/download_models.py --model yolov8n.pt
+python3 scripts/export_engine.py --weights models/yolov8n.pt --imgsz 640  # → models/yolov8n.engine
+cd ..
+docker compose -f docker-compose.jetson.yml up -d
+```
 
 ## DeepStream architecture
 
@@ -240,8 +242,8 @@ for the build, model selection, and tuning.
 - [SignalK `vision.*` paths](docs/signalk-paths.md)
 - [Geometry & calibration](docs/geometry.md)
 - [Tracking stability (id lock & anti-flicker)](docs/tracking-stability.md)
-- [Jetson setup & deployment](docs/jetson-setup.md) (`jetson` backend)
-- [DeepStream GPU pipeline](docs/jetson-deepstream.md) (`deepstream` backend)
+- [DeepStream GPU pipeline](docs/jetson-deepstream.md) (`deepstream` backend, production)
+- [Jetson setup & deployment](docs/jetson-setup.md) (`jetson` backend, alternative)
 - [Dev quickstart (end-to-end)](docs/dev-quickstart.md)
 - [Onboard verification runbook](docs/onboard-verification.md)
 

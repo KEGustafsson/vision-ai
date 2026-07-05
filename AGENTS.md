@@ -34,7 +34,7 @@ keeps the two sides from drifting. Do not edit the generated JSON by hand.
 
 | Component | Path | Stack |
 |-----------|------|-------|
-| Vision service | `vision-service/` | Python 3.11, FastAPI, OpenCV, Ultralytics YOLOv8 (torch/TensorRT) or YOLO11n (DeepStream) |
+| Vision service | `vision-service/` | Python 3.11, FastAPI, OpenCV, YOLO11n (DeepStream, production) or Ultralytics YOLOv8 (torch/TensorRT) |
 | SignalK plugin | `signalk-plugin/` | TypeScript, `ws`, `ajv` |
 
 Essential docs to consult before changing the relevant area:
