@@ -28,7 +28,19 @@ detector:
   model_pt: yolov8n.pt
   confidence: 0.35
   track_floor: 0.10
-  imgsz: 640
+  # Inference resolution. Raised 640 -> 768 to recover pixels on distant/small
+  # targets (swimmers, far vessels): the cameras stream 1280x960 and nvinfer
+  # down-scales to this square, so a bigger square = more pixels-per-object at
+  # range. The Orin Nano GPU sits ~90% idle here so the extra compute is nearly
+  # free (RAM is the real budget — 768 is ~1.44x the 640 activation footprint;
+  # step to 896/960 only if `nvidia-smi`/tegrastats shows headroom).
+  # COUPLING: for the DeepStream backend this value only sets the NvDCF
+  # tracker_width (pipeline_deepstream.py). The ACTUAL nvinfer input size is
+  # baked into the ONNX at export time, so it MUST be kept in sync with the
+  # `-s 768` passed to export_yolo11.py in Dockerfile.deepstream. After changing
+  # it, delete any stale *_gpu0_fp16.engine in the mounted deepstream/ dir so
+  # nvinfer rebuilds at the new size.
+  imgsz: 768
   # Native camera/display/geometry resolution. nvstreammux outputs this size and
   # nvinfer rescales it to imgsz on the GPU for inference. Detection bboxes and
   # horizon_y below are in THIS coordinate space (these domes stream 1280x960).

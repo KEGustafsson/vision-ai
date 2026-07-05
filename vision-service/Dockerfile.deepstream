@@ -79,7 +79,7 @@ RUN if [ -f models/yolov8n.pt ]; then \
 RUN pip install --no-cache-dir onnx onnxslim onnxscript \
     && git clone --depth 1 https://github.com/marcoslucianops/DeepStream-Yolo /tmp/ds-yolo \
     && cp /tmp/ds-yolo/utils/export_yoloV8.py . \
-    && python3 export_yoloV8.py -w yolov8n.pt --opset 16 --dynamic --simplify \
+    && python3 export_yoloV8.py -w yolov8n.pt -s 768 --opset 16 --dynamic --simplify \
     # The script names the output after the weights (yolov8n.onnx). Normalise it.
     && (test -f yolov8n.onnx && mv yolov8n.onnx yolov8n_ds.onnx \
         || mv yolov8n.pt.onnx yolov8n_ds.onnx) \
