@@ -4,7 +4,7 @@ Target: **NVIDIA Jetson Orin Nano Super**, JetPack 6.x (CUDA 12.6, TensorRT 10.3
 
 This covers the **`jetson` backend** (Ultralytics YOLO11 on TensorRT, Python
 decode/inference/track loop). There's also a **`deepstream` backend** — a
-different pipeline entirely (different model, tracker, image, compose file) —
+different pipeline entirely (different tracker, image, compose file) —
 covered in [DeepStream GPU pipeline](jetson-deepstream.md). It shares this
 doc's prerequisites, camera calibration, and autostart steps (§1, §3, §5
 below); only §2 and §4 are `jetson`-backend-specific.
