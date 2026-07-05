@@ -80,7 +80,7 @@ export function schema(): object {
     type: 'object',
     title: 'Marine Vision-AI',
     description:
-      'Controls the YOLOv8 vision container and turns detections into a ' +
+      'Controls the YOLO vision container and turns detections into a ' +
       'georeferenced "visual radar", AIS fusion, MOB and collision alerts.',
     properties: {
       containerUrl: {

@@ -279,7 +279,7 @@ timeout 600 tegrastats --interval 2000 | tee $OUT/soak-tegrastats.log   # 10 min
 | container `(unhealthy)` in `docker ps` | `curl $NANO/health` | maps to `status:"degraded"`/unreachable — same as the two rows above |
 | `bearingTrue`/`position` null | own-ship heading/position | fix nav source; see 4.1 |
 | range mostly null / wild | `horizon_y`, `calibration_status` | calibrate (Phase 7) |
-| low FPS / hot | `nvpmodel`, both cameras full-rate | set MAXN+`jetson_clocks`; rely on context-camera prioritisation; prefer v8n |
+| low FPS / hot | `nvpmodel`, both cameras full-rate | set MAXN+`jetson_clocks`; rely on context-camera prioritisation; prefer yolo11n |
 | RTSP creds visible in `/config` | should be redacted | regression — check `rest.get_config` |
 
 ---
