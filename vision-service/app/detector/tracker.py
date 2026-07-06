@@ -268,7 +268,8 @@ class VelocityTracker:
         if track_id not in self._hist:
             self._hist[track_id] = deque(maxlen=self._history)
             self._first_seq[track_id] = seq
-            self._display[track_id] = self._alloc_display(track_id, seq)
+            disp = self._alloc_display(track_id, seq)
+            self._display[track_id] = disp
         hist = self._hist[track_id]
         vx = vy = 0.0
         if hist:

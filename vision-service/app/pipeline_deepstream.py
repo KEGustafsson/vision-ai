@@ -64,10 +64,13 @@ Prerequisites
 
 from __future__ import annotations
 
+import logging as _logging
 import tempfile
 import threading
 import time
-from dataclasses import dataclass, field
+
+_ds_log = _logging.getLogger(__name__)
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -139,43 +142,56 @@ def _now_iso() -> str:
 
 def _dedup_same_vessel(tracks: List[RawTrack]) -> List[RawTrack]:
     """Remove a duplicate track when two same-label (non-person) confirmed tracks
-    belong to the same physical vessel: the lower-confidence track's bbox center
-    falls inside the higher-confidence track's bbox (containment), meaning one is
-    a hull-only detection and the other is a hull+mast / hull+sails detection of
-    the same target.
+    belong to the same physical vessel: one bbox center falls inside the other bbox
+    (containment), meaning hull-only vs hull+mast / hull+sails for the same target.
+
+    Sorted by display ID ascending so the OLDEST (lowest) ID always wins —
+    this prevents flicker when a vessel alternates between hull and hull+mast
+    detections frame-to-frame.  When a duplicate with a LARGER bbox is found,
+    the winning track's bbox is upgraded to the bigger extent so the full vessel
+    outline is always shown to the operator.
 
     Runs after the stabilizer so it operates on smoothed, confirmed tracks only.
     Persons are always exempt — two swimmers must never be silently fused.
     """
     if len(tracks) < 2:
         return tracks
-    # Process high-confidence first so the stronger detection always survives.
-    by_conf = sorted(tracks, key=lambda t: (-t.confidence, t.track_id or 0))
+    # Lower display ID = older, more established = always wins.
+    # On tie (shouldn't happen), higher confidence wins.
+    by_tid = sorted(tracks, key=lambda t: (t.track_id or float("inf"), -t.confidence))
     suppressed: set = set()
     kept: List[RawTrack] = []
-    for t in by_conf:
+    for t in by_tid:
         if t.track_id in suppressed or t.label == "person":
             kept.append(t)
             continue
         cx = t.x + t.w / 2.0
         cy = t.y + t.h / 2.0
-        duplicate = False
-        for k in kept:
+        dup_idx: Optional[int] = None
+        for i, k in enumerate(kept):
             if k.label != t.label:
                 continue
             # Is t's center inside k's bbox?
             if k.x <= cx <= k.x + k.w and k.y <= cy <= k.y + k.h:
-                duplicate = True
+                dup_idx = i
                 break
-            # Is k's center inside t's bbox? (t is the bigger bbox)
+            # Is k's center inside t's bbox?
             kc_x = k.x + k.w / 2.0
             kc_y = k.y + k.h / 2.0
             if t.x <= kc_x <= t.x + t.w and t.y <= kc_y <= t.y + t.h:
-                duplicate = True
+                dup_idx = i
                 break
-        if duplicate:
+        if dup_idx is not None:
+            # t is a duplicate of the already-kept lower-ID track.  Suppress t,
+            # but if t has a LARGER area, upgrade the winner's bbox so the
+            # operator sees the full vessel extent under the stable display ID.
+            existing = kept[dup_idx]
+            if t.w * t.h > existing.w * existing.h:
+                kept[dup_idx] = replace(existing, x=t.x, y=t.y, w=t.w, h=t.h)
             if t.track_id is not None:
                 suppressed.add(t.track_id)
+            _ds_log.warning("dedup: suppressed display=%s kept display=%s",
+                            t.track_id, existing.track_id)
         else:
             kept.append(t)
     if not suppressed:
