@@ -195,22 +195,25 @@ class VelocityTracker:
         best: Optional[int] = None
         best_ov = self._reid_min_x_overlap
         bottom = y + h
-        misses: List[str] = []
+        dbg = _log.isEnabledFor(logging.DEBUG)
+        misses: Optional[List[str]] = [] if dbg else None
         for tid, (ix, iy, iw, ih, ilabel, iseq) in self._ident.items():
             if tid == track_id or ilabel != label:
                 continue
             gap = seq - iseq
             if gap > self._reid_max_gap:
-                misses.append(f"raw={tid} gap={gap}>{self._reid_max_gap}")
+                if misses is not None:
+                    misses.append(f"raw={tid} gap={gap}>{self._reid_max_gap}")
                 continue
             min_w = min(w, iw)
             if min_w <= 0:
                 continue
             width_ratio = max(w, iw) / min_w
             if width_ratio > self._reid_max_width_ratio:
-                misses.append(
-                    f"raw={tid} width_ratio={width_ratio:.2f}"
-                    f">{self._reid_max_width_ratio} new_w={w:.0f} old_w={iw:.0f}")
+                if misses is not None:
+                    misses.append(
+                        f"raw={tid} width_ratio={width_ratio:.2f}"
+                        f">{self._reid_max_width_ratio} new_w={w:.0f} old_w={iw:.0f}")
                 continue
             pvx, pvy = self._last_velocity(tid)
             px, pb = ix + pvx * gap, (iy + ih) + pvy * gap
@@ -218,28 +221,31 @@ class VelocityTracker:
             ov = (min(x + w, px + iw) - max(x, px)
                   + 2.0 * buf_frac * min_w) / min_w
             if ov < best_ov:
-                misses.append(
-                    f"raw={tid} overlap={ov:.2f}<{best_ov:.2f}"
-                    f" new=({x:.0f},{y:.0f},{w:.0f},{h:.0f})"
-                    f" old=({ix:.0f},{iy:.0f},{iw:.0f},{ih:.0f})")
+                if misses is not None:
+                    misses.append(
+                        f"raw={tid} overlap={ov:.2f}<{best_ov:.2f}"
+                        f" new=({x:.0f},{y:.0f},{w:.0f},{h:.0f})"
+                        f" old=({ix:.0f},{iy:.0f},{iw:.0f},{ih:.0f})")
                 continue
             bot_diff = abs(bottom - pb)
             bot_tol = (self._reid_bottom_tol + buf_frac) * min(h, ih)
             if bot_diff > bot_tol:
-                misses.append(
-                    f"raw={tid} bottom_diff={bot_diff:.1f}>{bot_tol:.1f}"
-                    f" new_bot={bottom:.0f} old_bot={pb:.0f}"
-                    f" min_h={min(h, ih):.0f}")
+                if misses is not None:
+                    misses.append(
+                        f"raw={tid} bottom_diff={bot_diff:.1f}>{bot_tol:.1f}"
+                        f" new_bot={bottom:.0f} old_bot={pb:.0f}"
+                        f" min_h={min(h, ih):.0f}")
                 continue
             if self._reid_dir_min_speed > 0 and \
                     math.hypot(pvx, pvy) >= self._reid_dir_min_speed:
                 dx = (x + w / 2.0) - (ix + iw / 2.0)
                 dy = bottom - (iy + ih)
                 if math.hypot(dx, dy) > 0.25 * min_w and dx * pvx + dy * pvy < 0:
-                    misses.append(f"raw={tid} direction")
+                    if misses is not None:
+                        misses.append(f"raw={tid} direction")
                     continue
             best, best_ov = tid, ov
-        if misses and best is None and _log.isEnabledFor(logging.DEBUG):
+        if misses and best is None:
             _log.debug(
                 "reid miss: new raw=%d %s box=(%.0f,%.0f,%.0f,%.0f) bot=%.0f"
                 " rejected %d candidate(s): %s",

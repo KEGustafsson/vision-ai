@@ -190,8 +190,8 @@ def _dedup_same_vessel(tracks: List[RawTrack]) -> List[RawTrack]:
                 kept[dup_idx] = replace(existing, x=t.x, y=t.y, w=t.w, h=t.h)
             if t.track_id is not None:
                 suppressed.add(t.track_id)
-            _ds_log.warning("dedup: suppressed display=%s kept display=%s",
-                            t.track_id, existing.track_id)
+            _ds_log.debug("dedup: suppressed display=%s kept display=%s",
+                          t.track_id, existing.track_id)
         else:
             kept.append(t)
     if not suppressed:
