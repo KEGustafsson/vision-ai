@@ -76,6 +76,35 @@ detector:
   # estimate over the now-longer coast window. Also matters most for a
   # man-overboard target, whose apparent motion is dominated by own-ship drift.
   stabilize_coast_velocity_factor: 0.25
+  # Python waterline re-id gap window: how many frames back a disappeared
+  # track can still be re-identified by a new NvDCF track ID.
+  # Raised 40 → 120 (≈10 s at 12 FPS) to match NvDCF's shadow-tracking window
+  # better: NvDCF can hold a lost target in shadow for up to 240 frames (20 s),
+  # but it only emits nothing to Python during that time. If NvDCF eventually
+  # gives up and spawns a fresh ID, Python must still have the old track's
+  # waterline footprint in _ident to alias the new ID back to the display ID
+  # the operator knows. With the old 40-frame window (~3 s), a vessel hidden
+  # behind a wave for >3 s would always get a new vessel number.
+  reid_max_gap_frames: 120
+  # Sailboat re-id tuning — two gates relaxed from the global defaults:
+  #
+  # reid_max_width_ratio 1.6→3.5: a deployed sail bbox is up to 3× the hull
+  # width. Log evidence showed width ratios of 3.0–3.5× for the same vessel
+  # (hull 301px, sail-extended track ~965px → 3.21×). The bottom-edge gate
+  # remains the safety net against merging different vessels: two boats at
+  # the same range share a waterline y; at different ranges they diverge by
+  # many hull-heights, so even a broad width tolerance is safe here.
+  reid_max_width_ratio: 3.5
+  #
+  # reid_min_x_overlap 0.5→0.1: hull and hull+mast bboxes are sometimes
+  # ADJACENT rather than overlapping — YOLO anchors the mast bbox on the
+  # mast pole and the hull bbox on the waterline contact, which can put their
+  # horizontal extents side-by-side with only ~7–16% overlap. Log data shows
+  # ov=0.16 between hull+mast (132,110,93,169) and hull (218,198,104,85) at
+  # identical waterlines (bottom diff=4px), which the old 0.5 threshold
+  # rejected. Width=1.12 and bottom=4px are well within all other gates,
+  # so lowering to 0.1 is safe; the bottom gate carries the discrimination.
+  reid_min_x_overlap: 0.1
   max_area_frac: 0.4
   contained_frac: 0.8
   # Which detection model to run. Exactly ONE model is active at a time — they

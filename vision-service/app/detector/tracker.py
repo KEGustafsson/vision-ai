@@ -21,9 +21,12 @@ and velocity history.
 from __future__ import annotations
 
 import heapq
+import logging
 import math
 from collections import deque
-from typing import Deque, Dict, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
+
+_log = logging.getLogger(__name__)
 
 
 def reid_options(det) -> dict:
@@ -192,47 +195,56 @@ class VelocityTracker:
         best: Optional[int] = None
         best_ov = self._reid_min_x_overlap
         bottom = y + h
+        misses: List[str] = []
         for tid, (ix, iy, iw, ih, ilabel, iseq) in self._ident.items():
             if tid == track_id or ilabel != label:
                 continue
             gap = seq - iseq
             if gap > self._reid_max_gap:
+                misses.append(f"raw={tid} gap={gap}>{self._reid_max_gap}")
                 continue
             min_w = min(w, iw)
             if min_w <= 0:
                 continue
-            # Same hull, or a different vessel? The waterline width must agree.
-            if max(w, iw) / min_w > self._reid_max_width_ratio:
+            width_ratio = max(w, iw) / min_w
+            if width_ratio > self._reid_max_width_ratio:
+                misses.append(
+                    f"raw={tid} width_ratio={width_ratio:.2f}"
+                    f">{self._reid_max_width_ratio} new_w={w:.0f} old_w={iw:.0f}")
                 continue
-            # Advance the stored footprint by the track's waterline velocity so
-            # the comparison happens where the vessel should be NOW.
             pvx, pvy = self._last_velocity(tid)
             px, pb = ix + pvx * gap, (iy + ih) + pvy * gap
-            # Buffer for this gap: how much the matching space is expanded, as
-            # a fraction of the narrower box's dimension (C-BIoU).
             buf_frac = min(self._reid_buffer_max, self._reid_buffer_frac * gap)
-            # Fraction of the narrower box's width shared with the candidate,
-            # after buffering both boxes horizontally.
             ov = (min(x + w, px + iw) - max(x, px)
                   + 2.0 * buf_frac * min_w) / min_w
             if ov < best_ov:
+                misses.append(
+                    f"raw={tid} overlap={ov:.2f}<{best_ov:.2f}"
+                    f" new=({x:.0f},{y:.0f},{w:.0f},{h:.0f})"
+                    f" old=({ix:.0f},{iy:.0f},{iw:.0f},{ih:.0f})")
                 continue
-            # Bottom edges must sit on the same waterline, within a tolerance
-            # scaled by the SHORTER box (the hull) — a mast-height tolerance
-            # would happily bridge two stacked targets. The buffer relaxes it
-            # for long gaps (pitch/roll moves the waterline while unseen).
-            if abs(bottom - pb) > (self._reid_bottom_tol + buf_frac) * min(h, ih):
+            bot_diff = abs(bottom - pb)
+            bot_tol = (self._reid_bottom_tol + buf_frac) * min(h, ih)
+            if bot_diff > bot_tol:
+                misses.append(
+                    f"raw={tid} bottom_diff={bot_diff:.1f}>{bot_tol:.1f}"
+                    f" new_bot={bottom:.0f} old_bot={pb:.0f}"
+                    f" min_h={min(h, ih):.0f}")
                 continue
-            # Direction consistency: a track that was clearly moving can only
-            # be re-acquired by a candidate displaced broadly ALONG its motion.
-            # A small displacement (a shape flip in place) is always allowed.
             if self._reid_dir_min_speed > 0 and \
                     math.hypot(pvx, pvy) >= self._reid_dir_min_speed:
                 dx = (x + w / 2.0) - (ix + iw / 2.0)
                 dy = bottom - (iy + ih)
                 if math.hypot(dx, dy) > 0.25 * min_w and dx * pvx + dy * pvy < 0:
+                    misses.append(f"raw={tid} direction")
                     continue
             best, best_ov = tid, ov
+        if misses and best is None and _log.isEnabledFor(logging.DEBUG):
+            _log.debug(
+                "reid miss: new raw=%d %s box=(%.0f,%.0f,%.0f,%.0f) bot=%.0f"
+                " rejected %d candidate(s): %s",
+                track_id, label, x, y, w, h, bottom,
+                len(misses), "; ".join(misses))
         return best
 
     def _last_velocity(self, track_id: int) -> Tuple[float, float]:
@@ -277,14 +289,23 @@ class VelocityTracker:
         age = seq - self._first_seq[track_id]
         return vx, vy, age
 
-    def prune(self, active_ids: set, seq: int, max_idle: int = 60,
+    def prune(self, active_ids: set, seq: int, max_idle: int = 0,
               max_idle_thin: int = 16) -> None:
         """Drop tracks not seen recently to bound memory. Tracks with fewer
         than 3 sightings ("thin": single-frame glints, wave crests) are dropped
         after the much shorter ``max_idle_thin`` — they were never shown (the
         stabilizer's confirm debounce needs 3 hits), so releasing their display
         id early costs nothing and keeps a churning scene from marching the
-        visible numbers through the whole pool."""
+        visible numbers through the whole pool.
+
+        ``max_idle`` defaults to ``self._reid_max_gap``: the re-id search window
+        and the eviction window must match — otherwise _ident entries for lost
+        tracks get pruned before _match_identity can use them, silently breaking
+        re-id for any dropout longer than the old hardcoded 60-frame default.
+        Pass an explicit value only in tests or when a tighter eviction is wanted.
+        """
+        if max_idle <= 0:
+            max_idle = self._reid_max_gap
         # Expire aliases whose raw id hasn't been resolved recently, even while
         # their canonical track lives on — otherwise a flickering vessel grows
         # one immortal alias per flip over a long session.

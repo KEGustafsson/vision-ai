@@ -204,10 +204,15 @@ class DetectorConfig(BaseModel):
     # vertically separate targets.
     reid_bottom_tol_frac: float = 0.35
     # Max waterline-width mismatch (wider/narrower) between the candidate and
-    # the stored footprint. A partial/full flip preserves the hull's width (a
-    # mast adds height, not width), so a larger mismatch is a DIFFERENT vessel
-    # that must not inherit the id.
-    reid_max_width_ratio: float = 1.6
+    # the stored footprint. A bare mast adds height only; a deployed sail adds
+    # substantial WIDTH — YOLO draws one bbox around the whole sail plan, which
+    # can be 3× the hull width. The bottom-edge gate (reid_bottom_tol_frac) is
+    # the hard protection against merging different vessels: two targets at the
+    # same range share a waterline y, but two at different ranges diverge by
+    # many hull-heights, so raising this ratio is safe when the bottom gate
+    # is active. Raised 1.6 → 3.0: covers the observed hull vs hull+sails
+    # ratio of ~2.8× without requiring the bottom gate to carry extra load.
+    reid_max_width_ratio: float = 3.0
     # Buffered matching (C-BIoU, arXiv:2211.14317): the re-id gates RELAX as
     # the dropout grows — the footprint-overlap window and the waterline
     # tolerance widen by this fraction of the narrower box's dimension per

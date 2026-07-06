@@ -137,6 +137,54 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def _dedup_same_vessel(tracks: List[RawTrack]) -> List[RawTrack]:
+    """Remove a duplicate track when two same-label (non-person) confirmed tracks
+    belong to the same physical vessel: the lower-confidence track's bbox center
+    falls inside the higher-confidence track's bbox (containment), meaning one is
+    a hull-only detection and the other is a hull+mast / hull+sails detection of
+    the same target.
+
+    Runs after the stabilizer so it operates on smoothed, confirmed tracks only.
+    Persons are always exempt — two swimmers must never be silently fused.
+    """
+    if len(tracks) < 2:
+        return tracks
+    # Process high-confidence first so the stronger detection always survives.
+    by_conf = sorted(tracks, key=lambda t: (-t.confidence, t.track_id or 0))
+    suppressed: set = set()
+    kept: List[RawTrack] = []
+    for t in by_conf:
+        if t.track_id in suppressed or t.label == "person":
+            kept.append(t)
+            continue
+        cx = t.x + t.w / 2.0
+        cy = t.y + t.h / 2.0
+        duplicate = False
+        for k in kept:
+            if k.label != t.label:
+                continue
+            # Is t's center inside k's bbox?
+            if k.x <= cx <= k.x + k.w and k.y <= cy <= k.y + k.h:
+                duplicate = True
+                break
+            # Is k's center inside t's bbox? (t is the bigger bbox)
+            kc_x = k.x + k.w / 2.0
+            kc_y = k.y + k.h / 2.0
+            if t.x <= kc_x <= t.x + t.w and t.y <= kc_y <= t.y + t.h:
+                duplicate = True
+                break
+        if duplicate:
+            if t.track_id is not None:
+                suppressed.add(t.track_id)
+        else:
+            kept.append(t)
+    if not suppressed:
+        return tracks
+    # Restore original frame order for display consistency.
+    tid_order = {t.track_id: i for i, t in enumerate(tracks)}
+    return sorted(kept, key=lambda t: tid_order.get(t.track_id, 0))
+
+
 def _check_imports() -> None:
     """Raise ImportError with actionable install instructions if pyds/GI is absent."""
     try:
@@ -1095,6 +1143,13 @@ class DeepStreamPipeline:
             # confidence hysteresis and coasting on top.
             if state.stabilizer is not None:
                 raw_tracks = state.stabilizer.update(raw_tracks, state.seq, conf_thresh)
+
+            # ── Spatial deduplication ───────────────────────────────────────
+            # Belt-and-suspenders for any surviving hull / hull+sails duplicate
+            # pairs: if a confirmed track's bbox center lies inside another
+            # confirmed track's bbox they are the same vessel viewed at
+            # different extents. Keep only the higher-confidence one.
+            raw_tracks = _dedup_same_vessel(raw_tracks)
 
             # ── Build DetectionEvent ────────────────────────────────────────
             latency_ms = (time.perf_counter() - t0) * 1000.0
