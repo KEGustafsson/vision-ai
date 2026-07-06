@@ -154,13 +154,15 @@ class DetectorConfig(BaseModel):
     # spread across the window instead of snapping. Bigger window = calmer but
     # laggier (a mover's box trails by about half the window). 1 disables.
     stabilize_smooth: bool = True
-    stabilize_smooth_window: int = 5
+    stabilize_smooth_window: int = 20
     # Jump gate on the smoothed box: real objects don't teleport, so a raw box
-    # whose center leaps more than this fraction of the box's larger dimension
-    # per elapsed frame — or whose width/height changes by more than
-    # (1 + this) per elapsed frame — is a FALSE measurement: it is not
-    # averaged in and the held average is emitted instead. Judged only against
-    # boxes already seen (no motion estimate). 0 disables the gate.
+    # whose WATERLINE (bottom center) leaps more than this fraction of the
+    # box's larger dimension per elapsed frame is a FALSE measurement: it is
+    # not averaged in and the held average is emitted instead. Box SIZE is NOT
+    # gated — a hull<->hull+mast/sail extent flip is a real, fast size change
+    # at a fixed waterline, so width/height flow into the average and the drawn
+    # box ramps smoothly across the flip instead of snapping to the new height.
+    # Judged only against boxes already seen (no motion estimate). 0 disables.
     stabilize_jump_tol: float = 0.35
     # An out-of-gate box observed this many CONSECUTIVE frames is real (the
     # target genuinely is elsewhere / another size): the average restarts

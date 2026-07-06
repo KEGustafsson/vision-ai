@@ -190,11 +190,14 @@ def test_reid_rejects_misaligned_waterline():
 
 
 def test_reid_rejects_width_mismatch():
-    # A much narrower same-label box on the same waterline (a small boat passing
-    # in front of a vanished big one) is a DIFFERENT vessel: the hull's waterline
-    # width is the invariant a partial/full flip preserves.
+    # A same-label box far narrower than the stored footprint on the same
+    # waterline (a small boat passing where a vanished big one was) is a
+    # DIFFERENT vessel: the hull's waterline width is the invariant a
+    # partial/full flip preserves. reid_max_width_ratio defaults to 3.0 (it
+    # must pass hull vs hull+sails, ~2.8x); this box is 200/60 = 3.3x narrower,
+    # past the gate.
     vt = VelocityTracker()
-    small = dict(x=150.0, y=370.0, w=90.0, h=30.0)  # inside HULL's footprint
+    small = dict(x=150.0, y=370.0, w=60.0, h=30.0)  # inside HULL's footprint
     canon0, _ = _touch(vt, 1, seq=0, box=HULL)
     canon1, _ = _touch(vt, 2, seq=1, box=small)
     assert canon1 != canon0

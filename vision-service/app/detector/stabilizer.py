@@ -19,14 +19,17 @@ publish threshold. This stage gives each track a short lifecycle instead:
   is still debounced downstream by the plugin's MOB persistence counter before any
   alarm is raised, so confirming it here on the first frame is safe.
 * **box smoothing with a jump gate** — each shown box is the **rolling average
-  of the track's recent raw boxes**, and a raw box that leaps implausibly far
-  from that average (or changes size implausibly fast) is treated as a FALSE
+  of the track's recent raw boxes**, and a raw box whose WATERLINE (bottom
+  center) leaps implausibly far from that average is treated as a FALSE
   measurement: it is not averaged in and the held average is emitted instead.
   Real objects don't teleport — a boat moves a small fraction of its own
-  length per frame — so a big jump is detector noise (a glint, a cluster box
-  over a marina row) until it *persists*: after ``jump_confirm`` consecutive
-  out-of-gate frames the new place is accepted as real and the window restarts
-  there. No motion model and no prediction (explicit operator decision):
+  length per frame — so a big waterline jump is detector noise (a glint, a
+  cluster box over a marina row) until it *persists*: after ``jump_confirm``
+  consecutive out-of-gate frames the new place is accepted as real and the
+  window restarts there. Box SIZE is NOT gated: a hull<->hull+mast/sail extent
+  flip is a real, fast size change at a fixed waterline, so width/height always
+  flow into the average and the drawn box ramps smoothly across the flip
+  instead of snapping. No motion model and no prediction (explicit operator decision):
   everything is judged against boxes already seen, never against an estimate
   of where the target is going. Each box is weighted by its detection
   confidence (StrongSORT's NSA-Kalman idea, arXiv:2202.13514, applied to the
@@ -80,17 +83,17 @@ class _BoxSmoother:
     gate (see module docstring). Judges each raw box only against boxes
     already seen — no velocity, no prediction.
 
-    Gate: relative to the current average, the center may shift at most
-    ``jump_tol`` of the box's larger dimension per elapsed frame, and width/
-    height may each grow or shrink at most ``(1 + jump_tol)`` per elapsed
-    frame (a dropout naturally earns a proportionally wider gate — that is
-    just looser plausibility after not looking, not a motion estimate). An
-    out-of-gate box is rejected: the held average is emitted, nothing enters
-    the window. ``jump_confirm`` consecutive rejections mean the change is
-    real (the detector re-seated, the target actually is elsewhere): the
-    window restarts from the latest raw box. An in-gate box resets the
-    rejection count, so a lone spike every few frames never accumulates
-    acceptance.
+    Gate: relative to the current average, the WATERLINE (bottom-center) may
+    shift at most ``jump_tol`` of the box's larger dimension per elapsed frame
+    (a dropout naturally earns a proportionally wider gate — that is just
+    looser plausibility after not looking, not a motion estimate). Box SIZE is
+    NOT gated, so a hull<->hull+mast/sail extent flip flows straight into the
+    average and the drawn box ramps smoothly across it. An out-of-gate box is
+    rejected: the held average is emitted, nothing enters the window.
+    ``jump_confirm`` consecutive rejections mean the change is real (the
+    detector re-seated, the target actually is elsewhere): the window restarts
+    from the latest raw box. An in-gate box resets the rejection count, so a
+    lone spike every few frames never accumulates acceptance.
 
     With ``conf_weight`` each box enters the average weighted by its detection
     confidence (NSA-Kalman analogue): a marginal detection nudges the shown box,
@@ -113,17 +116,19 @@ class _BoxSmoother:
         return x, y, w, h
 
     def _plausible(self, tr: RawTrack, gap: int) -> bool:
+        # Gate on the WATERLINE (bottom-center) only: a box whose waterline
+        # teleports is a false measurement (a glint, a marina-row cluster box).
+        # Box SIZE is deliberately NOT gated — a hull<->hull+mast/sail extent
+        # flip is a real, fast size change at a fixed waterline, so letting
+        # width/height flow straight into the rolling average ramps the drawn
+        # box smoothly across the flip instead of freezing then snapping. The
+        # mast grows UPWARD, so anchoring on the bottom edge (not the box
+        # center, which a height change would move) keeps the gate open for it.
         ax, ay, aw, ah = self._avg()
         allowance = self._jump_tol * max(1, gap)
         shift = max(abs((tr.x + tr.w / 2.0) - (ax + aw / 2.0)),
-                    abs((tr.y + tr.h / 2.0) - (ay + ah / 2.0)))
-        if shift > allowance * max(aw, ah):
-            return False
-        max_ratio = (1.0 + self._jump_tol) ** max(1, gap)
-        for new, old in ((tr.w, aw), (tr.h, ah)):
-            if new <= 0 or old <= 0 or new / old > max_ratio or old / new > max_ratio:
-                return False
-        return True
+                    abs((tr.y + tr.h) - (ay + ah)))
+        return shift <= allowance * max(aw, ah)
 
     def apply(self, tr: RawTrack, seq: int) -> RawTrack:
         gap, self._last_seq = seq - self._last_seq, seq

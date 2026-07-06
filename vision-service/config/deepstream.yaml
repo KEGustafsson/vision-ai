@@ -78,14 +78,16 @@ detector:
   stabilize_coast_velocity_factor: 0.25
   # Python waterline re-id gap window: how many frames back a disappeared
   # track can still be re-identified by a new NvDCF track ID.
-  # Raised 40 → 120 (≈10 s at 12 FPS) to match NvDCF's shadow-tracking window
-  # better: NvDCF can hold a lost target in shadow for up to 240 frames (20 s),
-  # but it only emits nothing to Python during that time. If NvDCF eventually
-  # gives up and spawns a fresh ID, Python must still have the old track's
-  # waterline footprint in _ident to alias the new ID back to the display ID
-  # the operator knows. With the old 40-frame window (~3 s), a vessel hidden
-  # behind a wave for >3 s would always get a new vessel number.
-  reid_max_gap_frames: 120
+  # Lowered 120 → 30 (~3 s): live log evidence showed the long window causing
+  # cross-boat ID jumps — a new detection was aliased onto a vanished track 62
+  # frames (~6 s) later across NON-overlapping boxes at the same waterline,
+  # bridged only by the buffered-overlap widening. Every LEGITIMATE hull<->mast
+  # re-id in the same capture happened at gap 0–1 (same/adjacent frame), so the
+  # long window bought nothing for the flicker fix but enabled the mis-matches.
+  # A short window keeps the vessel number stable at the cost of re-numbering a
+  # contact that both NvDCF and Python lose for >3 s (which is where the
+  # cross-boat association happens anyway).
+  reid_max_gap_frames: 30
   # Sailboat re-id tuning — two gates relaxed from the global defaults:
   #
   # reid_max_width_ratio 1.6→3.5: a deployed sail bbox is up to 3× the hull

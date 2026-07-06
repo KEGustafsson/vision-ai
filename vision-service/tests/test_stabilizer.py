@@ -69,20 +69,22 @@ def test_smoothing_follows_a_moving_box_with_window_lag_only():
     assert abs(width - 40.0) < 1e-6  # no smear, no inflation
 
 
-def test_jump_gate_rejects_recurring_shape_flips():
-    # A vessel detected alternately as hull-only and hull+mast flips its raw
-    # box height by 230 px per frame under ONE id (re-id keeps the id; the
-    # shape still flaps). A box can't really grow 7x in one frame, so the
-    # flipped extent is a false measurement: the gate holds the established
-    # box, and because in-gate frames keep resetting the rejection count, the
-    # recurring flip NEVER accumulates acceptance — the box is simply stable.
-    s = TrackStabilizer(confirm_frames=1)
+def test_size_flips_are_smoothed_not_snapped():
+    # A vessel detected alternately as hull-only and hull+mast flips its raw box
+    # height by 230 px frame-to-frame under ONE id (re-id keeps the id; the shape
+    # still flaps). Box SIZE is NOT gated (only the WATERLINE is), so instead of
+    # freezing the hull box and then SNAPPING to the mast extent, the rolling
+    # average absorbs the flip: the shown height settles to a stable intermediate
+    # value and never swings the full raw range — a smooth box, not a jumpy one.
+    s = TrackStabilizer(confirm_frames=1, smooth_window=10)
     hs = []
     for seq in range(1, 40):
         h = 40.0 if seq % 2 else 270.0  # hull only <-> hull + mast
         out = s.update([_box(100.0, y=300.0 - h, h=h)], seq, 0.5)
         hs.append(out[0].h)
-    assert all(h == 40.0 for h in hs)  # rock-steady at the established extent
+    settled = hs[12:]  # after the smoothing window has filled
+    assert max(settled) - min(settled) < 1.0     # stable, no frame-to-frame snap
+    assert 40.0 < min(settled) and max(settled) < 270.0  # never at a raw extreme
 
 
 def test_jump_gate_rejects_a_single_frame_teleport():
