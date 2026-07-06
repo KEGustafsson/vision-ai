@@ -68,8 +68,6 @@ import logging as _logging
 import tempfile
 import threading
 import time
-
-_ds_log = _logging.getLogger(__name__)
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -100,6 +98,8 @@ from .schemas import (
     Target,
 )
 from .util import EventBuffer, LatestFrame
+
+_ds_log = _logging.getLogger(__name__)
 
 _STALL_TIMEOUT_S = 5.0  # mirror pipeline.py: flag a camera with no frames this long
 # Self-heal threshold: if EVERY camera has been silent this long while detection
@@ -145,7 +145,7 @@ def _dedup_same_vessel(tracks: List[RawTrack]) -> List[RawTrack]:
     belong to the same physical vessel: one bbox center falls inside the other bbox
     (containment), meaning hull-only vs hull+mast / hull+sails for the same target.
 
-    Sorted by display ID ascending so the OLDEST (lowest) ID always wins —
+    The OLDEST track (by age_frames) always wins, so its display ID survives —
     this prevents flicker when a vessel alternates between hull and hull+mast
     detections frame-to-frame.  When a duplicate with a LARGER bbox is found,
     the winning track's bbox is upgraded to the bigger extent so the full vessel
@@ -156,12 +156,14 @@ def _dedup_same_vessel(tracks: List[RawTrack]) -> List[RawTrack]:
     """
     if len(tracks) < 2:
         return tracks
-    # Lower display ID = older, more established = always wins.
-    # On tie (shouldn't happen), higher confidence wins.
-    by_tid = sorted(tracks, key=lambda t: (t.track_id or float("inf"), -t.confidence))
+    # Oldest track (most established on screen) wins so its display ID survives;
+    # on tie, higher confidence wins. Sort by age, NOT display ID: the
+    # lowest-free ID policy in VelocityTracker._alloc_display can hand a newer
+    # track a lower ID during churn, so ID order is not age order.
+    by_age = sorted(tracks, key=lambda t: (-t.age_frames, -t.confidence))
     suppressed: set = set()
     kept: List[RawTrack] = []
-    for t in by_tid:
+    for t in by_age:
         if t.track_id in suppressed or t.label == "person":
             kept.append(t)
             continue

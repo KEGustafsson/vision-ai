@@ -47,7 +47,7 @@ class VelocityTracker:
     def __init__(self, history: int = 5, id_min: int = 10, id_max: int = 99,
                  reid: bool = True, reid_max_gap: int = 40,
                  reid_min_x_overlap: float = 0.5, reid_bottom_tol: float = 0.35,
-                 reid_max_width_ratio: float = 1.6,
+                 reid_max_width_ratio: float = 3.0,
                  reid_buffer_frac: float = 0.03, reid_buffer_max: float = 0.25,
                  reid_dir_min_speed: float = 2.0):
         if id_min > id_max:
