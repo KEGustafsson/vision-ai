@@ -80,10 +80,18 @@ RUN if [ -f models/yolo11n.pt ]; then \
 # builds from the SAME pinned commit (its DS_YOLO_REF default). Keep the two in
 # sync when upgrading — an unpinned export could drift the ONNX head away from
 # the committed parser and silently zero out detections.
-ARG DS_YOLO_REF=68769f3
+# Full 40-char SHA (not a short SHA): upstream rewrote history and dropped the
+# old short pin 68769f3, so pin the immutable full commit. 93aedb6 keeps the same
+# DeepStreamOutput head (boxes/scores/labels) the committed parser .so reads — the
+# parser sources are byte-unchanged across these commits — while loading weights
+# via ultralytics.YOLO(), which the older commits' raw torch.load() cannot: the
+# Ultralytics :latest export base moved to torch>=2.6 (weights_only=True default),
+# and only this newer export script survives that. Keep in lockstep with
+# scripts/build_yolo_parser.sh (it builds the parser .so from the SAME commit).
+ARG DS_YOLO_REF=93aedb656a47b141ecbea99c407b002262287cfe
 RUN pip install --no-cache-dir onnx onnxslim onnxscript \
-    # Full clone (not --depth 1): a shallow fetch cannot resolve a short SHA
-    # like 68769f3 on GitHub. A failed checkout aborts the build (&&-chain).
+    # Full clone (not --depth 1): a shallow fetch cannot resolve an arbitrary SHA
+    # on GitHub. A failed checkout aborts the build (&&-chain).
     && git clone https://github.com/marcoslucianops/DeepStream-Yolo /tmp/ds-yolo \
     && git -C /tmp/ds-yolo checkout --quiet "${DS_YOLO_REF}" \
     && cp /tmp/ds-yolo/utils/export_yolo11.py . \
