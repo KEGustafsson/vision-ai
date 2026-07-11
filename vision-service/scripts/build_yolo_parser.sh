@@ -15,7 +15,12 @@ set -euo pipefail
 
 REPO="${DS_YOLO_REPO:-https://github.com/marcoslucianops/DeepStream-Yolo}"
 # Pin to a known-good commit; override with DS_YOLO_REF=<tag-or-sha> to upgrade.
-REF="${DS_YOLO_REF:-68769f3}"
+# Full 40-char SHA (not a short SHA): upstream rewrote history and dropped the old
+# short pin 68769f3 entirely, so pin the immutable full commit. The parser sources
+# under nvdsinfer_custom_impl_Yolo/ are byte-unchanged across these commits, so the
+# .so this builds matches the ONNX exported at the SAME commit. Keep this in
+# lockstep with DS_YOLO_REF in Dockerfile.deepstream (the ONNX export uses it too).
+REF="${DS_YOLO_REF:-93aedb656a47b141ecbea99c407b002262287cfe}"
 EXPECTED_SYMBOL="${EXPECTED_SYMBOL:-NvDsInferParseYolo}"
 CUDA_VER="${CUDA_VER:-$(/usr/local/cuda/bin/nvcc --version | grep -oP 'V\K[0-9]+\.[0-9]+')}"
 DEST="$(cd "$(dirname "$0")/.." && pwd)/deepstream"
@@ -23,9 +28,9 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "Cloning $REPO @ $REF ..."
-# Full clone (not shallow): lets us check out any REF — branch, tag, or a short SHA
-# like the default 68769f3, which a shallow `fetch <short-sha>` cannot resolve on
-# GitHub. checkout failures abort via `set -e` (no `|| true`).
+# Full clone (not shallow): lets us check out any REF — branch, tag, or a short SHA,
+# which a shallow `fetch <short-sha>` cannot resolve on GitHub. checkout failures
+# abort via `set -e` (no `|| true`).
 git clone "$REPO" "$WORK/ds-yolo"
 git -C "$WORK/ds-yolo" checkout --quiet "$REF"
 # Fail loudly if we did not land exactly on $REF: building the parser from an
@@ -43,10 +48,16 @@ PATH="/usr/local/cuda/bin:$PATH" CUDA_VER="$CUDA_VER" \
 cp "$WORK/ds-yolo/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so" "$DEST/"
 echo "Installed -> $DEST/libnvdsinfer_custom_impl_Yolo.so"
 
-nm -D "$DEST/libnvdsinfer_custom_impl_Yolo.so" \
-    | grep -qE " T .*${EXPECTED_SYMBOL}$" || {
+# Verify the parser exports the symbol pgie_yolo11n.txt names in parse-bbox-func-name.
+# Use `grep -c` (counts ALL input) rather than `grep -q` (exits at the first match):
+# under `set -o pipefail`, grep -q closing the pipe early SIGPIPEs nm (exit 141),
+# which pipefail would then report as a spurious "symbol not found". `|| true`
+# keeps grep's exit-1-on-zero-matches from tripping `set -e`.
+found="$(nm -D "$DEST/libnvdsinfer_custom_impl_Yolo.so" \
+    | grep -cE " T .*${EXPECTED_SYMBOL}$")" || true
+if [ "${found:-0}" -eq 0 ]; then
     echo "ERROR: expected parser symbol '${EXPECTED_SYMBOL}' not found in .so" >&2
     echo "Check DS_YOLO_REF or update parse-bbox-func-name in pgie_yolo11n.txt" >&2
     exit 1
-}
+fi
 echo "Parser symbol '${EXPECTED_SYMBOL}' verified."
