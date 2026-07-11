@@ -59,6 +59,10 @@ detector:
   # Stabilizer is still applied in Python on top of nvtracker output
   stabilize: true
   stabilize_confirm_frames: 3
+  # Cap the box-smoother jump allowance at 120px/frame regardless of box size,
+  # so a large (e.g. sail) box can't earn a ~200px/frame allowance and swing
+  # freely (the #10 jumping). Small boxes keep their tighter size-scaled limit.
+  stabilize_jump_max_px: 120
   # Base coast window kept short so a young/uncertain track dies fast (~0.7s at
   # 12 FPS) and never lingers as a phantom false target.
   stabilize_max_coast_frames: 8
@@ -87,16 +91,18 @@ detector:
   # A short window keeps the vessel number stable at the cost of re-numbering a
   # contact that both NvDCF and Python lose for >3 s (which is where the
   # cross-boat association happens anyway).
-  reid_max_gap_frames: 30
+  reid_max_gap_frames: 240
   # Sailboat re-id tuning — two gates relaxed from the global defaults:
   #
-  # reid_max_width_ratio 1.6→3.5: a deployed sail bbox is up to 3× the hull
-  # width. Log evidence showed width ratios of 3.0–3.5× for the same vessel
-  # (hull 301px, sail-extended track ~965px → 3.21×). The bottom-edge gate
-  # remains the safety net against merging different vessels: two boats at
-  # the same range share a waterline y; at different ranges they diverge by
-  # many hull-heights, so even a broad width tolerance is safe here.
-  reid_max_width_ratio: 3.5
+  # reid_max_width_ratio: a deployed sail bbox is up to ~3× the hull width, so
+  # this must tolerate sail<->hull flips. But 3.5 was loose enough to CHAIN a
+  # giant unstable sail box (~579px) down to small hull boxes (~46px) over
+  # several frames (each step < 3.5×), swinging one display id's box between
+  # them — the observed #10 jumping. Tightened 3.5→2.5 to break that chain;
+  # the bottom-edge gate still guards against merging different vessels.
+  # Trade-off: a genuine >2.5× sail<->hull flip may briefly split into two ids
+  # (watch for reintroduced flicker on real sailboats).
+  reid_max_width_ratio: 2.5
   #
   # reid_min_x_overlap 0.5→0.1: hull and hull+mast bboxes are sometimes
   # ADJACENT rather than overlapping — YOLO anchors the mast bbox on the
@@ -107,6 +113,25 @@ detector:
   # rejected. Width=1.12 and bottom=4px are well within all other gates,
   # so lowering to 0.1 is safe; the bottom gate carries the discrimination.
   reid_min_x_overlap: 0.1
+  # Two guards that make the long (240-frame) re-id memory safe against
+  # cross-boat ID jumps:
+  #
+  # reid_buffer_max_frac 0.25→0.10: the buffered-overlap widening is what let a
+  # NON-overlapping box be re-identified across a gap (it added ~37px of slack
+  # and bridged a 9px separation for the observed #15 jump). Capping the slack
+  # to ~15px pushes that match back below the overlap floor while still
+  # tolerating the small hull/mast bbox offsets.
+  reid_buffer_max_frac: 0.10
+  # reid_max_pred_frac 1.0: bound the velocity extrapolation to 1× the box
+  # width, so a noisy velocity over the 240-frame window cannot carry the
+  # predicted box across the frame onto a different vessel. Tightened 2.0→1.0
+  # after a borderline gap=33 jump=112px match — a moving-track re-acquisition
+  # must land within one box width of its last position.
+  reid_max_pred_frac: 1.0
+  # Re-id match/miss trace at INFO. On while tuning the gates above; set false
+  # (or unset VISION_REID_DEBUG) to silence once the ID jumps are confirmed
+  # gone. Also togglable at runtime with VISION_REID_DEBUG=1 (no config edit).
+  reid_debug: true
   max_area_frac: 0.4
   contained_frac: 0.8
   # Which detection model to run. Exactly ONE model is active at a time — they

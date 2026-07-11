@@ -71,6 +71,7 @@ def make_stabilizer(det) -> "TrackStabilizer | None":
         smooth=det.stabilize_smooth,
         smooth_window=det.stabilize_smooth_window,
         jump_tol=det.stabilize_jump_tol,
+        jump_max_px=det.stabilize_jump_max_px,
         jump_confirm=det.stabilize_jump_confirm_frames,
         lock_hits=det.stabilize_lock_hits,
         lock_coast_factor=det.stabilize_lock_coast_factor,
@@ -100,10 +101,11 @@ class _BoxSmoother:
     a solid one moves it."""
 
     def __init__(self, window: int, jump_tol: float, jump_confirm: int,
-                 conf_weight: bool = True):
+                 conf_weight: bool = True, jump_max_px: float = 0.0):
         self._boxes: deque[tuple[float, float, float, float, float]] = deque(
             maxlen=max(1, window))
         self._jump_tol = max(0.0, jump_tol)
+        self._jump_max_px = max(0.0, jump_max_px)
         self._jump_confirm = max(1, jump_confirm)
         self._conf_weight = conf_weight
         self._rejects = 0
@@ -124,11 +126,16 @@ class _BoxSmoother:
         # box smoothly across the flip instead of freezing then snapping. The
         # mast grows UPWARD, so anchoring on the bottom edge (not the box
         # center, which a height change would move) keeps the gate open for it.
+        # The size-scaled allowance is capped in absolute pixels (jump_max_px)
+        # so a large box can't earn a large permitted jump and swing freely.
         ax, ay, aw, ah = self._avg()
-        allowance = self._jump_tol * max(1, gap)
+        allowed = self._jump_tol * max(aw, ah)
+        if self._jump_max_px > 0:
+            allowed = min(allowed, self._jump_max_px)
+        allowed *= max(1, gap)
         shift = max(abs((tr.x + tr.w / 2.0) - (ax + aw / 2.0)),
                     abs((tr.y + tr.h) - (ay + ah)))
-        return shift <= allowance * max(aw, ah)
+        return shift <= allowed
 
     def apply(self, tr: RawTrack, seq: int) -> RawTrack:
         gap, self._last_seq = seq - self._last_seq, seq
@@ -190,7 +197,7 @@ class TrackStabilizer:
                  smooth: bool = True, smooth_window: int = 5,
                  jump_tol: float = 0.35, jump_confirm: int = 3,
                  lock_hits: int = 30, lock_coast_factor: float = 2.0,
-                 conf_weight: bool = True):
+                 conf_weight: bool = True, jump_max_px: float = 0.0):
         self.confirm_frames = max(1, confirm_frames)
         # MOB-critical: person tracks confirm faster (default: first frame).
         self.person_confirm_frames = max(1, person_confirm_frames)
@@ -208,6 +215,7 @@ class TrackStabilizer:
         self.smooth = smooth
         self.smooth_window = max(1, smooth_window)
         self.jump_tol = jump_tol
+        self.jump_max_px = max(0.0, jump_max_px)
         self.jump_confirm = jump_confirm
         self.conf_weight = conf_weight
         # Track lock: hits needed to earn the extended coast window (0 = off)
@@ -250,7 +258,7 @@ class TrackStabilizer:
                 if self.smooth:
                     s.smoother = _BoxSmoother(self.smooth_window,
                                               self.jump_tol, self.jump_confirm,
-                                              self.conf_weight)
+                                              self.conf_weight, self.jump_max_px)
             else:
                 s.conf = self.alpha * tr.confidence + (1 - self.alpha) * s.conf
                 s.last_seq = seq

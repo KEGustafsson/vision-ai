@@ -169,6 +169,14 @@ class DetectorConfig(BaseModel):
     # there. In-gate frames reset the count, so a recurring lone spike (glint,
     # marina cluster box) never accumulates acceptance.
     stabilize_jump_confirm_frames: int = 3
+    # Absolute cap (px per elapsed frame) on how far a box's waterline may shift
+    # and still be smoothed in. stabilize_jump_tol scales the allowance with box
+    # SIZE, so a large box (e.g. a ~579px sail) earns a ~200px/frame allowance
+    # and its drawn box swings freely — the observed #10 jumping. This caps the
+    # allowance in absolute pixels regardless of box size, so a big box is held
+    # as steady as a small one. The gate uses the SMALLER of the size-scaled and
+    # this absolute allowance. 0 disables the cap (size-scaled only).
+    stabilize_jump_max_px: float = 0.0
     # Track lock (the ByteTrack track_buffer / NvDCF shadow-tracking idea): a
     # track seen at least this many frames has proven itself real and may
     # coast stabilize_lock_coast_factor times longer than
@@ -230,6 +238,22 @@ class DetectorConfig(BaseModel):
     # vessel, even where the buffered gate would geometrically accept it.
     # Counterbalances the widened matching space above. 0 disables.
     reid_dir_min_speed_px: float = 2.0
+    # Prediction-reach cap: the largest distance (as a multiple of the wider
+    # box's width) that a re-id candidate's stored box may be advanced by its
+    # velocity before it is compared. Over a long reid_max_gap_frames window a
+    # noisy velocity would otherwise extrapolate the predicted box clear across
+    # the frame and "meet" a DIFFERENT vessel; a briefly occluded boat reappears
+    # NEAR where it was, so its reach is bounded. This is what keeps a long
+    # re-id memory (large gap) from turning into cross-boat ID jumps. 0 disables.
+    reid_max_pred_frac: float = 2.0
+    # Waterline re-id diagnostics. When true, the tracker logs every re-id MATCH
+    # (with the waterline jump distance, gap and both boxes) and every rejected
+    # candidate at INFO — the trace used to diagnose cross-boat ID jumps. Off by
+    # default (a busy scene makes it chatty). Flip on when investigating an ID
+    # that hops between targets; also settable at runtime via VISION_REID_DEBUG=1
+    # (no config edit). A legit hull<->mast flip logs jump~0; a big jump is a
+    # cross-boat association.
+    reid_debug: bool = False
     # Batch both cameras into a single inference (needs a batch-capable engine).
     # Removes the one-camera-at-a-time detector serialization. Falls back to
     # per-camera inference automatically when the engine is batch=1.
@@ -336,6 +360,11 @@ def _apply_env(raw: dict) -> dict:
     # DeepStream model selector (coco | forward-watch); see DetectorConfig.model.
     if "VISION_DETECTOR_MODEL" in env:
         det["model"] = env["VISION_DETECTOR_MODEL"]
+    # Re-id diagnostics toggle (see DetectorConfig.reid_debug). Lets an operator
+    # switch the waterline re-id match/miss logging on without editing config.
+    if "VISION_REID_DEBUG" in env:
+        det["reid_debug"] = env["VISION_REID_DEBUG"].strip().lower() in (
+            "1", "true", "yes", "on")
     # Per-camera URL overrides
     cams = {c["name"]: c for c in raw.get("cameras", [])}
     if "VISION_CAMERA_FORWARD_URL" in env and "forward" in cams:

@@ -40,6 +40,8 @@ def reid_options(det) -> dict:
         "reid_buffer_frac": det.reid_buffer_frac_per_frame,
         "reid_buffer_max": det.reid_buffer_max_frac,
         "reid_dir_min_speed": det.reid_dir_min_speed_px,
+        "reid_max_pred_frac": det.reid_max_pred_frac,
+        "reid_debug": det.reid_debug,
     }
 
 
@@ -49,7 +51,8 @@ class VelocityTracker:
                  reid_min_x_overlap: float = 0.5, reid_bottom_tol: float = 0.35,
                  reid_max_width_ratio: float = 3.0,
                  reid_buffer_frac: float = 0.03, reid_buffer_max: float = 0.25,
-                 reid_dir_min_speed: float = 2.0):
+                 reid_dir_min_speed: float = 2.0, reid_max_pred_frac: float = 2.0,
+                 reid_debug: bool = False):
         if id_min > id_max:
             raise ValueError(f"id_min ({id_min}) must be <= id_max ({id_max})")
         self._hist: Dict[int, Deque[Tuple[int, float, float]]] = {}
@@ -93,6 +96,8 @@ class VelocityTracker:
         # arXiv:2203.14360): a mover at/above this speed (px/frame) can only be
         # re-identified ALONG its direction of travel. 0 disables.
         self._reid_dir_min_speed = max(0.0, reid_dir_min_speed)
+        self._reid_max_pred = max(0.0, reid_max_pred_frac)
+        self._reid_debug = reid_debug
         self._ident: Dict[int, Tuple[float, float, float, float, str, int]] = {}
         self._alias: Dict[int, int] = {}
         # seq each alias was last resolved through, so aliases whose RAW id the
@@ -109,28 +114,42 @@ class VelocityTracker:
     def _alloc_display(self, track_id: int, seq: int) -> int:
         # Lowest free id whose quarantine (if recycled) has expired.
         skipped: list = []
+        chosen: Optional[int] = None
+        kind = ""
         try:
             while self._free:
                 cand = heapq.heappop(self._free)
+                freed = self._freed_at.get(cand)
                 if seq - self._freed_at.get(cand, -self._ID_QUARANTINE_FRAMES) \
                         >= self._ID_QUARANTINE_FRAMES:
                     self._freed_at.pop(cand, None)
-                    return cand
+                    chosen = cand
+                    kind = ("fresh" if freed is None
+                            else f"recycled(freed {seq - freed}f ago)")
+                    break
                 skipped.append(cand)
-            if skipped:
+            if chosen is None and skipped:
                 # Every free id is quarantined (heavy churn): take the one freed
                 # longest ago rather than colliding with a live id.
                 oldest = min(skipped, key=lambda c: self._freed_at.get(c, 0))
                 skipped.remove(oldest)
-                self._freed_at.pop(oldest, None)
-                return oldest
+                freed = self._freed_at.pop(oldest, None)
+                chosen = oldest
+                kind = ("quarantine-BYPASS(freed "
+                        f"{seq - freed if freed is not None else '?'}f ago)")
         finally:
             for c in skipped:
                 heapq.heappush(self._free, c)
-        # Pool exhausted (more live tracks than the range can hold): fall back to
-        # a wrapped value. May collide, but maxTargetsPerStream keeps this rare.
-        span = self._id_max - self._id_min + 1
-        return self._id_min + (track_id % span)
+        if chosen is None:
+            # Pool exhausted (more live tracks than the range can hold): fall
+            # back to a wrapped value. May collide, but maxTargetsPerStream
+            # keeps this rare.
+            span = self._id_max - self._id_min + 1
+            chosen = self._id_min + (track_id % span)
+            kind = "WRAP(pool exhausted)"
+        if self._reid_debug:
+            _log.info("display ALLOC id=%d raw=%d %s", chosen, track_id, kind)
+        return chosen
 
     def display_id(self, track_id: int) -> Optional[int]:
         """Bounded display id for a raw track id, or ``None`` if it was never
@@ -158,6 +177,20 @@ class VelocityTracker:
         if self._reid and label != "person" and canon not in self._hist:
             match = self._match_identity(track_id, seq, x, y, w, h, label)
             if match is not None:
+                # Diagnostics (reid_debug): log every new re-id alias with its
+                # waterline jump. A legit hull<->mast flip jumps ~0; a big jump
+                # is a cross-boat association. See DetectorConfig.reid_debug.
+                if self._reid_debug and self._alias.get(track_id) != match:
+                    ox, oy, ow, oh, _, oseq = self._ident.get(
+                        match, (x, y, w, h, label, seq))
+                    jump = math.hypot((x + w / 2.0) - (ox + ow / 2.0),
+                                      (y + h) - (oy + oh))
+                    _log.info(
+                        "reid MATCH jump=%.0fpx: raw=%d->canon=%d display %s<-%s "
+                        "gap=%d new=(%.0f,%.0f,%.0f,%.0f) old=(%.0f,%.0f,%.0f,%.0f)",
+                        jump, track_id, match, self._display.get(match),
+                        self._display.get(track_id), seq - oseq,
+                        x, y, w, h, ox, oy, ow, oh)
                 canon = match
                 self._alias[track_id] = canon
                 self._alias_seen[track_id] = seq
@@ -195,7 +228,7 @@ class VelocityTracker:
         best: Optional[int] = None
         best_ov = self._reid_min_x_overlap
         bottom = y + h
-        dbg = _log.isEnabledFor(logging.DEBUG)
+        dbg = self._reid_debug or _log.isEnabledFor(logging.DEBUG)
         misses: Optional[List[str]] = [] if dbg else None
         for tid, (ix, iy, iw, ih, ilabel, iseq) in self._ident.items():
             if tid == track_id or ilabel != label:
@@ -216,7 +249,16 @@ class VelocityTracker:
                         f">{self._reid_max_width_ratio} new_w={w:.0f} old_w={iw:.0f}")
                 continue
             pvx, pvy = self._last_velocity(tid)
-            px, pb = ix + pvx * gap, (iy + ih) + pvy * gap
+            # Cap how far the velocity may extrapolate the stored box: over a long
+            # gap a noisy velocity would otherwise fling the predicted box across
+            # the frame to "meet" a DIFFERENT vessel. A briefly occluded boat
+            # reappears near where it was, so bound the reach to a few box widths.
+            dxp, dyp = pvx * gap, pvy * gap
+            if self._reid_max_pred > 0:
+                reach, cap = math.hypot(dxp, dyp), self._reid_max_pred * max(w, iw)
+                if reach > cap:
+                    dxp, dyp = dxp * cap / reach, dyp * cap / reach
+            px, pb = ix + dxp, (iy + ih) + dyp
             buf_frac = min(self._reid_buffer_max, self._reid_buffer_frac * gap)
             ov = (min(x + w, px + iw) - max(x, px)
                   + 2.0 * buf_frac * min_w) / min_w
@@ -246,7 +288,7 @@ class VelocityTracker:
                     continue
             best, best_ov = tid, ov
         if misses and best is None:
-            _log.debug(
+            (_log.info if self._reid_debug else _log.debug)(
                 "reid miss: new raw=%d %s box=(%.0f,%.0f,%.0f,%.0f) bot=%.0f"
                 " rejected %d candidate(s): %s",
                 track_id, label, x, y, w, h, bottom,
