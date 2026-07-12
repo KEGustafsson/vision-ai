@@ -1,7 +1,11 @@
 ################################################################################
 # NvMultiObjectTracker (NvDCF) configuration for vision-ai DeepStream pipeline.
 #
-# Performance-tuned for 2 cameras at 12 FPS on Jetson Orin Nano.
+# Performance-tuned for 2 cameras on Jetson Orin Nano. NOTE ON RATES: the
+# pipeline TARGETS 12 FPS, but the MEASURED per-camera event rate on this box
+# is ~6 FPS (2026-07 live measurement) — every frame-count window below lasts
+# about twice as long in wall time as a 12 FPS reading of it would suggest.
+# Wall-time comments in this file use the measured ~6 FPS.
 # Reference: /opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app/
 #            config_tracker_NvDCF_perf.yml (and *_accuracy.yml for ReAssoc)
 #
@@ -27,7 +31,7 @@ TargetManagement:
   enableBboxUnClipping: 1
   # Max simultaneous tracked targets per camera stream. This cap counts
   # SHADOW-tracked targets too (lost ids kept alive up to
-  # maxShadowTrackingAge, 20 s here) — once full, NEW detections are
+  # maxShadowTrackingAge, ~40 s here) — once full, NEW detections are
   # discarded, so it must be sized for live targets (detector max_det = 20)
   # PLUS shadow headroom, or a burst of dropouts could block a genuinely new
   # target (worst case: a person) from ever being tracked. 3x max_det keeps
@@ -42,10 +46,13 @@ TargetManagement:
   # Aligned with stabilizer.stabilize_confirm_frames (default 3).
   probationAge: 3
   # Shadow-track age: how many frames a lost target keeps its ID alive
-  # (inactive, not reported) before it is terminated. 240 frames ≈ 20 s at the
-  # pipeline's ~12 FPS, so a vessel occluded by waves/another boat for up to
-  # 20 s is re-acquired with the SAME track ID — which also keeps its SignalK
-  # blip identity (VIS-<camera>-<id>) stable. Drawing-side coasting is separate
+  # (inactive, not reported) before it is terminated. 240 frames ≈ 40 s at the
+  # measured ~6 FPS, so a vessel occluded by waves/another boat for that long
+  # is re-acquired with the SAME track ID — which also keeps its SignalK
+  # blip identity stable. COUPLING: the Python side must retain its per-track
+  # state at least this long (detector.track_memory_frames >= 240), or a
+  # shadow-reacquired raw id finds its display id already freed and the vessel
+  # reblips under a new identity anyway. Drawing-side coasting is separate
   # and stays short (stabilizer.stabilize_max_coast_frames): shadow targets are
   # not drawn while lost, they just retain the number.
   maxShadowTrackingAge: 240
@@ -68,17 +75,18 @@ TrajectoryManagement:
   # needs no ReID network, so it is nearly free on the Orin Nano.
   enableReAssoc: 1
   # Trajectory-projection windows, rescaled from the stock accuracy preset
-  # (tuned for ~30 FPS pedestrians) to this pipeline's ~12 FPS and slow
-  # marine relative motion: require ~1.5 s of history before a tracklet may
-  # be projected, prepare the projection from the last ~4 s, and project
-  # ~5 s ahead.
+  # (tuned for ~30 FPS pedestrians) to this pipeline's frame rate and slow
+  # marine relative motion (at the measured ~6 FPS: require ~3 s of history
+  # before a tracklet may be projected, prepare the projection from the last
+  # ~8 s, and project ~10 s ahead).
   minTrajectoryLength4Projection: 18
   prepLength4TrajectoryProjection: 48
   trajectoryProjectionLength: 60
   # How far back in time (frames) a candidate tracklet may reach to match a
-  # lost one: 120 ≈ 10 s at 12 FPS, half the shadow age, so re-association
-  # covers wave/wake occlusions without bridging two different passers-by
-  # across the whole 20 s shadow window.
+  # lost one: 120 ≈ 20 s at the measured ~6 FPS, half the shadow age, so
+  # re-association covers wave/wake occlusions without bridging two different
+  # passers-by across the whole ~40 s shadow window. The Python waterline
+  # re-id (detector.reid_max_gap_frames) is aligned to this same 120.
   maxTrackletMatchingTimeSearchRange: 120
   # Matching gates (stock accuracy-preset values): angular / speed / size
   # agreement between the projected and the candidate tracklet.

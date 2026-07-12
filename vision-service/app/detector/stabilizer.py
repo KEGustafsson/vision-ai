@@ -216,6 +216,20 @@ class TrackStabilizer:
         person tracks so they aren't held back by the generic false-positive gate."""
         return self.person_confirm_frames if label == "person" else self.confirm_frames
 
+    def _steadier(self, tid: int, a: RawTrack, b: RawTrack) -> RawTrack:
+        """Of two same-id boxes in one frame, the one closer (waterline
+        anchor) to the track's currently shown box; confidence breaks the tie
+        and decides for a track with no shown box yet."""
+        s = self._st.get(tid)
+        if s is not None:
+            rx = s.track.x + s.track.w / 2.0
+            rb = s.track.y + s.track.h
+            da = abs(a.x + a.w / 2.0 - rx) + abs(a.y + a.h - rb)
+            db = abs(b.x + b.w / 2.0 - rx) + abs(b.y + b.h - rb)
+            if da != db:
+                return a if da < db else b
+        return a if a.confidence >= b.confidence else b
+
     def update(self, tracks: list[RawTrack], seq: int, conf_on: float) -> list[RawTrack]:
         conf_off = conf_on * self.hysteresis_ratio
         out: list[RawTrack] = []
@@ -228,10 +242,18 @@ class TrackStabilizer:
             else:
                 # Waterline re-id can put the same id on two boxes in ONE frame
                 # (a partial and a full detection of the same vessel co-occur);
-                # keep only the stronger so one target never draws two boxes.
+                # keep only one so a target never draws two boxes. The keeper
+                # is the box CLOSEST to the track's currently shown box, not
+                # the confidence winner: duplicate extents run neck-and-neck
+                # in confidence, so the winner would flip between them frame
+                # to frame and the drawn box (and its range) would flap ~a
+                # box-width each flip. Confidence only breaks the tie for a
+                # track we aren't showing yet.
                 prev = seen.get(tr.track_id)
-                if prev is None or tr.confidence > prev.confidence:
+                if prev is None:
                     seen[tr.track_id] = tr
+                else:
+                    seen[tr.track_id] = self._steadier(tr.track_id, prev, tr)
 
         # Tracks detected this frame: refresh state, smooth confidence and box,
         # emit if confirmed and above the lower (off) threshold. The box filter

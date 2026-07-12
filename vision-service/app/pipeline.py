@@ -311,6 +311,7 @@ class CameraWorker(threading.Thread):
             piw = is_person_in_water(tr.label, tr.y + tr.h, horizon_y)
             targets.append(Target(
                 track_id=tr.track_id,
+                stable_id=tr.stable_id,
                 label=tr.label,
                 coco_class=tr.cls,
                 confidence=tr.confidence,

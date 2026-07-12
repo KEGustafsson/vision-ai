@@ -160,7 +160,8 @@ class YoloTorchDetector(Detector):
                 max_det=max_det, verbose=False,
             )
             self._trackers[stream] = self._model.predictor.trackers
-            vel = self._vels.setdefault(stream, VelocityTracker(**self._reid_opts))
+            vel = self._vels.setdefault(stream, VelocityTracker(
+                frame_w=float(frame.image.shape[1]), **self._reid_opts))
             tracks = self._parse(results, frame, vel)
             if max_det is not None:
                 tracks = sorted(tracks, key=lambda tr: tr.confidence, reverse=True)[:max_det]
@@ -191,7 +192,8 @@ class YoloTorchDetector(Detector):
                     result = result[idx]
                     result.update(boxes=torch.as_tensor(tracks[:, :-1]))
                 # else: leave raw boxes (no ids), matching Ultralytics behaviour
-                vel = self._vels.setdefault(s, VelocityTracker(**self._reid_opts))
+                vel = self._vels.setdefault(s, VelocityTracker(
+                    frame_w=float(batch[s][0].image.shape[1]), **self._reid_opts))
                 trk = self._parse([result], batch[s][0], vel)
                 md = batch[s][1]
                 if md is not None:
@@ -231,6 +233,7 @@ class YoloTorchDetector(Detector):
             vx = vy = 0.0
             age = 0
             disp = tid
+            stable = None
             if tid is not None:
                 # Waterline re-id first: a partial re-detection (hull only) of a
                 # known target must continue that track, not mint a new id. All
@@ -240,8 +243,10 @@ class YoloTorchDetector(Detector):
                 tid = vel.resolve(tid, frame.seq, x1, y1, w, h, label)
                 vx, vy, age = vel.update(tid, frame.seq, x1 + w / 2, y1 + h)
                 disp = vel.display_id(tid)
+                stable = vel.stable_id(tid)
                 active.add(tid)
-            out.append(RawTrack(track_id=disp, cls=cls, label=label, confidence=conf,
+            out.append(RawTrack(track_id=disp, stable_id=stable, cls=cls,
+                                label=label, confidence=conf,
                                 x=x1, y=y1, w=w, h=h, vx=vx, vy=vy, age_frames=age))
         vel.prune(active, frame.seq)
         return out

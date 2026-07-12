@@ -96,7 +96,8 @@ export = function (app: ServerApp): Plugin {
   // Only update the target map here; the heavy fusion/CPA/notify/publish work
   // is debounced to a fixed cadence in processCycle() so it doesn't scale with
   // (and flap at) the camera frame rate. Tracked detections are keyed by
-  // camera.track_id; untracked boxes are dropped (no stable key for CPA/fusion
+  // camera.stable_id (falling back to the recycled camera.track_id for older
+  // containers); untracked boxes are dropped (no stable key for CPA/fusion
   // persistence) EXCEPT untracked person-in-water, which is a man-overboard
   // candidate too important to discard (see below).
   function handleEvent(ev: DetectionEvent): void {

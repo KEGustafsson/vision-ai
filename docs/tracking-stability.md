@@ -21,8 +21,11 @@ Backend tracker              ByteTrack / BoT-SORT (torch, tensorrt)  or  NvDCF (
 Waterline re-identification  app/detector/tracker.py  VelocityTracker.resolve()
   │   canonical ids            one id per hull, across partial/full box flips & dropouts
   ▼
-Display-id allocator         app/detector/tracker.py  (2-digit ids, recycled + quarantined)
-  │
+Alternation merge + split    app/detector/tracker.py  _merge_alternating() / _check_split()
+  │   repairs a vessel that already holds two live tracks; reversible
+  ▼
+Display ids + stable serial  app/detector/tracker.py  (2-digit ids, recycled + quarantined;
+  │                           stable_id: per-session serial, never recycled)
   ▼
 Track stabilizer             app/detector/stabilizer.py  TrackStabilizer
   │   confirm debounce · confidence hysteresis · coasting + track lock
@@ -66,13 +69,18 @@ more — from [NvDCF][nvdcf] in `vision-service/deepstream/nvdcf_config.yml`:
   wave-induced apparent motion. Note the section names are DeepStream
   6.x/7.x format — the parser silently ignores unknown sections, so a stale
   5.x-style `DCF:` block means the visual tracker runs on defaults.
-- **Shadow tracking** (`maxShadowTrackingAge: 240`, ~20 s): a lost target
-  keeps its id alive (unreported) and is re-acquired under the same number.
+- **Shadow tracking** (`maxShadowTrackingAge: 240`, ~40 s at the measured
+  ~6 FPS per camera): a lost target keeps its id alive (unreported) and is
+  re-acquired under the same number. COUPLING: the Python side must retain
+  its per-track state at least as long (`detector.track_memory_frames`,
+  default 260) or a shadow-reacquired raw id finds its display id already
+  freed and the vessel re-blips under a new identity anyway.
 - **Motion-based re-association** (`enableReAssoc: 1`, DeepStream 6.2+): a
   lost tracklet's trajectory is projected forward and a newborn tracklet
   matching it in position/velocity/size is re-linked to the old id — the
   tracker-level cure for dropout-induced id switches, with no ReID network
-  cost. Projection windows are rescaled for ~12 FPS marine motion.
+  cost. Projection windows are rescaled for slow marine motion at the
+  pipeline's frame rate.
 - **Cascaded association** (`associationMatcherType: 1`): confirmed targets
   match before tentative ones, so a flickery newborn can't steal a confirmed
   vessel's detection; the size-similarity gate is relaxed (0.6 → 0.4) so a
@@ -113,13 +121,62 @@ Two association refinements come from the MOT literature:
   vessel, even where the widened buffered gate would geometrically accept
   it — the momentum gate counterbalances the buffer.
 
-## Layer 3 — display ids
+Two practical gate details: `reid_max_gap_frames` (default 120) is aligned
+with NvDCF's re-association search range so both layers give up on a dropout
+at the same age, and the hull-width gate **stands down for frame-edge-clipped
+boxes** — a box cut off by the left/right frame edge has whatever width
+happened to fit on screen (observed live: a vessel exiting frame-right churned
+through four ids because each re-entry width failed the gate).
+
+## Layer 2b — alternation merge, and its undo (`_merge_alternating` / `_check_split`)
+
+The birth-time re-id above gets exactly one chance per raw id. If the gates
+momentarily failed then (pitch, a bad first box), the vessel ends up holding
+**two live tracks** — typically a hull track and a hull+mast track — that take
+turns being detected, and its number, box extent and published range flap
+between the two forever (measured live: pairs alternating 60–1250 times per
+15 min). The merge pass repairs this: a same-footprint pair accumulates
+**alternation evidence** (one side detected while the other is briefly dark),
+required from *both* sides so a newcomer can never swallow a departed
+neighbour's identity; enough evidence merges the younger track into the older,
+which keeps its display id, serial and age.
+
+Same-frame co-detections carry the discriminating signal:
+
+- **Side by side** (horizontal overlap 0.5–0.8 of the narrower box): two
+  simultaneous detections are two real vessels — the pair is blocked from
+  merging and its evidence reset. Boats genuinely moored alongside keep
+  co-occurring, so they stay apart.
+- **Nested** (≥ 0.8, the same signature the contained-duplicate drop uses):
+  the routine hull-inside-full double box of a *single* vessel — nested boxes
+  survive NMS, so the raw tracker sees both together even though the event
+  shows only one. This counts *for* the merge, on both sides at once: a hull
+  track co-detected under its mast track never goes dark, so nested
+  co-detections are the only evidence such a pair can produce.
+
+Merges are **reversible**: two raw ids resolving to one canonical in the same
+frame at *disjoint* footprints contradict the alias binding them, and enough
+contradiction frames dissolve it (the pair is then co-blocked from an
+immediate re-merge). This is the safety valve for a pair merged while
+genuinely co-located that later separates. `person` is exempt from all of it,
+as everywhere in re-id.
+
+## Layer 3 — display ids and the stable serial
 
 Raw tracker ids grow without bound; emitted detections carry a compact
 2-digit display id (10–99, per camera). Lowest-free-first allocation keeps
-numbers small and familiar; a freed id is **quarantined** for ~15 s so a
-number that just left one vessel cannot reappear on a different one while
-the operator still associates it with the first.
+numbers small and familiar; a freed id is **quarantined** for 150 frames
+(~25 s at the measured ~6 FPS) so a number that just left one vessel cannot
+reappear on a different one while the operator still associates it with the
+first. Idle-track identity (velocity history, display id, serial) is retained
+for `track_memory_frames` (default 260) — deliberately past NvDCF's shadow
+window, so a shadow-reacquired raw id walks back into its existing ids.
+
+Because the 2-digit pool is recycled, events also carry **`stable_id`**: a
+per-camera, per-session serial that is never reused. Downstream identity —
+the SignalK blip name/context `VIS-<camera>-<stable_id>` — keys on it, so a
+chart contact can never change physical vessel mid-session; `track_id` stays
+the number drawn on the video overlay.
 
 ## Layer 4 — track stabilizer (`TrackStabilizer`)
 
@@ -148,6 +205,13 @@ Per-track lifecycle over the canonical ids:
   emitted, until the leap persists `stabilize_jump_confirm_frames` frames and
   is accepted as real. Deliberately observation-only: no motion model, no
   prediction.
+- **Same-frame duplicate continuity** — re-id/merge can put one id on two
+  boxes in a frame (a partial and a full detection of the same vessel
+  co-occur). The keeper is the box *closest to the track's currently shown
+  box*, not the confidence winner: duplicate extents run neck-and-neck in
+  confidence, so the winner would flip between them frame to frame and the
+  drawn box (and its range) would flap ~a box-width each flip. The velocity
+  anchor applies the same continuity rule to its one-sample-per-frame choice.
 
 ## Layer 5 — sticky output cap
 
@@ -162,8 +226,11 @@ targets can't swap the last slot (and blink) on every confidence wobble.
 |---|---|
 | Box blinks off for a frame or two | raise `stabilize_max_coast_frames` |
 | Established vessel drops id after a long wave occlusion | raise `stabilize_lock_hits`/`stabilize_lock_coast_factor`, or `track_buffer` in the tracker preset (deepstream: `maxShadowTrackingAge`, `maxTrackletMatchingTimeSearchRange`), or `reid_max_gap_frames` |
+| Vessel re-blips as a NEW identity after a long dropout | `track_memory_frames` must exceed the backend's shadow window (deepstream: `maxShadowTrackingAge`) |
 | (deepstream) same vessel gets a new id after every dropout | check `enableReAssoc: 1` is set and the config uses 6.x/7.x section names (a 5.x `DCF:` block is silently ignored) |
-| Same vessel alternates between two numbers | waterline re-id gates too tight: `reid_min_x_overlap`, `reid_buffer_frac_per_frame` |
+| Same vessel alternates between two numbers | should self-heal via the alternation merge within seconds; if not, its evidence gates (`VelocityTracker._MERGE_*`) or the re-id footprint gates (`reid_min_x_overlap`, `reid_buffer_frac_per_frame`) are rejecting the pair |
+| One id flaps between two separated places | a wrong/stale merge mid-dissolve — the split (`_SPLIT_CONFIRM` contradiction frames) undoes it; persistent flapping means the two boxes still overlap ambiguously (0.5–0.8) |
+| Vessel exiting the frame edge churns ids | the width gate already stands down for edge-clipped boxes; check the box actually touches the edge (within 2 px) |
 | A departed vessel's id lands on a newcomer | tighten `reid_max_width_ratio`, raise `reid_dir_min_speed_px`, lower `reid_max_gap_frames` |
 | Everything loses lock together in a seaway | already on `botsort_marine.yaml` (GMC) by default in `jetson` mode; check `gmc_method` didn't get reverted, or a near-featureless sea is starving optical flow of anchors |
 | Boxes jitter / breathe | raise `stabilize_smooth_window`; check `stabilize_conf_weight` is on |

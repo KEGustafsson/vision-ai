@@ -49,4 +49,11 @@ describe('enrichTarget', () => {
     const t = enrichTarget(raw(0, 500), 'aft', own, cfg, 0);
     expect(t.key).toBe('aft.1');
   });
+
+  it('key prefers the never-recycled stable_id over the display track_id', () => {
+    // The 2-digit track_id is recycled per camera, so keying on it would hand
+    // a dead target's history to whichever new vessel inherits the number.
+    const t = enrichTarget({ ...raw(0, 500), stable_id: 137 }, 'aft', own, cfg, 0);
+    expect(t.key).toBe('aft.137');
+  });
 });

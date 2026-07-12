@@ -165,8 +165,21 @@
             }
           ],
           "default": null,
-          "description": "Stable tracking id in the range 10-99 (recycled per camera), or null if untracked.",
+          "description": "Display tracking id in the range 10-99 (recycled per camera after a quarantine, so over a session one number can name different vessels), or null if untracked.",
           "title": "Track Id"
+        },
+        "stable_id": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Per-session track serial (per camera): monotonically increasing and never recycled, so it names one physical target for the whole session. Preferred over track_id for downstream identity; null if untracked.",
+          "title": "Stable Id"
         },
         "label": {
           "title": "Label",

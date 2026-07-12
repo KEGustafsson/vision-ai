@@ -96,9 +96,10 @@ class MockDetector(Detector):
             active.add(canon)
             vx, vy, age = state["tracker"].update(canon, seq, cx, y + h)
             disp = state["tracker"].display_id(canon)
-            tracks.append(RawTrack(track_id=disp, cls=cls, label=label,
-                                   confidence=conf, x=x, y=y, w=w, h=h,
-                                   vx=vx, vy=vy, age_frames=age))
+            stable = state["tracker"].stable_id(canon)
+            tracks.append(RawTrack(track_id=disp, stable_id=stable, cls=cls,
+                                   label=label, confidence=conf, x=x, y=y,
+                                   w=w, h=h, vx=vx, vy=vy, age_frames=age))
         state["prev"] = new_prev
         state["tracker"].prune(active, seq)
         return tracks

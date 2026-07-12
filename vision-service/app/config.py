@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
@@ -191,12 +191,17 @@ class DetectorConfig(BaseModel):
     # behind another) can be fused while they overlap; the thresholds below
     # keep that window narrow.
     reid: bool = True
-    # How many frames back a disappeared track can be re-identified (~4 s at
-    # 10 fps), so a vessel that drops out for a few seconds re-acquires its id
-    # instead of appearing as a new target. A NEW vessel arriving in the spot
-    # is kept from inheriting the id by the width-similarity and
-    # motion-prediction gates below, not by keeping this window tight.
-    reid_max_gap_frames: int = 40
+    # How many frames back a disappeared track can be re-identified (~20 s at
+    # the measured ~6 FPS per camera), so a vessel that drops out re-acquires
+    # its id instead of appearing as a new target. Aligned with the NvDCF
+    # re-association search range (maxTrackletMatchingTimeSearchRange = 120 in
+    # nvdcf_config.yml): the tracker and the waterline re-id give up on a
+    # dropout at the same age. A NEW vessel arriving in the spot is kept from
+    # inheriting the id by the width-similarity and motion-prediction gates
+    # below (the buffered-gate widening is capped at reid_buffer_max_frac, so a
+    # long gap does not judge loosely without bound), not by keeping this
+    # window tight.
+    reid_max_gap_frames: int = 120
     # Minimum horizontal overlap, as a fraction of the narrower box's width.
     reid_min_x_overlap: float = 0.5
     # Max bottom-edge (waterline) misalignment, as a fraction of the SHORTER
@@ -223,6 +228,16 @@ class DetectorConfig(BaseModel):
     # vessel, even where the buffered gate would geometrically accept it.
     # Counterbalances the widened matching space above. 0 disables.
     reid_dir_min_speed_px: float = 2.0
+    # How long an idle track's identity (velocity history, display id, wire
+    # stable_id) is retained before being pruned. MUST cover the deepest
+    # backend resurrection window — NvDCF shadow tracking holds a lost raw id
+    # for maxShadowTrackingAge frames (240 in nvdcf_config.yml) and re-acquires
+    # the vessel with the SAME raw id; retaining for less means that reborn
+    # track finds its display id freed + quarantined and the same vessel
+    # reblips on the chart under a fresh identity. Also must exceed
+    # reid_max_gap_frames, or the waterline re-id's candidate footprints are
+    # forgotten before the gap closes. ~43 s at the measured ~6 FPS per camera.
+    track_memory_frames: int = 260
     # Batch both cameras into a single inference (needs a batch-capable engine).
     # Removes the one-camera-at-a-time detector serialization. Falls back to
     # per-camera inference automatically when the engine is batch=1.
@@ -248,6 +263,23 @@ class DetectorConfig(BaseModel):
     # load instead of silently falling back to the COCO class map and
     # mislabeling every detection at runtime.
     model: Literal["coco", "forward-watch", "marine-surveillance"] = "coco"
+
+    @model_validator(mode="after")
+    def _identity_retention_covers_reid(self) -> "DetectorConfig":
+        """Fail at config load, not silently at runtime: identity retention
+        shorter than the re-id gap means the waterline re-id's candidate
+        footprints are pruned before the gap closes — re-id quietly stops
+        working for exactly the long dropouts it exists to bridge. (The other
+        coupling, track_memory_frames >= NvDCF maxShadowTrackingAge, cannot be
+        checked here: nvdcf_config.yml is an OpenCV-FileStorage file parsed by
+        DeepStream itself, not by this config — it is documented on both
+        sides instead.)"""
+        if self.track_memory_frames < self.reid_max_gap_frames:
+            raise ValueError(
+                f"track_memory_frames ({self.track_memory_frames}) must be >= "
+                f"reid_max_gap_frames ({self.reid_max_gap_frames}): idle-track "
+                "identity would be pruned before the re-id window closes")
+        return self
 
 
 class ServerConfig(BaseModel):
