@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Dict, List, Literal, Optional
 
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 CONFIG_DIR = Path(__file__).resolve().parent.parent / "config"
 
@@ -263,6 +263,23 @@ class DetectorConfig(BaseModel):
     # load instead of silently falling back to the COCO class map and
     # mislabeling every detection at runtime.
     model: Literal["coco", "forward-watch", "marine-surveillance"] = "coco"
+
+    @model_validator(mode="after")
+    def _identity_retention_covers_reid(self) -> "DetectorConfig":
+        """Fail at config load, not silently at runtime: identity retention
+        shorter than the re-id gap means the waterline re-id's candidate
+        footprints are pruned before the gap closes — re-id quietly stops
+        working for exactly the long dropouts it exists to bridge. (The other
+        coupling, track_memory_frames >= NvDCF maxShadowTrackingAge, cannot be
+        checked here: nvdcf_config.yml is an OpenCV-FileStorage file parsed by
+        DeepStream itself, not by this config — it is documented on both
+        sides instead.)"""
+        if self.track_memory_frames < self.reid_max_gap_frames:
+            raise ValueError(
+                f"track_memory_frames ({self.track_memory_frames}) must be >= "
+                f"reid_max_gap_frames ({self.reid_max_gap_frames}): idle-track "
+                "identity would be pruned before the re-id window closes")
+        return self
 
 
 class ServerConfig(BaseModel):

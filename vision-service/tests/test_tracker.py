@@ -653,3 +653,35 @@ def test_velocity_anchor_prefers_continuity_over_call_order():
     vx, vy, _ = vt.update(1, 3, cx=201.0, cy=400.0)  # true box second
     vx, vy, _ = vt.update(1, 4, cx=201.0, cy=400.0)
     assert abs(vx) < 1.0 and abs(vy) < 1.0
+
+
+def test_wrong_merge_dissolves_when_tracks_stack_vertically():
+    # Same-frame double resolution with heavy X-overlap but SEPARATED bottom
+    # edges is two targets at different ranges, not a nested duplicate — the
+    # split must fire on it just like on horizontally disjoint boxes.
+    vt = VelocityTracker()
+    for seq in range(4):
+        _frame(vt, seq, [(1, FULL)])
+    _frame(vt, 4, [(2, BAD_BIRTH)])
+    for seq in range(5, 40):                 # alternation earns the merge
+        raw, box = (1, FULL) if seq % 2 else (2, HULL)
+        _frame(vt, seq, [(raw, box)])
+    assert vt.resolve(2, 40, HULL["x"], HULL["y"], HULL["w"], HULL["h"],
+                      "vessel") == 1
+    stacked = dict(HULL, y=HULL["y"] - 150.0)  # same x-extent, waterline apart
+    for seq in range(41, 60):
+        _frame(vt, seq, [(1, HULL), (2, stacked)])
+    assert vt.resolve(2, 60, stacked["x"], stacked["y"], stacked["w"],
+                      stacked["h"], "vessel") == 2
+
+
+def test_serial_counter_carries_across_tracker_replacement():
+    # A supervised pipeline rebuild replaces the tracker; the replacement is
+    # seeded with the predecessor's counter so stable ids never repeat within
+    # one service session.
+    old = VelocityTracker()
+    for raw in (1, 2, 3):
+        old.update(raw, seq=0, cx=0.0, cy=0.0)
+    new = VelocityTracker(serial_start=old.next_serial)
+    new.update(1, seq=0, cx=0.0, cy=0.0)
+    assert new.stable_id(1) == 4

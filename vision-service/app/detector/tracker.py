@@ -50,7 +50,8 @@ class VelocityTracker:
                  reid_max_width_ratio: float = 1.6,
                  reid_buffer_frac: float = 0.03, reid_buffer_max: float = 0.25,
                  reid_dir_min_speed: float = 2.0,
-                 max_idle: int = 260, frame_w: Optional[float] = None):
+                 max_idle: int = 260, frame_w: Optional[float] = None,
+                 serial_start: int = 1):
         if id_min > id_max:
             raise ValueError(f"id_min ({id_min}) must be <= id_max ({id_max})")
         self._hist: Dict[int, Deque[Tuple[int, float, float]]] = {}
@@ -77,8 +78,11 @@ class VelocityTracker:
         # long session the same 2-digit number legitimately names different
         # vessels; downstream identity (SignalK blip name/URN) keys on this
         # serial instead, so a chart contact can never change physical vessel.
+        # serial_start lets a REPLACEMENT tracker (supervised pipeline rebuild
+        # after an RTSP/decoder fault) continue its predecessor's counter —
+        # "per session" means the service session, not one pipeline's lifetime.
         self._serial: Dict[int, int] = {}
-        self._next_serial = 1
+        self._next_serial = max(1, int(serial_start))
         # Min-heap of free ids (lowest allocated first) + when each recycled id
         # was freed, for the quarantine check.
         self._free: list = list(range(id_min, id_max + 1))
@@ -212,6 +216,13 @@ class VelocityTracker:
         ``None`` if the id was never registered via :meth:`update`."""
         return self._serial.get(track_id)
 
+    @property
+    def next_serial(self) -> int:
+        """The serial the next new track will receive. Seed a replacement
+        tracker's ``serial_start`` from this so stable ids stay unique across
+        pipeline rebuilds within one service session."""
+        return self._next_serial
+
     def _edge_clipped(self, x: float, w: float) -> bool:
         """True when a box touches the left/right frame edge (within
         _EDGE_MARGIN_PX), i.e. its detected width is clipped and unreliable.
@@ -274,10 +285,17 @@ class VelocityTracker:
         px, py, pw, ph = prev[2:]
         min_w = min(w, pw)
         ov = (min(x + w, px + pw) - max(x, px)) / min_w if min_w > 0 else 1.0
-        if ov >= self._CO_DISTINCT_MAX_OVERLAP:
+        # The nested-duplicate reading requires BOTH containment and a shared
+        # waterline: two boxes stacked on separated bottom edges are two
+        # targets at different ranges however much their x-extents overlap,
+        # so a misaligned waterline is a contradiction like disjoint boxes.
+        min_h = min(h, ph)
+        aligned = min_h > 0 and \
+            abs((y + h) - (py + ph)) <= self._reid_bottom_tol * min_h
+        if aligned and ov >= self._CO_DISTINCT_MAX_OVERLAP:
             self._split_evidence.pop(canon, None)
             return None
-        if ov >= self._reid_min_x_overlap:
+        if aligned and ov >= self._reid_min_x_overlap:
             return None
         n = self._split_evidence.get(canon, 0) + 1
         if n < self._SPLIT_CONFIRM:

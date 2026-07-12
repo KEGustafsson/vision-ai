@@ -312,6 +312,12 @@ class DeepStreamPipeline:
             self._src_idx_to_name[i] = cam.name
             stab = make_stabilizer(d)
             with self._lock:
+                # A supervised rebuild replaces the whole _StreamState, but the
+                # stable_id counter must survive it: a repeated serial would
+                # rebind a blip identity (VIS-<cam>-<n>) to a different vessel
+                # within the same service session.
+                prev = self._states.get(cam.name)
+                serial_start = prev.vel.next_serial if prev is not None else 1
                 self._states[cam.name] = _StreamState(
                     cam=cam, settings=self.settings, stabilizer=stab,
                     confidence=self._confidence, allowed_labels=self._allowed_labels,
@@ -325,6 +331,7 @@ class DeepStreamPipeline:
                     # so the re-id edge-clip relaxation must judge against the
                     # mux width, not the inference square.
                     vel=VelocityTracker(frame_w=float(d.mux_width),
+                                        serial_start=serial_start,
                                         **reid_options(d)),
                 )
 
