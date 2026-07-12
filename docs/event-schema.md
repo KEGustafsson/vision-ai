@@ -28,7 +28,8 @@ that schema, so the two sides cannot silently drift.
   "calibration_status": "ok",          // ok | uncalibrated | auto
   "targets": [
     {
-      "track_id": 17,                  // stable across frames, 10..99; null if untracked
+      "track_id": 17,                  // 2-digit display id, 10..99 (recycled); null if untracked
+      "stable_id": 4,                  // per-session serial, never recycled; null if untracked
       "label": "vessel",               // canonical marine label
       "coco_class": 8,
       "confidence": 0.88,
@@ -62,19 +63,28 @@ that schema, so the two sides cannot silently drift.
 - **`range_method`** lets the plugin treat `horizon` ranges (more reliable) and
   `known_size` ranges (coarse) differently; `range_confidence` gates whether a
   target is georeferenced at all (`minRangeConfidence`).
-- **`track_id`** is a compact, human-readable id in the range **10–99**, stable
-  while an object is continuously tracked and `null` for untracked detections.
-  The backend trackers (ByteTrack / NvDCF) hand out ever-growing raw ids; the
-  container remaps each to a recycled 2-digit number (per camera stream) in
-  `app/detector/tracker.py`. Freed numbers rotate to the back of the pool, so an
-  id is reused only after the rest of the range has been cycled through. Note the
-  range is per camera, so `forward` and `aft` may both show e.g. `30` for
-  different objects. The id also survives the detector re-acquiring the same
-  vessel with a different box extent (hull only vs hull + mast): a new raw
-  track whose box stands on the **waterline footprint** (aligned bottom edge,
-  overlapping horizontal extent) of a recently seen same-label track is
-  re-identified as that track and keeps its id (`detector.reid*` settings;
-  `person` is exempt so two nearby MOB targets are never fused).
+- **`track_id`** is a compact, human-readable **display** id in the range
+  **10–99**, stable while an object is tracked and `null` for untracked
+  detections. The backend trackers (ByteTrack / NvDCF) hand out ever-growing
+  raw ids; the container remaps each to a 2-digit number (per camera stream)
+  in `app/detector/tracker.py`. Allocation is lowest-free-first (numbers stay
+  small and familiar) and a freed number is **quarantined** before reuse, so
+  an id that just left one vessel cannot reappear on another moments later —
+  but over a long session a recycled number CAN legitimately name a different
+  vessel. Note the range is per camera, so `forward` and `aft` may both show
+  e.g. `30` for different objects. The id also survives the detector
+  re-acquiring the same vessel with a different box extent (hull only vs
+  hull + mast): a new raw track whose box stands on the **waterline
+  footprint** (aligned bottom edge, overlapping horizontal extent) of a
+  recently seen same-label track is re-identified as that track and keeps its
+  id (`detector.reid*` settings; `person` is exempt so two nearby MOB targets
+  are never fused).
+- **`stable_id`** is a per-camera, per-session serial: monotonically
+  increasing and **never recycled**, so it names one physical target for the
+  whole session — this is the field downstream identity should key on (the
+  SignalK plugin derives blip names/contexts from it, falling back to
+  `track_id` for events from an older container). `null` for untracked
+  detections. `track_id` remains the number shown on the video overlay.
 - **`is_person_in_water`** is decided in the container (person whose waterline is
   below the horizon) so MOB latency is one frame, not a round-trip.
 - **`coasting`** (default `false`) is `true` when the track stabilizer is

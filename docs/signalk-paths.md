@@ -8,16 +8,21 @@ themselves are published as separate synthetic vessels (see below), not as a
 ## Visual targets — synthetic AIS vessels (`enableVisualRadar`, default OFF)
 
 With **Publish targets as synthetic AIS vessels** on, each georeferenced target
-is published as its own vessel context `vessels.urn:mrn:signalk:uuid:<uuid>`,
-so it renders as a blip on any chartplotter that draws `vessels.*`. The UUID is
-a spec-valid v4-format identifier derived deterministically from
-`<camera>` + `<trackId>` (same track ⇒ same context). Off by default to avoid
-confusion with real AIS contacts.
+is published as its own vessel context
+`vessels.urn:mrn:signalk:uuid:VIS-<camera>-<id>`, so it renders as a blip on
+any chartplotter that draws `vessels.*`. The token in the uuid slot is a
+deliberate spec deviation (see `publisher.ts`): readable and deterministic, so
+the same target always maps back to the same context and a fully-retracted
+shell stays identifiable as ours. `<id>` is the event's **`stable_id`** — the
+per-session serial that is never recycled, so a blip's identity can never
+migrate to a different physical vessel (`track_id` is the fallback for events
+from an older container). Off by default to avoid confusion with real AIS
+contacts.
 
 | Leaf | Units | Description |
 |------|-------|-------------|
 | `navigation.position` | — | `{ latitude, longitude }` georeferenced fix (always set on a live blip) |
-| `name` | — | `VIS-<label>-<trackId>`, published via the root-merge delta (`path: ""`) so `vessel.name` is a plain string |
+| `name` | — | `VIS-<camera>-<id>` (same token as the context), published via the root-merge delta (`path: ""`) so `vessel.name` is a plain string |
 | `navigation.speedOverGround` | m/s | Target ground speed (needs `enableCollision`) |
 | `navigation.courseOverGroundTrue` | rad | Target ground course `[0,2π)` (needs `enableCollision`) |
 | `navigation.closestApproach` | — | `{ distance (m), timeTo (s) }` — the standard SignalK CPA/TCPA container (vision-AI estimate); `null` when unresolved |
