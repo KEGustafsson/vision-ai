@@ -24,6 +24,9 @@ class RawTrack:
     vy: float = 0.0
     age_frames: int = 0
     coasting: bool = False  # re-emitted by the stabilizer without a fresh detection
+    # Per-session serial (never recycled, unlike track_id's bounded display
+    # range) — downstream vessel identity; see VelocityTracker.stable_id().
+    stable_id: Optional[int] = None
 
     @property
     def cx(self) -> float:

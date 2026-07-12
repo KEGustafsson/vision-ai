@@ -31,6 +31,11 @@ export interface PixelVelocity {
 
 export interface RawTarget {
   track_id: number | null;
+  // Per-session serial (per camera): never recycled, unlike track_id's bounded
+  // 10-99 display range where a freed number can later name a DIFFERENT
+  // vessel. Preferred for target/blip identity; optional so events from an
+  // older container (without the field) still work on track_id.
+  stable_id?: number | null;
   label: string;
   coco_class: number;
   confidence: number;
@@ -80,7 +85,7 @@ export interface OwnShip {
 }
 
 export interface EnrichedTarget extends RawTarget {
-  key: string; // `${camera}.${track_id}`
+  key: string; // `${camera}.${stable_id ?? track_id}` (see targetKey)
   camera: string;
   bearingTrue: number | null; // rad
   position: LatLon | null;

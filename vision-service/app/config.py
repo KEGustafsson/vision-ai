@@ -191,12 +191,17 @@ class DetectorConfig(BaseModel):
     # behind another) can be fused while they overlap; the thresholds below
     # keep that window narrow.
     reid: bool = True
-    # How many frames back a disappeared track can be re-identified (~4 s at
-    # 10 fps), so a vessel that drops out for a few seconds re-acquires its id
-    # instead of appearing as a new target. A NEW vessel arriving in the spot
-    # is kept from inheriting the id by the width-similarity and
-    # motion-prediction gates below, not by keeping this window tight.
-    reid_max_gap_frames: int = 40
+    # How many frames back a disappeared track can be re-identified (~20 s at
+    # the measured ~6 FPS per camera), so a vessel that drops out re-acquires
+    # its id instead of appearing as a new target. Aligned with the NvDCF
+    # re-association search range (maxTrackletMatchingTimeSearchRange = 120 in
+    # nvdcf_config.yml): the tracker and the waterline re-id give up on a
+    # dropout at the same age. A NEW vessel arriving in the spot is kept from
+    # inheriting the id by the width-similarity and motion-prediction gates
+    # below (the buffered-gate widening is capped at reid_buffer_max_frac, so a
+    # long gap does not judge loosely without bound), not by keeping this
+    # window tight.
+    reid_max_gap_frames: int = 120
     # Minimum horizontal overlap, as a fraction of the narrower box's width.
     reid_min_x_overlap: float = 0.5
     # Max bottom-edge (waterline) misalignment, as a fraction of the SHORTER
@@ -223,6 +228,16 @@ class DetectorConfig(BaseModel):
     # vessel, even where the buffered gate would geometrically accept it.
     # Counterbalances the widened matching space above. 0 disables.
     reid_dir_min_speed_px: float = 2.0
+    # How long an idle track's identity (velocity history, display id, wire
+    # stable_id) is retained before being pruned. MUST cover the deepest
+    # backend resurrection window — NvDCF shadow tracking holds a lost raw id
+    # for maxShadowTrackingAge frames (240 in nvdcf_config.yml) and re-acquires
+    # the vessel with the SAME raw id; retaining for less means that reborn
+    # track finds its display id freed + quarantined and the same vessel
+    # reblips on the chart under a fresh identity. Also must exceed
+    # reid_max_gap_frames, or the waterline re-id's candidate footprints are
+    # forgotten before the gap closes. ~43 s at the measured ~6 FPS per camera.
+    track_memory_frames: int = 260
     # Batch both cameras into a single inference (needs a batch-capable engine).
     # Removes the one-camera-at-a-time detector serialization. Falls back to
     # per-camera inference automatically when the engine is batch=1.

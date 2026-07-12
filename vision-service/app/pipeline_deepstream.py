@@ -321,7 +321,11 @@ class DeepStreamPipeline:
                     # SHOWN per frame, not what they are NAMED — a small pool
                     # sized to the cap recycles numbers so fast that a freed id
                     # lands on a different vessel within seconds.
-                    vel=VelocityTracker(**reid_options(d)),
+                    # frame_w: detections are in mux (native camera) coordinates,
+                    # so the re-id edge-clip relaxation must judge against the
+                    # mux width, not the inference square.
+                    vel=VelocityTracker(frame_w=float(d.mux_width),
+                                        **reid_options(d)),
                 )
 
         self._gst = self._build_pipeline(Gst)
@@ -1051,6 +1055,7 @@ class DeepStreamPipeline:
                 vx = vy = 0.0
                 age = 0
                 disp = tid
+                stable = None
 
                 if tid is not None:
                     # Waterline re-id first: a partial re-detection (hull only)
@@ -1064,10 +1069,12 @@ class DeepStreamPipeline:
                     vx, vy, age = state.vel.update(
                         tid, state.seq, cx, r.top + r.height)
                     disp = state.vel.display_id(tid)
+                    stable = state.vel.stable_id(tid)
                     active_ids.add(tid)
 
                 raw_tracks.append(RawTrack(
                     track_id=disp,
+                    stable_id=stable,
                     cls=cls_id,
                     label=lbl,
                     confidence=conf,
@@ -1219,6 +1226,7 @@ class DeepStreamPipeline:
             piw = is_person_in_water(tr.label, tr.y + tr.h, horizon_y)
             targets.append(Target(
                 track_id=tr.track_id,
+                stable_id=tr.stable_id,
                 label=tr.label,
                 coco_class=tr.cls,
                 confidence=tr.confidence,

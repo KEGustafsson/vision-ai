@@ -233,3 +233,20 @@ def test_same_id_duplicates_in_one_frame_keep_the_stronger():
     out2 = s2.update([strong, weak], seq=1, conf_on=0.5)
     assert len(out2) == 1
     assert out2[0].confidence == 0.9
+
+
+def test_same_id_duplicates_resolve_to_the_shown_box_not_the_confidence_winner():
+    # Re-id/merge can put one id on two boxes in a frame whose confidences run
+    # neck-and-neck. Picking the confidence winner flips the drawn box ~a
+    # box-width between them frame to frame (observed live after a wrong
+    # merge); the keeper must be the box continuing what is already shown.
+    s = TrackStabilizer(confirm_frames=1)
+    for seq in range(1, 6):                        # establish at x=100
+        s.update([_box(100.0)], seq, 0.5)
+    xs = []
+    for seq in range(6, 26):                       # a far duplicate appears,
+        dup_conf = 0.95 if seq % 2 else 0.6        # alternating as conf winner
+        out = s.update([_box(100.0, conf=0.7), _box(200.0, conf=dup_conf)],
+                       seq, 0.5)
+        xs.append(out[0].x)
+    assert max(xs) < 110.0                         # never flaps to the far box

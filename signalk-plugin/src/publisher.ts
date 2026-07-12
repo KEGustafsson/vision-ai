@@ -7,12 +7,20 @@ import { PluginConfig } from './config';
 import { ServerApp } from './skapp';
 import { EnrichedTarget } from './types';
 
-// The blip identity token: readable, deterministic, unique (track IDs count
-// per camera). Doubles as the vessel display name, so context and name can
+// The blip identity token: readable, deterministic, unique (ids count per
+// camera). Doubles as the vessel display name, so context and name can
 // never diverge. Camera names are free-form config strings; sanitize the
 // segment so a dot/space can't corrupt the context key.
 export function blipName(camera: string, trackId: number | string): string {
   return `VIS-${String(camera).replace(/[^a-zA-Z0-9]/g, '_')}-${trackId}`;
+}
+
+// The id a blip is keyed and named by: the container's per-session stable_id
+// (never recycled) when present, else the 2-digit track_id (older containers).
+// Keying on the recycled display number would let a freed number's blip
+// identity land on a DIFFERENT physical vessel later in the session.
+export function blipId(t: Pick<EnrichedTarget, 'stable_id' | 'track_id'>): number | null {
+  return t.stable_id ?? t.track_id;
 }
 
 // DELIBERATE spec deviation (owner's call): the SignalK spec wants vessels.*
@@ -54,7 +62,7 @@ export class Publisher {
     const hasCpa = t !== null && t.cpa !== null && t.tcpa !== null;
     return [
       { path: 'navigation.position', value: t ? t.position : null },
-      { path: '', value: { name: t ? blipName(t.camera, t.track_id as number) : null } },
+      { path: '', value: { name: t ? blipName(t.camera, blipId(t) as number) : null } },
       { path: 'navigation.speedOverGround', value: t ? t.sog : null },
       { path: 'navigation.courseOverGroundTrue', value: t ? t.cog : null },
       {
@@ -157,13 +165,13 @@ export class Publisher {
     // process cycles keeps the gate sane if blipHoldS is misconfigured low.
     const activeMs = Math.max(this.cfg.blipHoldS * 1000, this.cfg.processIntervalMs * 2);
     const eligible = targets
-      .filter((t) => t.position && t.track_id !== null && now - t.lastSeen <= activeMs)
+      .filter((t) => t.position && blipId(t) !== null && now - t.lastSeen <= activeMs)
       // Cap the chart to maxTargets vessels, keeping the closest (most
       // collision-relevant) so the count tracks the detection limit.
       .sort((a, b) => (a.geometry.range_m ?? Infinity) - (b.geometry.range_m ?? Infinity))
       .slice(0, this.cfg.maxTargets);
     for (const t of eligible) {
-      const uuid = blipUrn(t.camera, t.track_id as number);
+      const uuid = blipUrn(t.camera, blipId(t) as number);
       current.add(uuid);
       // position + name always identify the contact. The kinematics are written
       // value-or-null every cycle: emitting an explicit null when an estimate is

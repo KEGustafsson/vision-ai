@@ -56,20 +56,29 @@ detector:
   # above the camera rate. Raise only if you see duplicate-frame churn in the logs.
   mux_batch_timeout_ms: 40
   max_det: 20
-  # Stabilizer is still applied in Python on top of nvtracker output
+  # Stabilizer is still applied in Python on top of nvtracker output.
+  # RATE NOTE: frame windows below are wall-clocked at the MEASURED ~6 FPS per
+  # camera (2026-07 live measurement), not the 12 FPS target.
   stabilize: true
   stabilize_confirm_frames: 3
-  # Base coast window kept short so a young/uncertain track dies fast (~0.7s at
-  # 12 FPS) and never lingers as a phantom false target.
+  # Base coast window kept short so a young/uncertain track dies fast (~1.3s
+  # at ~6 FPS) and never lingers as a phantom false target.
   stabilize_max_coast_frames: 8
   stabilize_hysteresis_ratio: 0.6
   stabilize_ema_alpha: 0.4
   # A PROVEN track (>= stabilize_lock_hits fresh detections) rides out a longer
-  # dropout: 8 * 3.0 = 24 frames (~2s at 12 FPS), so an established vessel
+  # dropout: 8 * 3.0 = 24 frames (~4s at ~6 FPS), so an established vessel
   # occluded by a wave/wake keeps its box while NvDCF still holds its id in
   # shadow. Extended only for locked tracks — not the base window — so the
   # longer hold never applies to unproven tracks.
   stabilize_lock_coast_factor: 3.0
+  # Identity retention for idle tracks: how long velocity/display-id/stable_id
+  # state survives without a detection. Must cover NvDCF's shadow window
+  # (maxShadowTrackingAge = 240 in deepstream/nvdcf_config.yml, ~40s at ~6 FPS)
+  # so a shadow-reacquired raw id walks back into its existing ids instead of
+  # reblipping the same vessel under a new identity. Default already 260;
+  # stated here because it MUST move together with the NvDCF value.
+  track_memory_frames: 260
   # Conservative velocity: only 25% of the (already window-averaged) pixel
   # velocity is applied per missed frame, so a coasted box holds near its last
   # position and drifts gently rather than being flung off-target on a stale

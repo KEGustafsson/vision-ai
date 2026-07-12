@@ -80,6 +80,15 @@ describe('Publisher', () => {
     expect(app.deltas).toHaveLength(0);
   });
 
+  it('keys and names the blip on stable_id when the container provides one', () => {
+    // The display track_id is recycled per camera; the per-session stable_id
+    // is not, so the chart contact identity must follow it.
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1, { stable_id: 137 })]);
+    expect(app.blipContexts()).toEqual([ctx('forward', 137)]);
+    expect(nameOf(app.valuesFor(ctx('forward', 137)))).toBe('VIS-forward-137');
+  });
+
   it('projects a positioned target as a synthetic AIS vessel', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', cfg);
     pub.publishTargets([tgt(1)]);

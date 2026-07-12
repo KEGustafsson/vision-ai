@@ -79,8 +79,16 @@ class PixelVelocity(BaseModel):
 class Target(BaseModel):
     track_id: Optional[int] = Field(
         None,
-        description="Stable tracking id in the range 10-99 (recycled per camera), "
-                    "or null if untracked.",
+        description="Display tracking id in the range 10-99 (recycled per camera "
+                    "after a quarantine, so over a session one number can name "
+                    "different vessels), or null if untracked.",
+    )
+    stable_id: Optional[int] = Field(
+        None,
+        description="Per-session track serial (per camera): monotonically "
+                    "increasing and never recycled, so it names one physical "
+                    "target for the whole session. Preferred over track_id for "
+                    "downstream identity; null if untracked.",
     )
     label: str
     coco_class: int
