@@ -93,36 +93,73 @@ forward/aft as the conventional defaults.
 
 ## 6. Schema defaults vs. TypeScript required fields
 
-**Where:** generated JSON schema vs. `signalk-plugin/src/types.ts`
+**Where:** `signalk-plugin/schema/detection-event.schema.json`
+(generated from `vision-service/app/schemas.py`) vs.
+`signalk-plugin/src/types.ts`, validated in
+`signalk-plugin/src/eventStream.ts:71-73`
 
-The TypeScript mirror of the event contract assumes several
-schema-defaulted fields are always present, but AJV validation as
-configured does not insert defaults — so a producer that legitimately
-omits a defaulted field yields `undefined` where the types promise a
-value. Resolve one way or the other: make those fields required in the
-Pydantic source and regenerate, or normalize defaults on the plugin
-side immediately after validation (e.g. AJV `useDefaults`).
+The generated schema carries `default` on a number of fields that are
+*not* in the corresponding `required` arrays:
 
-## 7. Retained (coasting) tracks flow into alerting
+- root: `schema_version`, `horizon_y`, `calibration_status`
+- `$defs.Geometry`: `range_m`, `range_method`, `range_confidence`
+- `$defs.Inference`: `latency_ms`
+- `$defs.PixelVelocity`: `vx`, `vy`
+- `$defs.Target`: `track_id`, `stable_id`, `is_person_in_water`,
+  `first_seen`, `age_frames`, `coasting`
 
-**Where:** SignalK plugin fusion/notification path
+But the TypeScript mirror declares several of these non-optional —
+`DetectionEvent.schema_version` and `.calibration_status`,
+`Geometry.range_confidence`, `PixelVelocity.vx`/`vy`,
+`RawTarget.is_person_in_water` and `.age_frames`
+(`signalk-plugin/src/types.ts:14-70`) — and the AJV instance in
+`eventStream.ts:71` (`new Ajv({ allErrors: false, strict: false })`)
+does not set `useDefaults`, so validation passes an event that omits
+them and downstream reads `undefined` where the types promise a value
+(e.g. `is_person_in_water` in MOB evaluation). Resolve one way or the
+other: make defaulted fields required in the Pydantic source and
+regenerate the schema, or enable AJV `useDefaults: true` so validated
+events are normalized.
 
-Visual-radar tracks retained for chart continuity appear to continue
-through AIS fusion, CPA, dark-target, and collision notifications while
-stale. Holding a display blip is fine; alerting on it is not clearly
-intended. Alert computation should distinguish fresh detections from
-held tracks, and that distinction should be tested explicitly.
+## 7. Retained tracks flow into dark-target and collision alerting
+
+**Where:** `signalk-plugin/src/notifications.ts:191-211`
+(`evaluateDark`, `evaluateCollision`); retention in
+`signalk-plugin/src/index.ts:177-186`
+
+Targets are retained in the map for `trackTimeoutS` after their last
+detection (`index.ts:179-184`) so chart blips don't flicker. The MOB
+path explicitly guards against alerting on retained-but-stale tracks —
+it only counts a candidate when `lastSeen` has advanced
+(`notifications.ts:126-133`) and decays counters for tracks that stop
+qualifying (`notifications.ts:154-165`). But `evaluateDark`
+(`notifications.ts:191-199`) and `evaluateCollision`
+(`notifications.ts:201-211`) iterate all targets with no `lastSeen`
+freshness check, so a vessel that disappeared keeps raising
+dark-target/collision notifications until the retention timeout prunes
+it — extended further by the anti-flap hold (`applyHold`,
+`notifications.ts:103-115`). The comment at `index.ts:177`
+("MOB/notification logic already guards against retained-but-stale")
+overstates the guard: only MOB has one. Add a freshness gate (or a
+staleness cutoff shorter than `trackTimeoutS`) to the dark/collision
+paths and test it explicitly.
 
 ## 8. Test and CI gaps
 
-- CI does not run `ruff` or `black --check` for the Python service even
-  though the repo is configured for both; Python CI covers install,
-  pytest, and schema diff-check only.
-- Notification tests cover MOB well; dark-target and collision alert
-  paths have no direct coverage.
-- CPA tests cover head-on/threshold basics; add crossing, diverging,
-  already-passed, zero-relative-velocity, and non-finite-input cases.
-- No tests exist for `nav.ts` freshness handling (see findings 1-2).
+- **CI lint gap:** `.github/workflows/ci.yml` — the
+  `vision-service (Python)` job (lines 13-40) runs `pytest` and the
+  schema diff-check but not `ruff check` or `black --check`, even
+  though `vision-service/pyproject.toml` configures both `[tool.ruff]`
+  and `[tool.black]`. (The TypeScript job does run its linter,
+  `ci.yml:58-59`.)
+- **Notification coverage:** `signalk-plugin/test/notifications.test.ts`
+  covers MOB well; the `evaluateDark` and `evaluateCollision` paths
+  (finding 7) have no direct tests.
+- **CPA coverage:** `signalk-plugin/test/cpa.test.ts` covers
+  head-on/threshold basics; add crossing, diverging, already-passed,
+  zero-relative-velocity, and non-finite-input cases.
+- **Missing test file:** there is no `signalk-plugin/test/nav.test.ts`
+  covering `src/nav.ts` freshness handling (findings 1-2).
 
 ## Verification notes
 
