@@ -15,12 +15,18 @@ export function blipName(camera: string, trackId: number | string): string {
   return `VIS-${String(camera).replace(/[^a-zA-Z0-9]/g, '_')}-${trackId}`;
 }
 
-// The id a blip is keyed and named by: the container's per-session stable_id
-// (never recycled) when present, else the 2-digit track_id (older containers).
-// Keying on the recycled display number would let a freed number's blip
-// identity land on a DIFFERENT physical vessel later in the session.
+// The id a blip is keyed and named by: the 2-digit track_id — the SAME number
+// the container burns into the video overlay, so the chart contact and the
+// on-screen box always match (owner's call; supersedes the earlier stable_id
+// keying). track_id is recycled, so over a session one number legitimately
+// names different physical vessels; that's safe here because the tracker
+// quarantines a freed number (~25 s) far longer than blipHoldS holds a blip
+// (15 s default), so the old blip is retracted before its number can return
+// on another vessel. Internal fusion/CPA state stays keyed on stable_id
+// (see enrich.targetKey) — only the published identity uses the display
+// number. stable_id is the fallback for events without a track_id.
 export function blipId(t: Pick<EnrichedTarget, 'stable_id' | 'track_id'>): number | null {
-  return t.stable_id ?? t.track_id;
+  return t.track_id ?? t.stable_id ?? null;
 }
 
 // DELIBERATE spec deviation (owner's call): the SignalK spec wants vessels.*
@@ -170,8 +176,17 @@ export class Publisher {
       // collision-relevant) so the count tracks the detection limit.
       .sort((a, b) => (a.geometry.range_m ?? Infinity) - (b.geometry.range_m ?? Infinity))
       .slice(0, this.cfg.maxTargets);
+    // Blips are keyed on the recycled track_id, so if blipHoldS is configured
+    // above the tracker's reuse quarantine, a held departed target and a fresh
+    // one can briefly share a number. Never let two targets write one context
+    // in a cycle: the most recently seen wins.
+    const byUuid = new Map<string, EnrichedTarget>();
     for (const t of eligible) {
       const uuid = blipUrn(t.camera, blipId(t) as number);
+      const prev = byUuid.get(uuid);
+      if (!prev || t.lastSeen > prev.lastSeen) byUuid.set(uuid, t);
+    }
+    for (const [uuid, t] of byUuid) {
       current.add(uuid);
       // position + name always identify the contact. The kinematics are written
       // value-or-null every cycle: emitting an explicit null when an estimate is
