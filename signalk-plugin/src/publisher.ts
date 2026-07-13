@@ -170,23 +170,27 @@ export class Publisher {
     // slightly stale position is in character for a chart. The floor of two
     // process cycles keeps the gate sane if blipHoldS is misconfigured low.
     const activeMs = Math.max(this.cfg.blipHoldS * 1000, this.cfg.processIntervalMs * 2);
-    const eligible = targets
-      .filter((t) => t.position && blipId(t) !== null && now - t.lastSeen <= activeMs)
-      // Cap the chart to maxTargets vessels, keeping the closest (most
-      // collision-relevant) so the count tracks the detection limit.
-      .sort((a, b) => (a.geometry.range_m ?? Infinity) - (b.geometry.range_m ?? Infinity))
-      .slice(0, this.cfg.maxTargets);
     // Blips are keyed on the recycled track_id, so if blipHoldS is configured
     // above the tracker's reuse quarantine, a held departed target and a fresh
     // one can briefly share a number. Never let two targets write one context
-    // in a cycle: the most recently seen wins.
+    // in a cycle: the most recently seen wins. Dedup BEFORE the maxTargets cap
+    // so the cap counts distinct blips — a collision inside the slice must not
+    // shrink the chart below maxTargets while a distinct target sits dropped
+    // just past the boundary.
     const byUuid = new Map<string, EnrichedTarget>();
-    for (const t of eligible) {
+    for (const t of targets) {
+      if (!t.position || blipId(t) === null || now - t.lastSeen > activeMs) continue;
       const uuid = blipUrn(t.camera, blipId(t) as number);
       const prev = byUuid.get(uuid);
       if (!prev || t.lastSeen > prev.lastSeen) byUuid.set(uuid, t);
     }
-    for (const [uuid, t] of byUuid) {
+    // Cap the chart to maxTargets vessels, keeping the closest (most
+    // collision-relevant) so the count tracks the detection limit.
+    const eligible = [...byUuid.values()]
+      .sort((a, b) => (a.geometry.range_m ?? Infinity) - (b.geometry.range_m ?? Infinity))
+      .slice(0, this.cfg.maxTargets);
+    for (const t of eligible) {
+      const uuid = blipUrn(t.camera, blipId(t) as number);
       current.add(uuid);
       // position + name always identify the contact. The kinematics are written
       // value-or-null every cycle: emitting an explicit null when an estimate is
