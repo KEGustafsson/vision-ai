@@ -80,13 +80,32 @@ describe('Publisher', () => {
     expect(app.deltas).toHaveLength(0);
   });
 
-  it('keys and names the blip on stable_id when the container provides one', () => {
-    // The display track_id is recycled per camera; the per-session stable_id
-    // is not, so the chart contact identity must follow it.
+  it('keys and names the blip on the overlay track_id, ignoring stable_id', () => {
+    // Owner's call: the chart contact must carry the same 2-digit number the
+    // video overlay draws (track_id), not the per-session stable_id serial.
     const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    pub.publishTargets([tgt(1, { stable_id: 137 })]);
+    pub.publishTargets([tgt(14, { stable_id: 137 })]);
+    expect(app.blipContexts()).toEqual([ctx('forward', 14)]);
+    expect(nameOf(app.valuesFor(ctx('forward', 14)))).toBe('VIS-forward-14');
+  });
+
+  it('falls back to stable_id when a target carries no track_id', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1, { track_id: null as unknown as number, stable_id: 137 })]);
     expect(app.blipContexts()).toEqual([ctx('forward', 137)]);
-    expect(nameOf(app.valuesFor(ctx('forward', 137)))).toBe('VIS-forward-137');
+  });
+
+  it('never lets two targets sharing a recycled track_id write one context in a cycle', () => {
+    // A held departed target and a fresh one can briefly share a number if
+    // blipHoldS exceeds the tracker's reuse quarantine; latest lastSeen wins.
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    const old = tgt(14, { stable_id: 3, lastSeen: Date.now() - 5000, position: { latitude: 59, longitude: 24 } });
+    const fresh = tgt(14, { stable_id: 9, lastSeen: Date.now() });
+    pub.publishTargets([old, fresh]);
+    expect(app.blipContexts()).toEqual([ctx('forward', 14)]);
+    const positions = app.valuesFor(ctx('forward', 14)).filter((v) => v.path === 'navigation.position');
+    expect(positions).toHaveLength(1);
+    expect(positions[0].value).toEqual({ latitude: 60, longitude: 25 });
   });
 
   it('projects a positioned target as a synthetic AIS vessel', () => {
@@ -270,6 +289,21 @@ describe('Publisher', () => {
     // Only the two closest (ids 2 @100m and 3 @200m) get a vessel context.
     expect(app.blipContexts().sort()).toEqual([ctx('forward', 2), ctx('forward', 3)].sort());
     expect(app.valuesFor(ctx('forward', 1))).toHaveLength(0);
+  });
+
+  it('counts distinct blips against maxTargets when a recycled track_id collides', () => {
+    // Two targets sharing track_id 2 collapse to one blip; that collision must
+    // not eat a maxTargets slot — the next distinct target (id 1) still draws.
+    const pub = new Publisher(app, 'signalk-vision-ai', { ...cfg, maxTargets: 2 });
+    const now = Date.now();
+    const near = (id: number, range: number, partial: Partial<EnrichedTarget> = {}) =>
+      tgt(id, { geometry: { relative_bearing_deg: 0, range_m: range, range_method: 'horizon', range_confidence: 0.7 }, ...partial });
+    pub.publishTargets([
+      near(2, 100, { stable_id: 3, lastSeen: now - 5000 }),
+      near(2, 150, { stable_id: 9, lastSeen: now }),
+      near(1, 300),
+    ]);
+    expect(app.blipContexts().sort()).toEqual([ctx('forward', 1), ctx('forward', 2)].sort());
   });
 
   it('retracts all blips on reset', () => {
