@@ -291,6 +291,21 @@ describe('Publisher', () => {
     expect(app.valuesFor(ctx('forward', 1))).toHaveLength(0);
   });
 
+  it('counts distinct blips against maxTargets when a recycled track_id collides', () => {
+    // Two targets sharing track_id 2 collapse to one blip; that collision must
+    // not eat a maxTargets slot — the next distinct target (id 1) still draws.
+    const pub = new Publisher(app, 'signalk-vision-ai', { ...cfg, maxTargets: 2 });
+    const now = Date.now();
+    const near = (id: number, range: number, partial: Partial<EnrichedTarget> = {}) =>
+      tgt(id, { geometry: { relative_bearing_deg: 0, range_m: range, range_method: 'horizon', range_confidence: 0.7 }, ...partial });
+    pub.publishTargets([
+      near(2, 100, { stable_id: 3, lastSeen: now - 5000 }),
+      near(2, 150, { stable_id: 9, lastSeen: now }),
+      near(1, 300),
+    ]);
+    expect(app.blipContexts().sort()).toEqual([ctx('forward', 1), ctx('forward', 2)].sort());
+  });
+
   it('retracts all blips on reset', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', cfg);
     pub.publishTargets([tgt(1)]);
