@@ -13,9 +13,11 @@ to SI (radians/metres/m·s⁻¹) once, at the boundary, before publishing to Sig
 from __future__ import annotations
 
 from enum import Enum
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import BaseModel, Field
+
+from .motion import OpticalFlowState
 
 SCHEMA_VERSION = "1.0"
 # Major version the plugin must understand. Bump the major on any
@@ -169,6 +171,28 @@ class PtzRequest(BaseModel):
     zoom: float = Field(0.0, ge=-1.0, le=1.0)
 
 
+class OpticalFlowStatus(BaseModel):
+    """Per-camera NVIDIA Optical Flow Accelerator (OFA) diagnostics.
+
+    Measurement only — no part of the detection/geometry/alert path consumes
+    these numbers. ``global_dx``/``global_dy`` are the **median** OFA flow
+    vector of the frame in pixels per frame interval, in the OFA's own sign
+    convention (see ``docs/jetson-deepstream.md``). ``confidence`` is the
+    fraction of the frame's vectors that survived filtering (coverage, not
+    accuracy).
+    """
+
+    enabled: bool = False
+    state: OpticalFlowState = OpticalFlowState.disabled
+    active: bool = False
+    global_dx: Optional[float] = None
+    global_dy: Optional[float] = None
+    vectors: int = 0
+    confidence: float = 0.0
+    age_ms: Optional[int] = None
+    error: Optional[str] = None
+
+
 class HealthResponse(BaseModel):
     status: str = "ok"
     mode: str
@@ -192,3 +216,6 @@ class HealthResponse(BaseModel):
     # the CPU/Jetson backends (which have no such supervisor).
     pipeline_restarts: int = 0
     pipeline_last_error: Optional[str] = None
+    # Per-camera NVIDIA OFA state (DeepStream backend with detector.optical_flow
+    # enabled). Empty on every other backend and when the feature is off.
+    optical_flow: Dict[str, OpticalFlowStatus] = Field(default_factory=dict)

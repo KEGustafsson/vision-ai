@@ -263,6 +263,28 @@ class DetectorConfig(BaseModel):
     # load instead of silently falling back to the COCO class map and
     # mislabeling every detection at runtime.
     model: Literal["coco", "forward-watch", "marine-surveillance"] = "coco"
+    # ── NVIDIA Optical Flow Accelerator (OFA) — DeepStream backend only ──
+    # Runs the Orin's dedicated optical-flow hardware block via the DeepStream
+    # `nvof` element and reports one robust (median) global image-motion vector
+    # per camera through /health. Measurement only: nothing in detection,
+    # tracking, geometry, alerting or the DetectionEvent contract consumes it.
+    # OFF by default — enabling it adds an nvof element (and one NVMM colour
+    # conversion) to the pipeline; disabled, no OFA element is created at all
+    # and the pipeline is byte-for-byte what it was.
+    optical_flow: bool = False
+    # Treat OFA as required: /health goes "degraded" while flow is missing or
+    # stale, and a failing nvof keeps failing (the pipeline is NOT silently
+    # rebuilt without OFA) so a hardware/plugin fault cannot go unnoticed.
+    # Default false = fail-safe: OFA is an optional diagnostic and its loss
+    # must never take the vision service down or mark it unhealthy.
+    optical_flow_required: bool = False
+    # nvof preset-level: 0 = fast/low quality, 1 = medium, 2 = slow/best
+    # (2 is dGPU-only — on Jetson keep 0 or 1).
+    optical_flow_preset_level: int = Field(0, ge=0, le=2)
+    # Age above which a camera's last flow estimate is reported "stale".
+    # ~12 frames at the measured ~6 FPS per camera: long enough to ride out a
+    # few dropped frames, short enough to notice a dead OFA path.
+    optical_flow_stale_ms: int = Field(2000, ge=0)
 
     @model_validator(mode="after")
     def _identity_retention_covers_reid(self) -> "DetectorConfig":
