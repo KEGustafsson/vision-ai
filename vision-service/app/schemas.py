@@ -216,6 +216,7 @@ class HealthResponse(BaseModel):
     # the CPU/Jetson backends (which have no such supervisor).
     pipeline_restarts: int = 0
     pipeline_last_error: Optional[str] = None
-    # Per-camera NVIDIA OFA state (DeepStream backend with detector.optical_flow
-    # enabled). Empty on every other backend and when the feature is off.
+    # Per-camera NVIDIA OFA state. On the DeepStream backend there is always one
+    # entry per camera — state "disabled" when detector.optical_flow is off.
+    # Empty on every other backend (they have no OFA path at all).
     optical_flow: Dict[str, OpticalFlowStatus] = Field(default_factory=dict)

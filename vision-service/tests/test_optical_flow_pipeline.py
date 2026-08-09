@@ -11,9 +11,9 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.config import load_settings
+from app.config import DetectorConfig, load_settings
 from app.motion import OpticalFlowState
-from app.pipeline_deepstream import DeepStreamPipeline
+from app.pipeline_deepstream import DeepStreamPipeline, _main_chain_links
 
 LOG = logging.getLogger("test-ds-of")
 
@@ -105,7 +105,50 @@ def test_disabled_by_default_creates_no_elements():
     created: list = []
     assert p._build_optical_flow(_fake_gst(), _FakePipeline(), _maker(created), []) == ()
     assert created == []
-    assert all(s["state"] == "disabled" for s in p.optical_flow_status().values())
+    # Every camera still has an entry, reporting "disabled" — a switched-off
+    # feature must be distinguishable from a backend with no OFA path at all.
+    status = p.optical_flow_status()
+    assert set(status) == {c.name for c in p.settings.cameras}
+    assert all(s["state"] == "disabled" for s in status.values())
+
+
+def test_required_without_enabled_is_rejected_at_config_load():
+    # Otherwise no nvof is ever created, every camera reports "disabled", and
+    # /health would report degraded forever — taking the container HEALTHCHECK
+    # with it — for a feature that was never asked to run.
+    with pytest.raises(ValueError, match="optical_flow_required"):
+        DetectorConfig(optical_flow=False, optical_flow_required=True)
+    # The sane combinations still load.
+    assert DetectorConfig(optical_flow=True, optical_flow_required=True).optical_flow
+    assert DetectorConfig().optical_flow is False
+
+
+def test_chain_without_ofa_is_the_original_pipeline():
+    mux, pgie, tracker, dispconv, dispcaps, demux = (
+        _FakeElement("f", n) for n in
+        ("mux", "pgie", "tracker", "dispconv", "dispcaps", "demux"))
+    links = _main_chain_links(mux, pgie, tracker, (), dispconv, dispcaps, demux)
+    assert links == [(mux, pgie), (pgie, tracker), (tracker, dispconv),
+                     (dispconv, dispcaps), (dispcaps, demux)]
+
+
+def test_ofa_branch_is_spliced_between_tracker_and_dispconv():
+    # A wrong link order here would only fail on the Jetson, so pin it: nvinfer
+    # must keep its position ahead of the OFA elements (detection untouched),
+    # and the OFA elements must run in the order _build_optical_flow returns.
+    p = _pipeline(optical_flow=True)
+    chain = p._build_optical_flow(
+        _fake_gst(), _FakePipeline(), _maker([]), p.settings.cameras)
+    conv, caps, of = chain
+    mux, pgie, tracker, dispconv, dispcaps, demux = (
+        _FakeElement("f", n) for n in
+        ("mux", "pgie", "tracker", "dispconv", "dispcaps", "demux"))
+
+    links = _main_chain_links(mux, pgie, tracker, chain, dispconv, dispcaps, demux)
+
+    assert links == [(mux, pgie), (pgie, tracker),
+                     (tracker, conv), (conv, caps), (caps, of), (of, dispconv),
+                     (dispconv, dispcaps), (dispcaps, demux)]
 
 
 def test_disabled_pipeline_ignores_flow_metadata():

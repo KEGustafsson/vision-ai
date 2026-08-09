@@ -140,6 +140,26 @@ _TRACKER_CFG_STOCK = Path(
 )
 
 
+def _main_chain_links(mux, pgie, tracker, of_chain, dispconv, dispcaps, demux) -> List[tuple]:
+    """Element pairs to link for the batched chain, in order.
+
+    Pure list-building, kept out of _build_pipeline so the optical-flow splice
+    can be asserted without GStreamer: a wrong order here would only surface as
+    a link failure on the Jetson.
+
+        mux → pgie → tracker [→ ofconv → ofcaps → nvof] → dispconv → dispcaps → demux
+    """
+    links = [(mux, pgie), (pgie, tracker)]
+    if of_chain:
+        # Chain the OFA elements between the tracker and dispconv, in the order
+        # _build_optical_flow returned them.
+        links += list(zip((tracker, *of_chain), (*of_chain, dispconv)))
+    else:
+        links.append((tracker, dispconv))
+    links += [(dispconv, dispcaps), (dispcaps, demux)]
+    return links
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
@@ -945,18 +965,13 @@ class DeepStreamPipeline:
         of_chain = self._build_optical_flow(Gst, pipeline, make, cams)
 
         # Main batched chain: mux → pgie → tracker [→ nvvideoconvert(NV12) → nvof]
-        #                     → dispconv → dispcaps(RGBA) → nvstreamdemux
-        links = [(mux, pgie), (pgie, tracker)]
-        if of_chain:
-            # Splice the OFA branch in AFTER the tracker: nvinfer keeps seeing
-            # exactly the buffer format it sees today (detection is untouched),
-            # and the flow is measured on the same corrected, mux-resolution
-            # image that detection and tracking used.
-            links += list(zip((tracker, *of_chain), (*of_chain, dispconv)))
-        else:
-            links.append((tracker, dispconv))
-        links += [(dispconv, dispcaps), (dispcaps, demux)]
-        for src_el, dst_el in links:
+        #                     → dispconv → dispcaps(RGBA) → nvstreamdemux.
+        # The OFA branch is spliced in AFTER the tracker: nvinfer keeps seeing
+        # exactly the buffer format it sees today (detection is untouched), and
+        # the flow is measured on the same corrected, mux-resolution image that
+        # detection and tracking used.
+        for src_el, dst_el in _main_chain_links(
+                mux, pgie, tracker, of_chain, dispconv, dispcaps, demux):
             if not src_el.link(dst_el):
                 raise RuntimeError(
                     f"Failed to link {src_el.get_name()} → {dst_el.get_name()}"
@@ -1323,7 +1338,13 @@ class DeepStreamPipeline:
                 self._log.warning("optical flow (%s): %s", cam_name, flow.error)
 
     def optical_flow_status(self) -> Dict[str, dict]:
-        """Per-camera OFA diagnostics for /health. Empty when never configured."""
+        """Per-camera OFA diagnostics for /health.
+
+        Always one entry per configured camera — when the feature is off the
+        entry reports state "disabled" rather than vanishing, so a consumer can
+        tell "OFA is switched off" apart from "this backend has no OFA at all"
+        (the other backends expose no such method and report nothing).
+        """
         now = time.monotonic()
         return {name: flow.snapshot(now, self._of_stale_s)
                 for name, flow in self._flow.items()}

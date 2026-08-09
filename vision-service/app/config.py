@@ -287,6 +287,20 @@ class DetectorConfig(BaseModel):
     optical_flow_stale_ms: int = Field(2000, ge=0)
 
     @model_validator(mode="after")
+    def _optical_flow_required_needs_optical_flow(self) -> "DetectorConfig":
+        """Fail at config load, not silently at runtime: requiring OFA without
+        enabling it means no nvof element is ever created, every camera reports
+        "disabled", and /health then reports degraded forever — taking the
+        Docker HEALTHCHECK down with it — for a feature that was never asked to
+        run. The two flags must agree."""
+        if self.optical_flow_required and not self.optical_flow:
+            raise ValueError(
+                "optical_flow_required is set but optical_flow is false: OFA would "
+                "never run, and /health would report degraded permanently. Set "
+                "optical_flow: true, or drop optical_flow_required.")
+        return self
+
+    @model_validator(mode="after")
     def _identity_retention_covers_reid(self) -> "DetectorConfig":
         """Fail at config load, not silently at runtime: identity retention
         shorter than the re-id gap means the waterline re-id's candidate
