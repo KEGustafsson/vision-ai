@@ -115,7 +115,7 @@ detector:
   # detection, tracking, geometry, collision logic or the DetectionEvent
   # contract consumes it. Hardware-validated 2026-08-10, see
   # docs/jetson-deepstream.md ("Optical flow (OFA)" → "Validation on hardware").
-  optical_flow: true
+  optical_flow: false
   # optical_flow_required: false      # true => /health degrades while flow is
   #                                   # missing/stale and a failing nvof is NOT
   #                                   # silently dropped (default: fail-safe).
