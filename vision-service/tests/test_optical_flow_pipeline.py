@@ -90,16 +90,34 @@ def _fake_pyds(vectors, frame_num=7, raise_on_vectors=False):
 
 
 def _pipeline(**detector_overrides) -> DeepStreamPipeline:
+    """A DeepStreamPipeline over the deepstream camera set, with the
+    optical-flow switches always set explicitly.
+
+    config/deepstream.yaml is a *deployment* file the operator may legitimately
+    flip (enabling OFA on the boat, say), so no test may inherit its current
+    value — the shipped code default is pinned separately by
+    test_optical_flow_is_off_by_default.
+    """
     settings = load_settings("deepstream")
+    settings.detector.optical_flow = False
+    settings.detector.optical_flow_required = False
     for key, value in detector_overrides.items():
         setattr(settings.detector, key, value)
     return DeepStreamPipeline(settings, LOG)
 
 
-# ── Disabled by default: nothing is created, nothing changes ──────────────────
+# ── Disabled: nothing is created, nothing changes ─────────────────────────────
 
 
-def test_disabled_by_default_creates_no_elements():
+def test_optical_flow_is_off_by_default():
+    # The shipped code default must stay off: enabling OFA is an explicit
+    # operator decision, per deployment config, not something a fresh install
+    # inherits. (Deployment YAML may of course set it — see _pipeline.)
+    assert DetectorConfig().optical_flow is False
+    assert DetectorConfig().optical_flow_required is False
+
+
+def test_disabled_creates_no_elements():
     p = _pipeline()
     assert p.settings.detector.optical_flow is False
     created: list = []
