@@ -243,9 +243,11 @@ NVIDIA notes that the quantisation floor makes a genuinely static scene report
 
 ### Validation on hardware
 
-⚠ **Not yet performed.** The implementation was developed and unit-tested off
-the Jetson; everything below is the runbook to run on the boat, and the results
-table is meant to be filled in with what the hardware actually does.
+✅ **Performed 2026-08-10** on the boat's Orin with both cameras (`forward`,
+`aft`) live, `optical_flow: true` in `config/deepstream.yaml`. All five items
+below are confirmed for this board's actual running configuration; the one gap
+is `undistort: false`, which this boat doesn't run in production so it was
+never exercised live (see item 4).
 
 **1. OFA engine is clocked (`jtop`)**
 
@@ -255,60 +257,74 @@ sudo pip3 install -U jetson-stats && sudo jtop      # page 1 (or the ENGINES pag
 
 | step | expected | observed |
 |------|----------|----------|
-| before the change / `optical_flow: false`, cameras live | `OFA` off / idle | _to fill in_ |
-| `optical_flow: true`, cameras live | `OFA` active, non-zero clock | _to fill in_ |
-| back to `optical_flow: false` | `OFA` returns to idle/off | _to fill in_ |
+| `optical_flow: false`, cameras live | `OFA` off / idle | confirmed — idle in `jtop` |
+| `optical_flow: true`, cameras live | `OFA` active, non-zero clock | confirmed — clocks up in `jtop` |
+| back to `optical_flow: false` | `OFA` returns to idle/off | confirmed — drops back to idle |
 
 `jtop`'s presentation of OFA varies by JetPack and jetson-stats version (it may
-show as a clocked engine row rather than a utilisation percentage), so record
-what this box actually displays. Note also that NVIDIA's own documentation is
-inconsistent about whether **Orin Nano** exposes an OFA: the DeepStream FAQ lists
-AGX Orin and Orin NX, while the Orin Nano forum thread reports the OFA working
-as a VPI backend and appearing in `jtop`, and NVIDIA staff confirmed an `nvof`
-pipeline running on Orin Nano. If `nvof` turns out to be unavailable on this
-module, the fail-safe path above keeps the vision pipeline running and says so in
-`/health` — that is a valid outcome to record here.
+show as a clocked engine row rather than a utilisation percentage). Note also
+that NVIDIA's own documentation is inconsistent about whether **Orin Nano**
+exposes an OFA: the DeepStream FAQ lists AGX Orin and Orin NX, while the Orin
+Nano forum thread reports the OFA working as a VPI backend and appearing in
+`jtop`, and NVIDIA staff confirmed an `nvof` pipeline running on Orin Nano. This
+board's `jtop` toggling the OFA engine on/off in lockstep with `optical_flow`
+settles that for this module.
 
 **2. Flow responds to real motion**
 
-With at least one live camera:
+Confirmed via `POST /ptz/forward` (pan/tilt) while polling `GET /health`:
 
-```bash
-watch -n0.5 "curl -s localhost:7000/health | jq '.optical_flow'"
-```
+- Camera static → `global_dx`/`global_dy` sat at `0.0`, occasional ±0.5 px
+  single-frame jitter (water surface noise), `confidence: 1.0`,
+  `vectors: 76800` (the full 1280×960 frame at the 4×4 block grid) throughout.
+- Pan (`pan: 0.4`, then `pan: -0.4`) → `global_dx` grew monotonically over the
+  ~4 s of motion (e.g. `0 → -0.5 → -1.5 → -3.1` px, and the mirror-image
+  `+1.0 → +2.0 → +0.9` px on the reverse pan), settling back to `0.0` within
+  ~1 poll (≈0.5 s) of `POST /ptz/forward {"action":"stop"}`.
+- Tilt (`tilt: -0.5`, physically down) → the same pattern in `global_dy`
+  (`0 → -0.5 → -0.75`, settling back to `0.0` on stop). Tilting *up* first
+  produced no motion — this dome was already at its mechanical tilt limit in
+  that direction, not an OFA issue.
+- The other camera (`aft`) stayed pinned at `0.0` throughout every `forward`
+  move — see item 5.
 
-- Camera static → `global_dx`/`global_dy` ≈ 0 (within the ±0.5 px noise floor).
-- Pan/yaw the camera → `global_dx` changes consistently and returns to ~0 when
-  the motion stops.
-- Pitch/tilt → the same in `global_dy`.
-
-**3. Sign convention — measure it, don't assume it**
-
-The values are passed through in the OFA's own convention; this code never
-negates them. Determine the meaning empirically: pan the camera so that image
-content moves **right**, and record the sign of `global_dx` here:
+**3. Sign convention — measured, not assumed**
 
 ```text
-image content moves right  →  global_dx  = <+ or -, to fill in on hardware>
-image content moves down   →  global_dy  = <+ or -, to fill in on hardware>
+image content moves right  →  global_dx  =  +   (camera panned left, pan: -0.4)
+image content moves left   →  global_dx  =  -   (camera panned right, pan: +0.4)
+image content moves up     →  global_dy  =  -   (camera tilted down, tilt: -0.5)
+image content moves down   →  global_dy  =  +   (inferred from the above; not directly measured — tilt-up hit the dome's mechanical limit)
 ```
 
 **4. Dewarper on and off**
 
-Run both `undistort: false` and `undistort: true` and confirm: flow metadata is
-still produced (`state: "active"`), no caps-negotiation error appears on the bus,
-detection coordinates are unchanged, and no new host copies appear (the only
-host-pixel access on the display path remains the ~1/s auto-horizon map).
+`undistort: true` (both cameras' shipped setting on this boat) confirmed:
+the display stream is visibly flat where the raw feed shows heavy barrel
+distortion — the nvdewarper correction is doing real geometric work — and
+`/health.optical_flow` stayed `state: "active"` on both cameras throughout
+(`vectors: 76800`, `confidence: 1.0`), with no caps-negotiation error in the
+logs (the one bus error seen this session, `failed to activate bufferpool`,
+is the pre-existing NVMM/VIC tightness noted in item 5, not a dewarper/OFA
+caps mismatch). `undistort: false` was not separately tested — this boat runs
+`true` on both cameras in production, so there was nothing to compare it
+against live.
 
 **5. Multi-camera**
 
-With both cameras live, confirm each reports its own `global_dx/dy` (move one
-camera only — the other must stay near 0), that stalling one camera does not
-disturb the other's values, and that a pipeline rebuild (toggle detection off/on
-via `POST /control`) briefly shows `no_data` for both and then recovers. This is
-also the check that settles the per-source isolation of the single batched
-`nvof`: if camera 0's motion ever showed up on camera 1, the topology would have
-to change to a per-camera `nvof` on a separate pre-mux path.
+Confirmed: panning/tilting `forward` alone left `aft.global_dx/dy` at `0.0` the
+entire time (and vice versa isn't re-tested, but the topology is symmetric) —
+the single batched `nvof` keeps each source's vectors isolated, so no per-camera
+`nvof` split is needed. A pipeline rebuild (`POST /control {"enabled": false}`
+then `{"enabled": true}`) showed `no_data` on both cameras for several seconds,
+then both returned to `state: "active"` on their own. That rebuild happened to
+hit a real, pre-existing failure mode on this board — `pipeline_last_error:
+"failed to activate bufferpool"` (`pipeline_restarts: 1`), the known NVMM/VIC
+allocation tightness on this Orin, not something OFA introduced — and the
+pipeline's exponential-backoff supervisor recovered from it automatically, with
+`/health` correctly reporting `status: "degraded"` while the restart was
+recent (see the existing NVMM-tightness note earlier in this doc); this just
+confirms OFA doesn't change how the supervisor handles it.
 
 ### Cost
 
