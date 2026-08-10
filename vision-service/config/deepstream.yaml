@@ -105,6 +105,22 @@ detector:
   #   python3 training/train_marine_surveillance.py --api-key <KEY> ...
   # Override with: VISION_DETECTOR_MODEL=forward-watch
   model: coco
+  # NVIDIA Optical Flow Accelerator (OFA), via the DeepStream `nvof` element.
+  # Off by default in the code (DetectorConfig.optical_flow=False; a fresh
+  # install or any other mode never enables it on its own) — enabled here as
+  # this boat's deployment choice. When on, it adds an nvof element (plus one
+  # in-NVMM colour conversion to NV12) to the batched stream after the
+  # tracker, and reports one robust per-camera global image-motion vector in
+  # GET /health (optical_flow). It is a MEASUREMENT ONLY — nothing in
+  # detection, tracking, geometry, collision logic or the DetectionEvent
+  # contract consumes it. Hardware-validated 2026-08-10, see
+  # docs/jetson-deepstream.md ("Optical flow (OFA)" → "Validation on hardware").
+  optical_flow: false
+  # optical_flow_required: false      # true => /health degrades while flow is
+  #                                   # missing/stale and a failing nvof is NOT
+  #                                   # silently dropped (default: fail-safe).
+  # optical_flow_preset_level: 0      # 0 = fast, 1 = medium (2 is dGPU-only)
+  # optical_flow_stale_ms: 2000       # age at which flow is reported stale
 
 cameras:
   - name: forward

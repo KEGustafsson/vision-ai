@@ -35,8 +35,17 @@ def health(request: Request) -> HealthResponse:
     # latch the container unhealthy for its whole life — the cumulative count is
     # still surfaced below as pipeline_restarts for diagnostics.
     restart_degraded = bool(restart_info.get("recent")) if restart_info else restarts > 0
+    # Optional NVIDIA OFA diagnostics (DeepStream only). Stale/absent optical
+    # flow does NOT degrade health on its own — it is a measurement, not part of
+    # the detection path — unless the operator declared it required.
+    optical_flow = p.optical_flow_status() if hasattr(p, "optical_flow_status") else {}
+    of_degraded = bool(
+        optical_flow
+        and getattr(p.settings.detector, "optical_flow_required", False)
+        and any(not cam.get("active") for cam in optical_flow.values())
+    )
     return HealthResponse(
-        status="degraded" if (errors or restart_degraded) else "ok",
+        status="degraded" if (errors or restart_degraded or of_degraded) else "ok",
         mode=p.settings.mode,
         backend=backend,
         cameras=[c.name for c in p.settings.cameras],
@@ -50,6 +59,7 @@ def health(request: Request) -> HealthResponse:
         model_labels=MODEL_LABELS.get(model, []),
         pipeline_restarts=restarts,
         pipeline_last_error=last_error,
+        optical_flow=optical_flow,
     )
 
 

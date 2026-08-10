@@ -231,6 +231,12 @@ inference. The lone host-side pixel access is auto-horizon detection, throttled 
 calibration. A per-camera PTS guard in the probe drops `nvstreammux` frame repeats
 so output never exceeds the camera's input rate.
 
+**Optical flow** (`nvof`, optional and off by default) runs the Orin's dedicated
+OFA hardware block on the batched stream after tracking and reports one robust
+per-camera global image-motion vector in `GET /health`. It is a measurement only
+— no detection, geometry, or alert logic reads it — and its absence never affects
+the pipeline. See [Optical flow (OFA)](docs/jetson-deepstream.md#optical-flow-ofa).
+
 See [Architecture & data flow](docs/architecture.md#inference-backends) for how
 this fits the wider system and [DeepStream GPU pipeline](docs/jetson-deepstream.md)
 for the build, model selection, and tuning.

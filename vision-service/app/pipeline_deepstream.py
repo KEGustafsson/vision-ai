@@ -11,6 +11,9 @@ decode through TRT inference. The CPU never touches a pixel before inference.
         → nvstreammux         # batch N cameras into one NVMM buffer; resizes to 640×640
         → nvinfer             # reads NVMM directly → TRT engine (FP16) → detections
         → nvtracker           # NvDCF on GPU → stable track IDs
+        → [nvvideoconvert(NVMM NV12) → nvof]   # OPTIONAL (detector.optical_flow):
+                              # Orin OFA hardware block; attaches per-source flow
+                              # vectors as frame user meta. Off by default.
         → nvvideoconvert      # → NVMM RGBA (for nvdsosd; probe maps it for horizon)
         → [pad probe]         # reads NvDsObjectMeta + attaches display meta (no pixel copy)
         → nvstreamdemux       # split batch back into per-camera NVMM buffers
@@ -83,6 +86,7 @@ from .detector.classmap import (
 from .detector.stabilizer import TrackStabilizer, cap_targets_sticky, make_stabilizer
 from .detector.tracker import VelocityTracker, reid_options
 from .geometry import detect_horizon_y, estimate_bearing, estimate_range
+from .motion import CameraFlowState, estimate_global_motion
 from .pipeline import _drop_contained_targets  # shared geometry filter, same package
 from .schemas import (
     Backend,
@@ -125,12 +129,35 @@ _RESTART_BACKOFF_MAX_S = 30.0
 # its whole life. Comfortably longer than the max backoff so a flapping pipeline
 # (which restarts again before the window closes) keeps reading degraded.
 _RESTART_DEGRADED_WINDOW_S = 120.0
+# Element names of the optional NVIDIA OFA (optical flow) branch. Kept in one
+# place so the bus-error handler can recognise an OFA fault and fall back.
+_OF_ELEMENTS = ("ofconv", "ofcaps", "of")
 _DEEPSTREAM_DIR = Path(__file__).resolve().parent.parent / "deepstream"
 _TRACKER_LIB = "/opt/nvidia/deepstream/deepstream/lib/libnvds_nvmultiobjecttracker.so"
 _TRACKER_CFG_STOCK = Path(
     "/opt/nvidia/deepstream/deepstream/samples/configs/deepstream-app"
     "/config_tracker_NvDCF_perf.yml"
 )
+
+
+def _main_chain_links(mux, pgie, tracker, of_chain, dispconv, dispcaps, demux) -> List[tuple]:
+    """Element pairs to link for the batched chain, in order.
+
+    Pure list-building, kept out of _build_pipeline so the optical-flow splice
+    can be asserted without GStreamer: a wrong order here would only surface as
+    a link failure on the Jetson.
+
+        mux → pgie → tracker [→ ofconv → ofcaps → nvof] → dispconv → dispcaps → demux
+    """
+    links = [(mux, pgie), (pgie, tracker)]
+    if of_chain:
+        # Chain the OFA elements between the tracker and dispconv, in the order
+        # _build_optical_flow returned them.
+        links += list(zip((tracker, *of_chain), (*of_chain, dispconv)))
+    else:
+        links.append((tracker, dispconv))
+    links += [(dispconv, dispcaps), (dispcaps, demux)]
+    return links
 
 
 def _now_iso() -> str:
@@ -264,6 +291,21 @@ class DeepStreamPipeline:
         # Holds generated nvdewarper config files; cleaned up on stop().
         self._dewarp_tmp: Optional[tempfile.TemporaryDirectory] = None
 
+        # ── NVIDIA OFA (optical flow), optional and measurement-only ──────────
+        # Per-camera state objects: written by the probe thread, read by the
+        # FastAPI thread via optical_flow_status(). One object per camera, so
+        # two streams never share flow history.
+        self._of_enabled: bool = bool(settings.detector.optical_flow)
+        self._of_stale_s: float = settings.detector.optical_flow_stale_ms / 1000.0
+        # Set when OFA has failed and was dropped so the vision pipeline can
+        # keep running; the next rebuild then omits the nvof elements. Stays
+        # None when optical_flow_required is set (the fault must stay visible).
+        self._of_failed: Optional[str] = None
+        self._flow: Dict[str, CameraFlowState] = {
+            cam.name: CameraFlowState(cam.name, enabled=self._of_enabled)
+            for cam in settings.cameras
+        }
+
         # Runtime-adjustable via /control; guarded by _lock because they are
         # written from FastAPI/uvicorn threads and read from the GLib probe thread.
         self._lock = threading.Lock()
@@ -334,6 +376,14 @@ class DeepStreamPipeline:
                                         serial_start=serial_start,
                                         **reid_options(d)),
                 )
+
+        # Optical flow is temporal: a rebuilt pipeline starts a new nvof epoch,
+        # so the previous camera's flow history must not survive into it. The
+        # first frame after a (re)build legitimately carries no flow metadata.
+        for flow in self._flow.values():
+            flow.reset()
+            if self._of_failed:
+                flow.fail(self._of_failed)
 
         self._gst = self._build_pipeline(Gst)
 
@@ -654,6 +704,95 @@ class DeepStreamPipeline:
         path.write_text(cfg)
         return str(path)
 
+    # ── Optical flow (NVIDIA OFA) element construction ────────────────────────
+
+    def _build_optical_flow(self, Gst, pipeline, make, cams) -> tuple:
+        """Create the optional OFA branch and return its elements in link order.
+
+        Returns an empty tuple when optical flow is off (nothing is created —
+        the pipeline is exactly what it was before this feature existed) or
+        when nvof is unavailable and we fall back to running without it.
+
+        Placement: ONE nvof on the batched stream, after nvstreammux. That is
+        forced by how DeepStream reports flow — ``NvDsOpticalFlowMeta`` is
+        attached to ``NvDsFrameMeta.frame_user_meta_list``, and frame meta only
+        exists inside the ``NvDsBatchMeta`` that nvstreammux creates, so an
+        nvof placed per-camera BEFORE the muxer would have nowhere to attach
+        its output. NVIDIA's own multi-source optical-flow sample and their
+        Orin Nano reference pipeline both put nvof after the muxer, and the
+        flow map is emitted per source (one NvDsOpticalFlowMeta per
+        NvDsFrameMeta), so each camera still gets its own temporal flow stream
+        — the temporal isolation lives inside the plugin's per-batch-slot state
+        rather than in separate elements. See docs/jetson-deepstream.md.
+        """
+        d = self.settings.detector
+        if not self._of_enabled or self._of_failed:
+            return ()
+
+        if Gst.ElementFactory.find("nvof") is None:
+            return self._of_unavailable(
+                "GStreamer element 'nvof' not found — the DeepStream optical-flow "
+                "plugin is missing, or this GPU/SoC has no OFA block")
+
+        created = []
+        try:
+            # nvof consumes NV12 only. This conversion stays in NVMM (GPU
+            # colour conversion, no host copy) and is a near no-op when the
+            # upstream branch is already NV12 (undistort/dewarp off).
+            conv = make("nvvideoconvert", "ofconv")
+            created.append(conv)
+            caps = make("capsfilter", "ofcaps")
+            created.append(caps)
+            caps.set_property(
+                "caps",
+                Gst.Caps.from_string("video/x-raw(memory:NVMM),format=NV12"),
+            )
+            of = make("nvof", "of")
+            created.append(of)
+            try:
+                of.set_property("preset-level", int(d.optical_flow_preset_level))
+            except Exception as exc:  # pragma: no cover - hardware dependent
+                self._log.warning(
+                    "optical flow: nvof preset-level not settable (%s); using plugin default",
+                    exc)
+        except Exception as exc:  # pragma: no cover - hardware dependent
+            # Leave no half-built branch behind: an element added to the
+            # pipeline but never linked would sit unlinked and could hold the
+            # whole pipeline out of PLAYING.
+            for el in created:
+                try:
+                    pipeline.remove(el)
+                except Exception:
+                    pass
+            return self._of_unavailable(f"nvof setup failed: {exc}")
+
+        # Logged once per pipeline build — never per frame.
+        self._log.info(
+            "optical flow: NVIDIA OFA enabled via nvof (preset-level=%d) for camera(s): %s",
+            d.optical_flow_preset_level, ", ".join(c.name for c in cams))
+        return (conv, caps, of)
+
+    def _of_unavailable(self, reason: str) -> tuple:
+        """Handle an OFA that was requested but cannot be built.
+
+        Fail-safe by default: record the reason, surface it in /health and keep
+        the vision pipeline running without OFA — an optional diagnostic must
+        never take detection down. With detector.optical_flow_required the
+        operator has asked for the opposite, so startup fails loudly instead,
+        with an error that names OFA.
+        """
+        if self.settings.detector.optical_flow_required:
+            raise RuntimeError(
+                "optical flow (OFA) is required by config "
+                f"(detector.optical_flow_required) but unavailable: {reason}")
+        self._of_failed = reason
+        for flow in self._flow.values():
+            flow.fail(reason)
+        self._log.error(
+            "optical flow: %s — continuing WITHOUT OFA; detection/tracking unaffected",
+            reason)
+        return ()
+
     # ── GStreamer pipeline construction ───────────────────────────────────────
 
     def _build_pipeline(self, Gst):
@@ -823,12 +962,16 @@ class DeepStreamPipeline:
         )
         demux = make("nvstreamdemux", "demux")
 
-        # Main batched chain: mux → pgie → tracker → dispconv → dispcaps(RGBA)
-        #                     → nvstreamdemux
-        for src_el, dst_el in [
-            (mux, pgie), (pgie, tracker),
-            (tracker, dispconv), (dispconv, dispcaps), (dispcaps, demux),
-        ]:
+        of_chain = self._build_optical_flow(Gst, pipeline, make, cams)
+
+        # Main batched chain: mux → pgie → tracker [→ nvvideoconvert(NV12) → nvof]
+        #                     → dispconv → dispcaps(RGBA) → nvstreamdemux.
+        # The OFA branch is spliced in AFTER the tracker: nvinfer keeps seeing
+        # exactly the buffer format it sees today (detection is untouched), and
+        # the flow is measured on the same corrected, mux-resolution image that
+        # detection and tracking used.
+        for src_el, dst_el in _main_chain_links(
+                mux, pgie, tracker, of_chain, dispconv, dispcaps, demux):
             if not src_el.link(dst_el):
                 raise RuntimeError(
                     f"Failed to link {src_el.get_name()} → {dst_el.get_name()}"
@@ -1025,6 +1168,13 @@ class DeepStreamPipeline:
                 state.last_pts = pts
 
             state.seq += 1
+
+            # ── Optical flow (optional, measurement-only) ───────────────────
+            # Read before the detection work so a flow estimate is recorded for
+            # every real (non-repeat) frame, independently of what detection
+            # does with it — which is nothing: OFA feeds diagnostics only.
+            self._read_optical_flow(pyds, frame_meta, cam_name)
+
             # Detection coords + display surface are in the streammux (native)
             # resolution, NOT imgsz — see _build_pipeline. Geometry (bearing,
             # range, horizon_y) and the bbox overlay all key off this WxH.
@@ -1133,6 +1283,71 @@ class DeepStreamPipeline:
                 break
 
         return 1  # Gst.PadProbeReturn.OK
+
+    # ── Optical flow (NVIDIA OFA) metadata ────────────────────────────────────
+
+    def _read_optical_flow(self, pyds, frame_meta, cam_name: str) -> None:
+        """Update this camera's global image motion from NvDsOpticalFlowMeta.
+
+        nvof attaches one NvDsOpticalFlowMeta per frame to
+        ``frame_meta.frame_user_meta_list``. Only that compact block-vector map
+        is read (a few tens of thousands of int16 pairs, not pixels) — the frame
+        surface is never touched, so the NVMM zero-copy property holds.
+
+        Missing metadata is normal, not an error: optical flow needs a previous
+        frame, so the first frame after pipeline start, an RTSP reconnect or a
+        detection off/on toggle carries none. We simply leave the last estimate
+        (or "no data") in place.
+        """
+        flow = self._flow.get(cam_name)
+        if flow is None or not flow.enabled or self._of_failed:
+            return  # off, unknown camera, or already fallen back to no-OFA
+        meta_type = getattr(getattr(pyds, "NvDsMetaType", None),
+                            "NVDS_OPTICAL_FLOW_META", None)
+        if meta_type is None:
+            if flow.fail("pyds has no NVDS_OPTICAL_FLOW_META (DeepStream bindings too old)"):
+                self._log.error("optical flow: %s", flow.error)
+            return
+
+        try:
+            l_user = frame_meta.frame_user_meta_list
+            while l_user is not None:
+                try:
+                    user_meta = pyds.NvDsUserMeta.cast(l_user.data)
+                except StopIteration:
+                    break
+                if user_meta.base_meta.meta_type == meta_type:
+                    of_meta = pyds.NvDsOpticalFlowMeta.cast(user_meta.user_meta_data)
+                    # Flat float32 array of RAW S10.5 components (x, y, x, y …);
+                    # estimate_global_motion applies the /32 scaling.
+                    stats = estimate_global_motion(
+                        pyds.get_optical_flow_vectors(of_meta),
+                        frame_num=int(of_meta.frame_num),
+                    )
+                    if stats.valid:
+                        flow.update(stats)
+                    return
+                try:
+                    l_user = l_user.next
+                except StopIteration:
+                    break
+        except Exception as exc:
+            # Never let a metadata surprise kill the probe (and with it the
+            # pipeline): record it once and carry on with detection.
+            if flow.fail(f"optical flow metadata parse failed: {exc}"):
+                self._log.warning("optical flow (%s): %s", cam_name, flow.error)
+
+    def optical_flow_status(self) -> Dict[str, dict]:
+        """Per-camera OFA diagnostics for /health.
+
+        Always one entry per configured camera — when the feature is off the
+        entry reports state "disabled" rather than vanishing, so a consumer can
+        tell "OFA is switched off" apart from "this backend has no OFA at all"
+        (the other backends expose no such method and report nothing).
+        """
+        now = time.monotonic()
+        return {name: flow.snapshot(now, self._of_stale_s)
+                for name, flow in self._flow.items()}
 
     # ── Horizon (throttled host-pixel access) ──────────────────────────────────
 
@@ -1269,6 +1484,37 @@ class DeepStreamPipeline:
 
     # ── GLib bus message handler ──────────────────────────────────────────────
 
+    def _note_optical_flow_error(self, err, debug, src) -> None:
+        """If a fatal bus error came from the OFA branch (element creation
+        succeeded but e.g. caps negotiation or the OFA block itself failed),
+        drop OFA so the supervisor's next rebuild brings the vision pipeline
+        back WITHOUT it instead of failing forever on an optional diagnostic.
+
+        With detector.optical_flow_required the fault is left in place: the
+        operator asked for OFA, so the pipeline keeps retrying and /health stays
+        degraded rather than quietly running blind.
+        """
+        if not self._of_enabled or self._of_failed:
+            return
+        try:
+            src_name = src.get_name() if src is not None else ""
+        except Exception:
+            src_name = ""
+        if src_name not in _OF_ELEMENTS and "nvof" not in (debug or ""):
+            return
+        reason = f"nvof failed: {err.message}"
+        for flow in self._flow.values():
+            flow.fail(reason)
+        if self.settings.detector.optical_flow_required:
+            self._log.error(
+                "optical flow: %s — OFA is configured as required, so the pipeline "
+                "will keep retrying with it", reason)
+            return
+        self._of_failed = reason
+        self._log.error(
+            "optical flow: %s — rebuilding WITHOUT OFA; detection/tracking unaffected",
+            reason)
+
     def _on_bus_message(self, bus, message) -> None:
         try:
             import gi
@@ -1285,6 +1531,7 @@ class DeepStreamPipeline:
             self._last_error = err.message
             for proxy in self.workers.values():
                 proxy.error = f"GStreamer error: {err.message}"
+            self._note_optical_flow_error(err, debug, message.src)
             # Quitting the loop hands control to the supervisor, which rebuilds the
             # pipeline with backoff instead of leaving detection down (see _supervise).
             if self._loop:

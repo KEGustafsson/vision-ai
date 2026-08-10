@@ -52,9 +52,30 @@ restarting, else `"ok"`.
   "model": "coco",                 // active detection model
   "model_labels": ["buoy", "person", "vessel"],  // labels this model can produce
   "pipeline_restarts": 0,          // DeepStream auto-restart count (0 on other backends)
-  "pipeline_last_error": null
+  "pipeline_last_error": null,
+  "optical_flow": {                // NVIDIA OFA per camera (DeepStream); {} on other backends
+    "forward": {
+      "enabled": true,
+      "state": "active",           // disabled | no_data | active | stale | error
+      "active": true,
+      "global_dx": 1.42,           // median image motion, px per frame interval
+      "global_dy": -0.31,
+      "vectors": 51840,            // vectors kept after filtering
+      "confidence": 0.98,          // share of the frame's vectors kept
+      "age_ms": 42,
+      "error": null
+    }
+  }
 }
 ```
+
+On the DeepStream backend every configured camera always has an entry — `state`
+is `"disabled"` when `detector.optical_flow` is off — so a consumer can tell a
+switched-off feature from a backend that has no OFA path at all (those report
+`{}`). `optical_flow` is a measurement only: it feeds no detection, geometry or
+alert logic, and stale/absent flow does not degrade `status` unless
+`detector.optical_flow_required` is set. See
+[jetson-deepstream.md](jetson-deepstream.md#optical-flow-ofa).
 
 ### `POST /control`
 
