@@ -1,5 +1,6 @@
 # Runtime extras for the JetPack 5 / DeepStream 6.3 image
-# (Dockerfile.deepstream.xavier — Jetson Xavier NX / AGX Xavier).
+# (Dockerfile.deepstream.xavier — Jetson Xavier NX; see docs/jetson-deepstream.md
+#  for why other JetPack 5 boards are untested).
 #
 # Same shape as requirements-deepstream.txt (the JetPack 6 / DeepStream 7.1
 # list): the NVIDIA base already ships CUDA, TensorRT, the nv* GStreamer

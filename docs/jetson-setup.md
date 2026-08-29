@@ -9,8 +9,8 @@ covered in [DeepStream GPU pipeline](jetson-deepstream.md). It shares this
 doc's prerequisites, camera calibration, and autostart steps (§1, §3, §5
 below); only §2 and §4 are `jetson`-backend-specific.
 
-The `deepstream` backend additionally runs on **JetPack 5** boards (Jetson
-Xavier NX / AGX Xavier) from a second compose file; see
+The `deepstream` backend additionally runs on **JetPack 5** — verified on a
+Jetson Xavier NX — from a second compose file; see
 [Hardware targets](jetson-deepstream.md#hardware-targets). Everything in this
 document assumes the Orin Nano / JetPack 6 target unless stated otherwise.
 

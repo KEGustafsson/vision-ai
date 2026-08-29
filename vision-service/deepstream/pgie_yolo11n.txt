@@ -50,6 +50,19 @@ onnx-file=yolo11n_ds.onnx
 # Prebuilt engine baked into this dir (deepstream-yolo names it <onnx>_b<N>_gpu0_fp16
 # when nvinfer builds from the ONNX). Deserialised on startup — no ~7.5-min rebuild.
 # Delete it (and rebuild the image) to force a fresh build, e.g. after a TRT/HW change.
+#
+# CROSS-BOARD NOTE: this filename is platform-NEUTRAL while the engine itself is
+# not — TensorRT engines are tied to the GPU arch and TRT version, and the host's
+# deepstream/ dir is bind-mounted, so moving a checkout between an Orin (TRT 10)
+# and a Xavier (TRT 8.5) leaves a stale engine here that this board cannot load.
+# That is SAFE, not fatal: nvinfer falls back to rebuilding from onnx-file.
+# Observed verbatim on the Xavier's first start:
+#   deserialize backend context from engine from file :.../yolo11n_ds.onnx_b2_gpu0_fp16.engine failed, try rebuild
+#   Info from NvDsInferContextImpl::buildModel(): Trying to create engine from model files
+# The only cost is the rebuild (~19 min on a Xavier NX), so the engine is not
+# given a per-platform name — that would need per-platform pgie configs, and the
+# single shared set of configs is worth more than avoiding a rare one-off wait.
+# Delete the stale *_gpu0_fp16.engine yourself if you want to skip the fallback.
 model-engine-file=yolo11n_ds.onnx_b2_gpu0_fp16.engine
 
 labelfile-path=labels_coco.txt

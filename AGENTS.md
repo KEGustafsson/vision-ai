@@ -37,6 +37,22 @@ keeps the two sides from drifting. Do not edit the generated JSON by hand.
 | Vision service | `vision-service/` | Python 3.11, FastAPI, OpenCV, YOLO11n (DeepStream, production) or Ultralytics YOLO11 (torch/TensorRT) |
 | SignalK plugin | `signalk-plugin/` | TypeScript, `ws`, `ajv` |
 
+> **Documented exception — Python 3.8 on the JetPack 5 image.** Python 3.11 is
+> the convention and is what CI runs. The one deployment that cannot meet it is
+> `Dockerfile.deepstream.xavier`: DeepStream 6.3 is the last release for
+> JetPack 5, its base is Ubuntu 20.04, and NVIDIA's `pyds` 1.1.8 binding is
+> compiled against that image's Python 3.8. No Python 3.11 DeepStream binding
+> exists for JetPack 5, so meeting the convention there would mean abandoning
+> either the board or the DeepStream backend. **No application code is forked
+> for it** — every module already carries `from __future__ import annotations`
+> and the Pydantic models use `Optional`/`Dict`/`List`, so the same sources run
+> unmodified; only the dependency pins differ
+> (`constraints-xavier.txt`). Keep it that way: new code must stay 3.8-parseable
+> **as well as** 3.11-correct, which in practice means no PEP 604/585 syntax in
+> a position that is evaluated at runtime (pydantic fields, dataclass
+> `field()` defaults) and no 3.9+ stdlib APIs. Check with:
+> `python3 -c "import ast,pathlib; [ast.parse(p.read_text(), feature_version=(3,8)) for p in pathlib.Path('vision-service').rglob('*.py')]"`
+
 Essential docs to consult before changing the relevant area:
 
 - `docs/architecture.md` — data flow and component responsibilities

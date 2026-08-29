@@ -72,11 +72,25 @@ JetPack version for the report — the DeepStream backend runs on both JetPack 6
 ```bash
 curl -s $NANO/health | jq
 ```
-**PASS:** `status:"ok"`, `mode:"jetson"`, `backend:"tensorrt"` (NOT `mock`),
-both cameras listed, `camera_errors:{}`, an `active_camera`.
-**FAIL → backend mock/torch:** engine not found/loaded → check
-`models/yolo11n.engine` and `VISION_MODEL_ENGINE`; rebuild with
+**PASS:** `status:"ok"`, both cameras listed, `camera_errors:{}`, an
+`active_camera`, and `mode`/`backend` matching the deployment you actually
+started (in particular, NOT `mock`):
+
+| Deployment | compose file | expected `mode` | expected `backend` |
+|---|---|---|---|
+| Orin Nano Super, DeepStream | `docker-compose.deepstream.yml` | `deepstream` | `deepstream` |
+| Xavier NX, DeepStream | `docker-compose.deepstream.xavier.yml` | `deepstream` | `deepstream` |
+| Jetson, Ultralytics/TensorRT | `docker-compose.jetson.yml` | `jetson` | `tensorrt` |
+
+**FAIL → backend mock/torch (`jetson` deployments):** engine not found/loaded →
+check `models/yolo11n.engine` and `VISION_MODEL_ENGINE`; rebuild with
 `scripts/export_engine.py` on the Jetson.
+**FAIL → no response at all (`deepstream` deployments):** on a first start
+nvinfer is still building the TensorRT engine and the HTTP server has not opened
+yet — this can take ~20 min on a Xavier NX. `docker logs` shows
+`Trying to create engine from model files`; wait for it rather than restarting,
+or the build starts over. See
+[DeepStream GPU pipeline](jetson-deepstream.md#ram).
 **FAIL → camera_errors non-empty:** go to 2.2 debug.
 
 ### 2.2 Cameras & ingestion

@@ -38,7 +38,7 @@ on the two — only the platform layer (base images, DeepStream/CUDA/TensorRT
 versions, and therefore the container's Python) differs, and all of that
 difference is confined to the Dockerfile and compose file:
 
-| | Orin Nano Super | Xavier NX / AGX Xavier |
+| | Orin Nano Super | Xavier NX |
 |---|---|---|
 | L4T / JetPack | r36.x / JetPack 6.1–6.2 | r35.x / JetPack 5.1.x |
 | Compose file | `docker-compose.deepstream.yml` | `docker-compose.deepstream.xavier.yml` |
@@ -54,7 +54,22 @@ difference is confined to the Dockerfile and compose file:
 
 DeepStream 6.3 is the last release for JetPack 5 (6.4 and later require
 JetPack 6), and it fixes the container's interpreter at Python 3.8 because the
-official `pyds` binding is compiled against it. That costs nothing in the
+official `pyds` binding is compiled against it.
+
+> **Version-pairing note.** NVIDIA pairs DeepStream 6.3 with JetPack 5.1.2 /
+> L4T **35.4.1**. The board this was built and verified on runs L4T **35.6.4**,
+> a later JetPack 5.1.x maintenance release, so this is a *supported-adjacent*
+> rather than a documented-by-NVIDIA combination. It is the only option that
+> exists — there is no newer DeepStream for JetPack 5, and downgrading L4T to
+> 35.4.1 to satisfy the pairing on paper would mean reflashing the boat's
+> board. It is verified working end to end (see
+> [Verified on this hardware](#verified-on-this-hardware)), and every L4T
+> ABI-sensitive piece is pulled from the host's **own** release, not 35.4.1:
+> `L4T_RELEASE` must track the board (`head -1 /etc/nv_tegra_release`), because
+> the glue libraries below talk to the running kernel driver and deliberately
+> mismatching them would be worse than the version-pairing gap it papers over.
+> If you move to a different L4T, re-run the verification rather than assuming
+> it carries. That costs nothing in the
 application: every module already carries `from __future__ import annotations`
 and the Pydantic models use `Optional`/`Dict`/`List`, so the same sources run
 unchanged — but the dependency versions have to be the last ones that still
@@ -64,6 +79,15 @@ the test suite on 3.11.
 
 Everything below applies to both boards unless a section says otherwise; see
 [Xavier NX notes](#xavier-nx-notes) for the JetPack 5 specifics.
+
+**Tested hardware.** The JetPack 5 path is verified on a **Jetson Xavier NX**
+(L4T R35.6.4) — see [Verified on this hardware](#verified-on-this-hardware).
+Nothing in it is NX-specific, so other JetPack 5 Jetsons (AGX Xavier, or an Orin
+still on JetPack 5) are *expected* to work, but they are **untested**: at
+minimum the `L4T_SOC` build arg changes (`t194` → `t234` for Orin) and the
+`nvpmodel` mode IDs differ per board and JetPack release, so the power-mode
+command below does not carry over unchanged. Treat those boards as needing their
+own bring-up rather than as supported configurations.
 
 ## Run
 
@@ -76,7 +100,7 @@ export VISION_CAMERA_AFT_URL="rtsp://user:pass@192.168.1.11:554/stream"
 
 # Orin Nano Super (JetPack 6)
 docker compose -f docker-compose.deepstream.yml up -d --build
-# Xavier NX / AGX Xavier (JetPack 5)
+# Xavier NX (JetPack 5)
 docker compose -f docker-compose.deepstream.xavier.yml up -d --build
 ```
 
@@ -234,7 +258,7 @@ They fail in two different, equally unhelpful ways.
 
 **Missing at link time** — the element cannot be created at all:
 
-```
+```text
 RuntimeError: Cannot create GStreamer element 'nvstreammux' (name='mux').
 ```
 
@@ -255,7 +279,7 @@ later, at state change. NVIDIA's `libv4l2` dlopens the NVDEC/NVJPG shim
 `libtegrav4l2.so`. Without it the shim never loads, so nothing claims
 `/dev/nvhost-nvdec` and the decoder blames the device node:
 
-```
+```text
 libv4l2: error getting capabilities: Inappropriate ioctl for device
 ERROR ... nvv4l2decoder0: Error getting capabilities for device '/dev/nvhost-nvdec':
   It isn't a v4l2 driver. Check if it is a v4l1 driver.
@@ -330,11 +354,24 @@ against a freshly built `vision-ai:deepstream-xavier`:
 | NVMM convert → `nvjpegenc` (NVJPG block) | ran, `NvMMLiteBlockCreate BlockType = 1` |
 | `nvstreammux` → `nvtracker` (NvDCF) → `nvstreamdemux` → `nvdsosd` → `nvjpegenc` | ran to clean EOS |
 
-**Not yet verified on this board:** live RTSP cameras, the nvinfer TensorRT
-engine build, `nvdewarper`, end-to-end detections and the `DetectionEvent`
-output. Those need the cameras connected — run
-[onboard verification](onboard-verification.md), and read
-[Tracker parameter differences](#tracker-parameter-differences) first.
+Then confirmed again on a full deployment against the boat's two live Hikvision
+domes (`docker compose -f docker-compose.deepstream.xavier.yml up -d`):
+
+| check | result |
+|---|---|
+| Live RTSP ingest, both cameras | both NVDEC instances opened (`Opening in BLOCKING MODE` ×2), `camera_errors: {}` |
+| nvinfer TensorRT engine build | built from the ONNX in ~19 min, 7.3 MB, persisted to the bind-mounted `deepstream/` |
+| `nvdewarper` | configured and running per camera (`GPU dewarp via nvdewarper`), pipeline reached PLAYING |
+| End-to-end detections | `/events/recent` returns targets with label, confidence, bearing and range |
+| `DetectionEvent` output | `schema_version: 1.0`, consumed by the SignalK plugin |
+| Hardware JPEG via `nvdsosd` → `nvjpegenc` | `/snapshot/<cam>` returns a ~120 KB JPEG |
+| Steady state | `/health` `status: "ok"`, `pipeline_restarts: 0`, ~5.9 Hz per camera |
+
+**Still unverified:** sustained multi-hour running, behaviour under way (all of
+the above was measured at a berth), and track continuity in chop — see
+[Tracker parameter differences](#tracker-parameter-differences), which is the
+one place this board is known to behave differently from an Orin. Run
+[onboard verification](onboard-verification.md) before relying on it.
 
 ### RAM
 
@@ -357,9 +394,19 @@ swap (`sudo systemctl enable --now nvzramconfig`, or a swapfile) before
 retrying.
 
 TensorRT engines are **not portable** across boards, TensorRT versions or
-JetPack generations. Moving a checkout between an Orin and a Xavier leaves a
-stale `deepstream/*_gpu0_fp16.engine` that this board cannot deserialise; delete
-it and let nvinfer rebuild.
+JetPack generations, and the engine lives in the bind-mounted `deepstream/`
+under a platform-neutral filename. Moving a checkout between an Orin and a
+Xavier therefore leaves a stale `deepstream/*_gpu0_fp16.engine` this board
+cannot deserialise. That is handled, not fatal — nvinfer logs the failure and
+rebuilds from the ONNX:
+
+```text
+deserialize backend context from engine from file :...engine failed, try rebuild
+Info from NvDsInferContextImpl::buildModel(): Trying to create engine from model files
+```
+
+The cost is the rebuild (~19 min here), not an outage. Delete the stale engine
+first if you would rather not wait for the fallback.
 
 ### Inference size
 
@@ -371,7 +418,11 @@ to 640 — in **both** places, they must match:
 
 ```bash
 # 1. config/deepstream.yaml:  detector.imgsz: 640
-# 2. rebuild the ONNX at the same size and clear the stale engine
+# 2. rebuild the ONNX at the same size and clear the stale engine.
+#    The trailing * is doing real work here: nvinfer names the engine after the
+#    ONNX (yolo11n_ds.onnx_b2_gpu0_fp16.engine), so this one glob removes BOTH
+#    the old ONNX and the engine built from it. Drop the * and you keep a 768
+#    engine next to a 640 ONNX.
 rm -f vision-service/deepstream/yolo11n_ds.onnx*
 docker compose -f docker-compose.deepstream.xavier.yml build \
     --build-arg YOLO_IMGSZ=640
@@ -388,7 +439,7 @@ it with OpenCV `FileStorage` and **silently ignores keys it does not know**, so
 two DeepStream 7.x parameters in it have no effect under DeepStream 6.3. Both are
 logged once at startup and are expected:
 
-```
+```text
 !! [WARNING][NvTrackerParamsTrajectoryManager] Unknown param found: useUncoveredAreaDetection
 !! [WARNING][VisualTrackerConfigParams] Unknown param found: searchRegionPaddingScale
 ```

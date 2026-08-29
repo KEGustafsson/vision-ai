@@ -1,5 +1,6 @@
 # Pinned, known-good Python stack for the JetPack 5 / DeepStream 6.3 image
-# (Dockerfile.deepstream.xavier — Jetson Xavier NX / AGX Xavier).
+# (Dockerfile.deepstream.xavier — Jetson Xavier NX; see docs/jetson-deepstream.md
+#  for why other JetPack 5 boards are untested).
 #
 # WHY A SECOND CONSTRAINTS FILE
 # =============================

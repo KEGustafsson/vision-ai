@@ -21,8 +21,21 @@ if [ ! -f "$dest" ] && [ -f "$seed" ]; then
     if cp "$seed" "$dest" 2>/dev/null; then
         echo "deepstream-entrypoint: seeded default ONNX -> $dest"
     else
-        echo "deepstream-entrypoint: WARN could not write $dest — make the host" \
-             "deepstream/ dir writable by UID 10001, or place the ONNX yourself" >&2
+        # FAIL FAST, do not warn-and-continue. The seed is only attempted when
+        # the destination is missing, so reaching here means the mount has no
+        # model AND we cannot write one. Every pgie config resolves its
+        # onnx-file inside this directory, so nvinfer would fail at pipeline
+        # start and the service would come up with NO DETECTOR — the exact
+        # fail-open a safety-relevant sensor must not have. Better to exit
+        # non-zero: compose restarts the container and the reason stays at the
+        # top of `docker logs` instead of scrolling past as a warning.
+        echo "deepstream-entrypoint: ERROR cannot write $dest and no model is" \
+             "present there. nvinfer would start without a model." >&2
+        echo "deepstream-entrypoint: fix with" \
+             "vision-service/scripts/fix_host_permissions.sh (grants UID 10001" \
+             "write access to the bind-mounted deepstream/ and models/ dirs)," \
+             "or place the ONNX in deepstream/ yourself." >&2
+        exit 1
     fi
 fi
 exec "$@"

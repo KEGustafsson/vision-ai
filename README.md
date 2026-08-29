@@ -135,7 +135,7 @@ aren't portable), then run.
 |------|-------|---------|
 | **`mock`** | any laptop, no GPU/cameras | `docker compose up` |
 | **`deepstream`** | Jetson Orin Nano Super (JetPack 6), full-GPU pipeline (production) | `docker compose -f docker-compose.deepstream.yml up -d --build` |
-| **`deepstream`** | Jetson Xavier NX / AGX Xavier (JetPack 5), same pipeline | `docker compose -f docker-compose.deepstream.xavier.yml up -d --build` |
+| **`deepstream`** | Jetson Xavier NX (JetPack 5), same pipeline | `docker compose -f docker-compose.deepstream.xavier.yml up -d --build` |
 | **`jetson`** | Jetson, TensorRT (alternative) | build the engine once (below), then `docker compose -f docker-compose.jetson.yml up -d` |
 
 Set the camera URLs first for the GPU modes (`.env` or exported):
@@ -174,7 +174,7 @@ differs:
 ```bash
 # Orin Nano Super — JetPack 6, DeepStream 7.1
 docker compose -f docker-compose.deepstream.yml up -d --build
-# Xavier NX / AGX Xavier — JetPack 5, DeepStream 6.3
+# Xavier NX — JetPack 5, DeepStream 6.3
 docker compose -f docker-compose.deepstream.xavier.yml up -d --build
 ```
 
