@@ -213,31 +213,34 @@ so the two stay identical.
 
 ### L4T multimedia libraries
 
-Three libraries that the `nv*` GStreamer plugins link against ship in neither the
+Four libraries that the `nv*` GStreamer plugins need ship in neither the
 DeepStream image nor DeepStream itself — they belong to the **host's** L4T
 GStreamer userspace and are normally injected by the NVIDIA container runtime
 from its CSV mount list (`/etc/nvidia-container-runtime/host-files-for-container.d/l4t.csv`):
 
-| library | package |
-|---|---|
-| `libnvdsbufferpool.so.1.0.0` | `nvidia-l4t-multimedia` |
-| `libgstnvdsseimeta.so.1.0.0` | `nvidia-l4t-gstreamer` |
-| `libgstnvexifmeta.so` | `nvidia-l4t-gstreamer` |
+| library | package | needed by |
+|---|---|---|
+| `libnvdsbufferpool.so.1.0.0` | `nvidia-l4t-multimedia` | `nvstreammux`, `nvvideoconvert`, `nvdewarper`, `nvstreamdemux` |
+| `libtegrav4l2.so` | `nvidia-l4t-multimedia` | `nvv4l2decoder`, `nvjpegenc` (indirectly — see below) |
+| `libgstnvdsseimeta.so.1.0.0` | `nvidia-l4t-gstreamer` | `nvv4l2decoder`, `nvstreammux` |
+| `libgstnvexifmeta.so` | `nvidia-l4t-gstreamer` | `nvjpegenc` |
 
 On a stock **Ubuntu** JetPack host they are simply present and nothing special
 happens. On a **Yocto / meta-tegra** rootfs — which is what this boat's Xavier NX
 runs — the L4T GStreamer userspace is not installed at all, so those CSV entries
-resolve to nothing, the mounts silently do not happen, and every `nv*` element
-that depends on them fails to load. Symptom:
+resolve to nothing and the mounts silently do not happen.
+
+They fail in two different, equally unhelpful ways.
+
+**Missing at link time** — the element cannot be created at all:
 
 ```
 RuntimeError: Cannot create GStreamer element 'nvstreammux' (name='mux').
 ```
 
-…with no indication that a **host** library is the cause — `nvinfer`, `nvtracker`,
-`nvdsosd` and `nvof` load fine, while `nvstreammux`, `nvstreamdemux`,
-`nvvideoconvert`, `nvdewarper`, `nvv4l2decoder` and `nvjpegenc` do not. Confirm
-the diagnosis with:
+`nvinfer`, `nvtracker`, `nvdsosd` and `nvof` load fine, while `nvstreammux`,
+`nvstreamdemux`, `nvvideoconvert`, `nvdewarper`, `nvv4l2decoder` and `nvjpegenc`
+do not. Confirm with:
 
 ```bash
 docker run --rm --runtime nvidia --entrypoint ldd \
@@ -245,14 +248,50 @@ docker run --rm --runtime nvidia --entrypoint ldd \
     /opt/nvidia/deepstream/deepstream/lib/gst-plugins/libgstnvvideoconvert.so | grep "not found"
 ```
 
-`Dockerfile.deepstream.xavier` therefore carries those three files itself: its
+**Missing at *runtime* dlopen — `libtegrav4l2.so`.** Nothing links to it
+directly, so every element still loads and the pipeline still builds; it fails
+later, at state change. NVIDIA's `libv4l2` dlopens the NVDEC/NVJPG shim
+`libv4l/plugins/nv/libv4l2_nvvideocodec.so`, and *that* is what needs
+`libtegrav4l2.so`. Without it the shim never loads, so nothing claims
+`/dev/nvhost-nvdec` and the decoder blames the device node:
+
+```
+libv4l2: error getting capabilities: Inappropriate ioctl for device
+ERROR ... nvv4l2decoder0: Error getting capabilities for device '/dev/nvhost-nvdec':
+  It isn't a v4l2 driver. Check if it is a v4l1 driver.
+RuntimeError: DeepStream pipeline failed to enter PLAYING state.
+```
+
+The device node is present and fine — the library is not. Confirm with:
+
+```bash
+docker run --rm --runtime nvidia --entrypoint ldd vision-ai:deepstream-xavier \
+    /usr/lib/aarch64-linux-gnu/libv4l/plugins/nv/libv4l2_nvvideocodec.so | grep "not found"
+```
+
+`Dockerfile.deepstream.xavier` therefore carries all four files itself: its
 `l4tglue` stage pulls `nvidia-l4t-multimedia` and `nvidia-l4t-gstreamer` from the
-public L4T apt repo for the board's own release and extracts exactly the three
+public L4T apt repo for the board's own release and extracts exactly those four
 `.so`s (never installs the packages — that would drag in `nvidia-l4t-core`/`-cuda`
 and fight the CUDA the DeepStream base ships). Because they come from the same
 L4T release the board was flashed from, they are ABI-matched to the kernel
 driver; and on a host that *does* provide them the runtime's bind mounts land on
 these exact paths and win, so the fallback never overrides a working host.
+
+To re-audit this on a different board — every CSV entry resolvable in neither the
+rootfs nor the runtime's `alt-roots`:
+
+```bash
+CSV=/etc/nvidia-container-runtime/host-files-for-container.d/l4t.csv
+ALT=/usr/share/nvidia-container-passthrough      # from config.toml's alt-roots
+awk -F', ' '$1=="lib"||$1=="sym"{print $2}' "$CSV" | while read -r p; do
+  [ -e "$p" ] || [ -e "$ALT$p" ] || echo "$p"
+done | sort
+```
+
+On this board that lists 19 paths; the other 15 are OpenMAX, EGL/Vulkan/KMS
+display and Orin-only (`tegra23x`) firmware, none of which this headless
+pipeline touches.
 
 Set the release/SoC in the compose file if the board is not an R35.6 Xavier:
 
