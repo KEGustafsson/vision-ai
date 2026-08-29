@@ -1,4 +1,9 @@
-# nvinfer primary GIE config for YOLO11n (DeepStream 7.x / JetPack 6)
+# nvinfer primary GIE config for YOLO11n.
+# Shared by both DeepStream images — JetPack 6 / DS 7.1 (Dockerfile.deepstream)
+# and JetPack 5 / DS 6.3 (Dockerfile.deepstream.xavier). Every key below is
+# version-neutral; the one platform-dependent thing, the custom parser, is
+# referenced by absolute path so each image supplies its own build (see the
+# note at custom-lib-path).
 #
 # ENGINE FORMAT REQUIREMENT
 # =========================
@@ -45,6 +50,19 @@ onnx-file=yolo11n_ds.onnx
 # Prebuilt engine baked into this dir (deepstream-yolo names it <onnx>_b<N>_gpu0_fp16
 # when nvinfer builds from the ONNX). Deserialised on startup — no ~7.5-min rebuild.
 # Delete it (and rebuild the image) to force a fresh build, e.g. after a TRT/HW change.
+#
+# CROSS-BOARD NOTE: this filename is platform-NEUTRAL while the engine itself is
+# not — TensorRT engines are tied to the GPU arch and TRT version, and the host's
+# deepstream/ dir is bind-mounted, so moving a checkout between an Orin (TRT 10)
+# and a Xavier (TRT 8.5) leaves a stale engine here that this board cannot load.
+# That is SAFE, not fatal: nvinfer falls back to rebuilding from onnx-file.
+# Observed verbatim on the Xavier's first start:
+#   deserialize backend context from engine from file :.../yolo11n_ds.onnx_b2_gpu0_fp16.engine failed, try rebuild
+#   Info from NvDsInferContextImpl::buildModel(): Trying to create engine from model files
+# The only cost is the rebuild (~19 min on a Xavier NX), so the engine is not
+# given a per-platform name — that would need per-platform pgie configs, and the
+# single shared set of configs is worth more than avoiding a rare one-off wait.
+# Delete the stale *_gpu0_fp16.engine yourself if you want to skip the fallback.
 model-engine-file=yolo11n_ds.onnx_b2_gpu0_fp16.engine
 
 labelfile-path=labels_coco.txt
@@ -74,7 +92,13 @@ cluster-mode=2
 # libnvdsinfer_custom_impl_Yolo.so (current marcoslucianops repo exports
 # NvDsInferParseYolo; older revisions used NvDsInferParseCustomYoloV8).
 parse-bbox-func-name=NvDsInferParseYolo
-custom-lib-path=libnvdsinfer_custom_impl_Yolo.so
+# The parser is named by ABSOLUTE path, NOT relative to this file: compose
+# bind-mounts the host's deepstream/ over this directory, so a relative name
+# would resolve to the HOST copy — which on a JetPack 5 board (DeepStream 6.3 /
+# CUDA 11.4) is the wrong ABI and fails to load. /opt/vision-service/lib/ is
+# outside the mount, so each image supplies the build matching its own
+# DeepStream (see Dockerfile.deepstream and Dockerfile.deepstream.xavier).
+custom-lib-path=/opt/vision-service/lib/libnvdsinfer_custom_impl_Yolo.so
 
 # input-dims / output-blob-names are taken from the ONNX — do not pin them here.
 

@@ -65,6 +65,10 @@ TargetManagement:
   earlyTerminationAge: 3
 
 TrajectoryManagement:
+  # DEEPSTREAM 6.3 (JetPack 5 / Xavier): this key does not exist and the tracker
+  # logs "Unknown param found: useUncoveredAreaDetection" at startup, then
+  # ignores it. Harmless — we set it to 0 (off), and 6.3 has no such feature to
+  # turn on, so both boards behave the same here.
   useUncoveredAreaDetection: 0
   # Motion-based re-association (DeepStream 6.2+): when a shadow track's
   # trajectory, projected forward by its own motion, matches a newly born
@@ -161,6 +165,14 @@ VisualTracker:
   featureFocusOffsetFactor_y: 0.0
   # Search-region padding around the predicted position (1-3): 2 gives the
   # filter room for wave-induced apparent motion between 12 FPS frames.
+  # ⚠ DEEPSTREAM 6.3 (JetPack 5 / Xavier): this is a DeepStream 7.x parameter —
+  # it appears nowhere in 6.3's stock presets, so the tracker logs
+  # "Unknown param found: searchRegionPaddingScale" and falls back to its own
+  # internal default. Unlike useUncoveredAreaDetection above this is a REAL
+  # behavioural difference between the two boards: NvDCF on a Xavier searches a
+  # differently-sized region, so re-check track continuity in chop when
+  # validating that board on the water (docs/onboard-verification.md). There is
+  # no 6.3 equivalent to set instead; leave the value here for the Orin.
   searchRegionPaddingScale: 2
   # Filter learning rate (stock perf): low = long visual memory, so a few
   # frames of spray/occlusion don't overwrite what the target looks like.

@@ -1,0 +1,51 @@
+# Pinned, known-good Python stack for the JetPack 5 / DeepStream 6.3 image
+# (Dockerfile.deepstream.xavier — Jetson Xavier NX; see docs/jetson-deepstream.md
+#  for why other JetPack 5 boards are untested).
+#
+# WHY A SECOND CONSTRAINTS FILE
+# =============================
+# The DeepStream 6.3 L4T base is Ubuntu 20.04, so its interpreter is **Python
+# 3.8** — and it has to be: the official `pyds` binding for DeepStream 6.3
+# (deepstream_python_apps v1.1.8) is compiled against that interpreter. Every
+# version in constraints.txt (Starlette 1.3, FastAPI 0.138, NumPy 2.x, …) has
+# dropped 3.8, so a `-c constraints.txt` install simply cannot resolve here.
+#
+# These are the NEWEST releases of the same stack that still ship a Python 3.8
+# aarch64 wheel — verified against PyPI, not guessed. Bump deliberately: if a
+# newer release drops 3.8 the install fails loudly at build time rather than
+# silently degrading, which is the behaviour we want.
+#
+# The application code itself is unchanged: every module already carries
+# `from __future__ import annotations` and its Pydantic models use
+# `Optional[...]`/`Dict`/`List`, so the sources parse and run on 3.8 as-is.
+# CI still runs the tests on 3.11 with constraints.txt — this file only governs
+# what goes into the Xavier image.
+#
+# NOTE: numpy is capped at 1.24.4 (the last 3.8 build) and
+# opencv-python-headless at 4.12.0.88 — the last 4.x with a cp38 aarch64 wheel,
+# whose own metadata requires `numpy<2.0` on 3.8, so the two agree.
+#
+# Transitive deps are pinned here too — unlike constraints.txt, which leaves them
+# to pip. On 3.8 the newest release of several of these has no aarch64 wheel, and
+# an unpinned resolve would quietly fall back to building uvloop/watchfiles/
+# httptools from source inside the image (slow at best, a failed build at worst).
+annotated-types==0.7.0
+anyio==4.6.2
+click==8.1.8
+fastapi==0.124.4
+h11==0.16.0
+httpcore==1.0.9
+httptools==0.6.4
+httpx==0.28.1
+numpy==1.24.4
+opencv-python-headless==4.12.0.88
+pydantic==2.10.6
+pydantic-core==2.27.2
+python-dotenv==1.0.1
+PyYAML==6.0.3
+starlette==0.44.0
+typing-extensions==4.13.2
+uvicorn==0.33.0
+uvloop==0.22.1
+watchfiles==0.24.0
+websockets==13.1

@@ -3,6 +3,12 @@
 # ON THE HOST and drop it into vision-service/deepstream/, where Dockerfile.deepstream
 # bakes it into the image.
 #
+# JETPACK 6 ONLY. The JetPack 5 image (Dockerfile.deepstream.xavier) compiles its
+# own parser inside the build — its DeepStream 6.3 / CUDA 11.4 / TensorRT 8.5 .so
+# is a different ABI and must NOT be committed over the one this script produces.
+# Both images install the parser at /opt/vision-service/lib/, which is what
+# deepstream/pgie_*.txt names in custom-lib-path.
+#
 # Why on the host: the DeepStream 7.1 samples base image has no nvcc, and its only
 # apt source (l4t-repo.nvidia.com) is unreachable off the Jetson. The host JetPack
 # has nvcc + the DS 7.1 SDK at the SAME versions as the container (CUDA 12.6 / DS 7.1

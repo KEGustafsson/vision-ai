@@ -1,0 +1,89 @@
+# DeepStream deployment for the Jetson Xavier NX (JetPack 5.x): GPU decode +
+# inference + tracking + OSD + JPEG encode via NVIDIA DeepStream 6.3.
+#
+#   docker compose -f docker-compose.deepstream.xavier.yml up -d --build
+#
+# This is the JetPack 5 twin of docker-compose.deepstream.yml (Orin Nano Super /
+# JetPack 6 / DeepStream 7.1). Same pipeline, same code, same DetectionEvent
+# contract, same config/deepstream.yaml — only the platform layer differs, and
+# all of that difference lives in vision-service/Dockerfile.deepstream.xavier
+# (DeepStream 6.3, CUDA 11.4, TensorRT 8.5, Python 3.8). Pick the file that
+# matches the board; never run both against one checkout at the same time (they
+# share the bind-mounted deepstream/ dir and would fight over the TRT engine).
+#
+# This file is self-contained — it defines the whole vision-service for this path,
+# so it runs with a SINGLE -f (no docker-compose.yml base needed; that base only
+# carries mock-mode defaults DeepStream overrides anyway).
+#
+# Requires the NVIDIA Container Runtime on the Xavier. Camera URLs come from .env
+# (same keys as the other deployments). The first start is slow: nvinfer builds
+# the TensorRT engine from deepstream/yolo11n_ds.onnx into the bind-mounted
+# deepstream/ dir — expect longer than on an Orin, and give the board free RAM
+# for it (the engine then persists, so later starts are fast).
+services:
+  vision-service:
+    build:
+      context: ./vision-service
+      dockerfile: Dockerfile.deepstream.xavier
+      args:
+        # Stage-1/2 base: the public Ultralytics JetPack 5 image (itself
+        # nvcr.io/nvidia/l4t-jetpack:r35.4.1), which carries the CUDA 11.4
+        # toolkit and TensorRT 8.5 that the ONNX export and the nvinfer parser
+        # compile both need. NOTE the jetpack5 tag — the JetPack 6 image used by
+        # docker-compose.deepstream.yml will not run here. Pin a digest for a
+        # reproducible release: resolve the aarch64 digest on the box and export
+        # VISION_JETSON_BASE=ultralytics/ultralytics@sha256:<digest>.
+        EXPORT_BASE: ${VISION_JETSON_BASE:-ultralytics/ultralytics:latest-jetson-jetpack5}
+        # Which L4T release the image pulls its three multimedia glue libraries
+        # from (see the l4tglue stage in the Dockerfile — they are what makes the
+        # nv* GStreamer elements loadable on a host whose rootfs does not ship
+        # the L4T GStreamer userspace, e.g. a Yocto/meta-tegra build). Must match
+        # the board: `head -1 /etc/nv_tegra_release` -> "R35 … REVISION: 6.4" is
+        # r35.6; SoC is t194 for Xavier, t234 for Orin.
+        L4T_RELEASE: ${VISION_L4T_RELEASE:-r35.6}
+        L4T_SOC: ${VISION_L4T_SOC:-t194}
+    image: vision-ai:deepstream-xavier
+    container_name: vision-service-deepstream-xavier
+    restart: unless-stopped
+    runtime: nvidia
+    environment:
+      VISION_MODE: deepstream
+      VISION_CAMERA_FORWARD_URL: ${VISION_CAMERA_FORWARD_URL}
+      VISION_CAMERA_AFT_URL: ${VISION_CAMERA_AFT_URL}
+    volumes:
+      # Site calibration (horizon_y, height_m, hfov, bearing offsets) lives in
+      # config/deepstream.yaml — the SAME file the JetPack 6 path uses, so a
+      # board swap needs no config migration. Bind-mounted read-only so edits
+      # take effect on a restart but a compromised container can't rewrite
+      # host-side calibration.
+      - ./vision-service/config:/opt/vision-service/config:ro
+      # Application code: bind-mount read-only so Python edits (pipeline/detector/
+      # geometry) take effect on a plain `restart` (no rebuild) while a compromised
+      # container can't tamper with the host source the host runs. The image still
+      # bakes a copy, so it also runs standalone without this mount.
+      - ./vision-service/app:/opt/vision-service/app:ro
+      # DeepStream assets: pgie configs, labels, the deepstream-yolo ONNX, AND the
+      # TensorRT engine. nvinfer writes the built engine into THIS dir
+      # (model-engine-file is relative to the pgie config), so mounting it
+      # persists the engine across image rebuilds/recreates — avoiding a costly
+      # (and on this board, slow) TRT rebuild. The default COCO ONNX (gitignored,
+      # so absent from a fresh clone) is seeded here automatically on first start
+      # by the image's entrypoint, so a from-scratch build needs no hand-placed
+      # model. For an ALTERNATIVE model the host dir must hold its ONNX
+      # (forward-watch / marine-surveillance — see docs/jetson-deepstream.md).
+      # NOTE: the committed libnvdsinfer_custom_impl_Yolo.so in this dir is the
+      # JetPack 6 build and is NOT what runs here — the pgie configs load the
+      # JetPack 5 parser this image compiles, from /opt/vision-service/lib/
+      # (outside the mount, so the host copy cannot shadow it).
+      - ./vision-service/deepstream:/opt/vision-service/deepstream
+      # TensorRT-backend engines for the jetson (non-deepstream) path; harmless
+      # here, kept so switching VISION_MODE doesn't lose the cached engine.
+      - ./vision-service/models:/opt/vision-service/models
+    # Bind to localhost on the boat network; the SignalK plugin proxies it.
+    ports:
+      - "127.0.0.1:7000:7000"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]

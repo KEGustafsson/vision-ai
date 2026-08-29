@@ -1,0 +1,421 @@
+# DeepStream GPU pipeline image for the NVIDIA Jetson Xavier NX (JetPack 5.x).
+#
+# Same pipeline, same code, same DetectionEvent contract as Dockerfile.deepstream
+# (the Orin Nano Super / JetPack 6 image) — decode + inference + tracking + OSD +
+# JPEG encode all stay on the GPU/NVMM via nvv4l2decoder → nvstreammux → nvinfer →
+# nvtracker → nvdsosd → nvjpegenc (see app/pipeline_deepstream.py). ONLY the
+# platform layer differs, because Xavier is a JetPack 5 board:
+#
+#   |                | Orin Nano Super (Dockerfile.deepstream) | Xavier NX (this file) |
+#   |----------------|----------------------------------------|-----------------------|
+#   | L4T / JetPack  | r36.x / JetPack 6.1–6.2                 | r35.x / JetPack 5.1.x |
+#   | DeepStream     | 7.1 (deepstream:7.1-samples-multiarch)  | 6.3 (deepstream-l4t:6.3-samples) |
+#   | CUDA / TensorRT| 12.6 / 10.3                             | 11.4 / 8.5.2          |
+#   | Base OS/Python | Ubuntu 22.04 / Python 3.10              | Ubuntu 20.04 / Python 3.8 |
+#   | pyds           | 1.2.0 (cp310)                           | 1.1.8 (DS 6.3)        |
+#
+# DeepStream 6.3 is the newest release for JetPack 5 — 6.4 and up require
+# JetPack 6 — and it pins the interpreter to the base's Python 3.8, because the
+# official pyds binding is compiled against it. The application sources need no
+# change for that (every module already carries `from __future__ import
+# annotations` and the Pydantic models use Optional/Dict/List), but the
+# dependency versions do: see requirements-deepstream-xavier.txt and
+# constraints-xavier.txt.
+#
+# Build ON the Xavier (needs the nvidia container runtime + network for the bases).
+# This builds FROM SCRATCH in a SINGLE command — no prior image, no manual
+# ONNX export and, unlike the Orin path, no host-side parser compile either:
+#   docker compose -f docker-compose.deepstream.xavier.yml up -d --build
+#   # or just the image:
+#   docker build -f Dockerfile.deepstream.xavier -t vision-ai:deepstream-xavier .
+#
+# Four stages:
+#   0. dssdk   — the DeepStream 6.3 base, used only as a source of SDK headers
+#                for the parser compile in stage 2.
+#   1. export  — pulls the public Ultralytics JetPack 5 image and produces a
+#                deepstream-yolo-compatible YOLO11n ONNX. Using the
+#                marcoslucianops export script GUARANTEES the ONNX layout matches
+#                the custom nvinfer parser built in stage 2 (the Ultralytics
+#                default export is NOT compatible with that parser).
+#   2. parser  — compiles libnvdsinfer_custom_impl_Yolo.so against CUDA 11.4 /
+#                TensorRT 8.5. The committed deepstream/*.so is a DeepStream 7.1 /
+#                CUDA 12.6 build and is ABI-INCOMPATIBLE here, so it is NOT used;
+#                this stage builds the Xavier one from the same pinned commit as
+#                the ONNX above. It runs on the Ultralytics/l4t-jetpack base
+#                because that image carries nvcc + the TensorRT dev libs (the DS
+#                samples image has no compiler), with the DS SDK headers copied
+#                in from stage 0.
+#   3. l4tglue — fetches the three L4T multimedia libraries that the DeepStream
+#                GStreamer plugins need but neither the image nor every host
+#                provides. See the stage's own comment — this is the one piece
+#                with no counterpart in the JetPack 6 image.
+#   4. runtime — the DeepStream 6.3 base; installs pyds + the (Python 3.8) web
+#                stack and copies the exported ONNX, the freshly built parser and
+#                the L4T glue in.
+
+# Both base-image ARGs are declared here, before the first FROM, so BuildKit
+# honours their defaults wherever they are referenced in a FROM below.
+# EXPORT_BASE: the public Ultralytics JetPack 5 image
+# (FROM nvcr.io/nvidia/l4t-jetpack:r35.4.1 — full CUDA toolkit, cuDNN and
+# TensorRT, which stages 1 and 2 both need). Override to reuse a local image or
+# pin a digest for a reproducible release:
+#   export VISION_JETSON_BASE=ultralytics/ultralytics@sha256:<digest>
+ARG EXPORT_BASE=ultralytics/ultralytics:latest-jetson-jetpack5
+# DS_BASE: DeepStream 6.3 for L4T — the last DeepStream for JetPack 5 (this box
+# is JetPack 5.1.x / L4T r35.6). `-samples` is the lean Jetson variant (the
+# -triton one bundles a Triton server we don't use — we go straight to
+# nvinfer/TensorRT).
+ARG DS_BASE=nvcr.io/nvidia/deepstream-l4t:6.3-samples
+
+# ── Stage 0: DeepStream SDK headers for the parser build ─────────────────────
+# Named stage so stage 2 can COPY --from it (a COPY --from=${ARG} is not a
+# portable way to reference an image built from an ARG).
+FROM ${DS_BASE} AS dssdk
+
+# ── Stage 1: export a deepstream-yolo-compatible ONNX ─────────────────────────
+FROM ${EXPORT_BASE} AS export
+
+# The Ultralytics base already runs as root, but pin it explicitly: if
+# EXPORT_BASE is overridden with an image that drops privileges, this build-only
+# stage still needs root to pip-install build deps and write the exported ONNX.
+USER root
+WORKDIR /export
+# Acquire the YOLO11n weights deterministically. A clean checkout has NO
+# models/yolo11n.pt (weights are gitignored), so requiring it as a build input
+# would make the image unbuildable from a fresh clone. Instead: use a hand-placed
+# offline copy if the operator left one in models/, else let Ultralytics (present
+# in the export base) fetch the official weights into the workdir. The build
+# already needs the network for the base images, so the online path adds nothing.
+# Pin the model artifact by content hash for reproducibility/provenance: pass
+# --build-arg YOLO11N_SHA256=<sha256 of yolo11n.pt> to enforce it. Left EMPTY by
+# default (check skipped) because the canonical hash is not vendored here.
+ARG YOLO11N_SHA256=
+COPY models/ ./models/
+RUN if [ -f models/yolo11n.pt ]; then \
+        cp models/yolo11n.pt yolo11n.pt; \
+    else \
+        python3 -c "from ultralytics import YOLO; YOLO('yolo11n.pt')"; \
+    fi \
+    && test -f yolo11n.pt \
+    && if [ -n "${YOLO11N_SHA256}" ]; then \
+         echo "${YOLO11N_SHA256}  yolo11n.pt" | sha256sum -c -; \
+       fi
+# DS_YOLO_REF pins the DeepStream-Yolo revision so the exported ONNX layout stays
+# in lockstep with the parser .so — which stage 2 builds from the SAME commit, so
+# unlike the Orin image there is no way for the two to drift apart here.
+# Full 40-char SHA (not a short SHA): upstream rewrote history and dropped the
+# old short pin 68769f3. This is the same commit the JetPack 6 image uses, so
+# both boards run an identically-shaped network.
+ARG DS_YOLO_REF=93aedb656a47b141ecbea99c407b002262287cfe
+# Inference input size baked into the ONNX at export time. MUST match
+# detector.imgsz in config/deepstream.yaml (which drives the NvDCF tracker_width
+# and is the value the tuning docs quote). Lower it to 640 here AND in that YAML
+# if the Xavier turns out short on GPU time or RAM — the two must move together.
+ARG YOLO_IMGSZ=768
+# onnx + onnxslim back the export script's --simplify; onnxscript is needed by
+# newer torch's ONNX export path. Unpinned on purpose: pip honours each
+# project's requires-python, so on this Python 3.8 base it resolves to the newest
+# release that still supports 3.8.
+RUN pip install --no-cache-dir onnx onnxslim onnxscript \
+    # Full clone (not --depth 1): a shallow fetch cannot resolve an arbitrary SHA
+    # on GitHub. A failed checkout aborts the build (&&-chain).
+    && git clone https://github.com/marcoslucianops/DeepStream-Yolo /tmp/ds-yolo \
+    && git -C /tmp/ds-yolo checkout --quiet "${DS_YOLO_REF}" \
+    && cp /tmp/ds-yolo/utils/export_yolo11.py . \
+    && python3 export_yolo11.py -w yolo11n.pt -s "${YOLO_IMGSZ}" --opset 16 --dynamic --simplify \
+    # The script names the output after the weights (yolo11n.onnx). Normalise it.
+    && (test -f yolo11n.onnx && mv yolo11n.onnx yolo11n_ds.onnx \
+        || mv yolo11n.pt.onnx yolo11n_ds.onnx) \
+    && ls -l yolo11n_ds.onnx
+
+# ── Stage 2: build the custom nvinfer YOLO parser for CUDA 11.4 / TensorRT 8.5 ─
+# The committed deepstream/libnvdsinfer_custom_impl_Yolo.so was built on the Orin
+# against DeepStream 7.1 / CUDA 12.6 / TensorRT 10 and CANNOT be loaded here, so
+# this stage builds the JetPack 5 equivalent instead of copying it. It compiles
+# on the Ultralytics/l4t-jetpack base (nvcc + libnvinfer/libnvonnxparser dev
+# libs, all at the SAME CUDA 11.4 / TRT 8.5.2 versions as the DeepStream 6.3
+# runtime, so the .so is ABI-compatible with stage 3) using the DeepStream SDK
+# headers copied from stage 0. No host-side compile step, and nothing to commit.
+FROM ${EXPORT_BASE} AS parser
+
+USER root
+# The parser's Makefile hardcodes this include path.
+COPY --from=dssdk /opt/nvidia/deepstream/deepstream/sources/includes \
+                  /opt/nvidia/deepstream/deepstream/sources/includes
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        build-essential git \
+    && rm -rf /var/lib/apt/lists/*
+
+ARG DS_YOLO_REF=93aedb656a47b141ecbea99c407b002262287cfe
+# Symbol pgie_*.txt names in parse-bbox-func-name. Verified below so a parser
+# built from an unexpected revision fails the BUILD rather than silently
+# yielding zero detections on the water.
+ARG EXPECTED_SYMBOL=NvDsInferParseYolo
+WORKDIR /parser
+RUN set -eu; \
+    git clone https://github.com/marcoslucianops/DeepStream-Yolo .; \
+    git checkout --quiet "${DS_YOLO_REF}"; \
+    # Derive CUDA_VER from the toolkit actually present (11.4 on JetPack 5)
+    # rather than hardcoding it, so a JetPack 5.1.x point release that moves the
+    # CUDA minor still builds.
+    CUDA_VER="$(/usr/local/cuda/bin/nvcc --version | grep -oP 'V\K[0-9]+\.[0-9]+')"; \
+    echo "building parser against CUDA ${CUDA_VER}"; \
+    PATH="/usr/local/cuda/bin:${PATH}" CUDA_VER="${CUDA_VER}" \
+        make -C nvdsinfer_custom_impl_Yolo; \
+    # `grep -c` (counts all input) rather than `grep -q` (exits at the first
+    # match): grep -q closing the pipe early SIGPIPEs nm, which would look like
+    # a missing symbol. The `|| true` only covers grep's exit-1-on-zero-matches
+    # — `make` above already failed the build under `set -e` if it broke.
+    found="$(nm -D nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so \
+             | grep -cE " T .*${EXPECTED_SYMBOL}$" || true)"; \
+    if [ "$found" -eq 0 ]; then \
+        echo "ERROR: parser symbol '${EXPECTED_SYMBOL}' not found in the built .so" >&2; \
+        echo "Check DS_YOLO_REF or parse-bbox-func-name in deepstream/pgie_*.txt" >&2; \
+        exit 1; \
+    fi; \
+    echo "parser symbol '${EXPECTED_SYMBOL}' verified"
+
+# ── Stage 3: L4T multimedia glue the DeepStream plugins link against ──────────
+# WHY THIS EXISTS (there is no equivalent in the JetPack 6 image)
+# ==============================================================
+# The DeepStream plugins (nvstreammux, nvvideoconvert, nvdewarper, nvstreamdemux)
+# and the L4T ones the image bundles (nvv4l2decoder, nvjpegenc) do NOT ship every
+# library they link against. Three come from the HOST, injected by the NVIDIA
+# container runtime from its CSV mount list:
+#
+#   libnvdsbufferpool.so.1.0.0   (nvidia-l4t-multimedia)
+#   libtegrav4l2.so              (nvidia-l4t-multimedia)
+#   libgstnvdsseimeta.so.1.0.0   (nvidia-l4t-gstreamer)
+#   libgstnvexifmeta.so          (nvidia-l4t-gstreamer)
+#
+# libtegrav4l2.so is the one that is easy to miss, because nothing links to it
+# directly: NVIDIA's libv4l2 loads the NVDEC/NVJPG shim
+# libv4l/plugins/nv/libv4l2_nvvideocodec.so at runtime, and THAT needs it. Miss
+# it and the plugin silently fails to load, so the shim never claims
+# /dev/nvhost-nvdec and nvv4l2decoder reports the device as
+# "It isn't a v4l2 driver. Check if it is a v4l1 driver." — hardware decode dead,
+# with the finger pointed at the device node rather than the missing library.
+#
+# On a stock Ubuntu JetPack host they are simply there. On a Yocto/meta-tegra
+# rootfs — which is what this boat's Xavier NX runs — the L4T GStreamer userspace
+# is not installed, so the CSV entries resolve to nothing, the mounts silently do
+# not happen, and EVERY nv* element above fails to load: the pipeline dies at
+# startup with "Cannot create GStreamer element 'nvstreammux'" and no hint that a
+# host library is the cause.
+#
+# So the image carries them itself, taken from the SAME public L4T apt repo (and
+# the same release) the board was flashed from, which keeps them ABI-matched to
+# the kernel driver. On a host that does provide them the runtime's bind mounts
+# land on these exact paths and win, so this is a safe superset either way —
+# nothing here overrides a working host.
+#
+# Only the three files are extracted, never the whole packages: installing
+# nvidia-l4t-multimedia properly would drag in nvidia-l4t-core/-cuda and fight
+# with the CUDA the DeepStream base already ships.
+#
+# Set L4T_RELEASE/L4T_SOC to match the board if it is not an R35.6 Xavier:
+#   head -1 /etc/nv_tegra_release     # "# R35 (release), REVISION: 6.4" -> r35.6
+#   Xavier = t194, Orin = t234.
+# The exact package version is resolved by apt from that release, so there is no
+# timestamped version to keep up to date here.
+#
+# NOTE: these are NVIDIA-licensed binaries, fetched at build time exactly as an
+# apt install would. That is fine for an image built and run on the board; check
+# NVIDIA's terms before redistributing a built image.
+FROM ${DS_BASE} AS l4tglue
+
+ARG L4T_RELEASE=r35.6
+ARG L4T_SOC=t194
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl binutils zstd \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /l4t
+RUN set -eu; \
+    curl -fsSL https://repo.download.nvidia.com/jetson/jetson-ota-public.asc \
+        -o /etc/apt/trusted.gpg.d/jetson-ota-public.asc; \
+    echo "deb https://repo.download.nvidia.com/jetson/${L4T_SOC} ${L4T_RELEASE} main" \
+        > /etc/apt/sources.list.d/nvidia-l4t.list; \
+    apt-get update; \
+    # `download`, not `install`: we want the payload, not the dependency tree.
+    apt-get download nvidia-l4t-multimedia nvidia-l4t-gstreamer; \
+    mkdir -p unpack payload; \
+    for deb in *.deb; do \
+        rm -rf ar && mkdir ar && (cd ar && ar x "../${deb}"); \
+        tar -I zstd -xf ar/data.tar.zst -C unpack; \
+    done; \
+    for f in usr/lib/aarch64-linux-gnu/tegra/libnvdsbufferpool.so.1.0.0 \
+             usr/lib/aarch64-linux-gnu/tegra/libtegrav4l2.so \
+             usr/lib/aarch64-linux-gnu/tegra/libgstnvdsseimeta.so.1.0.0 \
+             usr/lib/aarch64-linux-gnu/libgstnvexifmeta.so; do \
+        # Fail the BUILD if the L4T release stops shipping one of these, rather
+        # than producing an image whose pipeline cannot start.
+        test -f "unpack/${f}" || { \
+            echo "ERROR: ${f} not in L4T ${L4T_RELEASE}/${L4T_SOC} packages" >&2; \
+            exit 1; \
+        }; \
+        mkdir -p "payload/$(dirname "${f}")"; \
+        cp -a "unpack/${f}" "payload/${f}"; \
+    done; \
+    ls -lR payload
+
+# ── Stage 4: DeepStream 6.3 runtime (base set by DS_BASE, declared at top) ─────
+FROM ${DS_BASE} AS runtime
+
+WORKDIR /opt/vision-service
+ENV DEBIAN_FRONTEND=noninteractive \
+    PATH=/usr/local/cuda/bin:${PATH}
+# Make the DeepStream libs and GStreamer plugins findable regardless of how the
+# base image was assembled. The DS installer normally wires both up, but the
+# 6.3 L4T image sets neither as an ENV — stating them here costs nothing and
+# turns a silent "Cannot create GStreamer element 'nvstreammux'" into a
+# non-issue.
+ENV GST_PLUGIN_PATH=/opt/nvidia/deepstream/deepstream/lib/gst-plugins \
+    LD_LIBRARY_PATH=/opt/nvidia/deepstream/deepstream/lib:${LD_LIBRARY_PATH}
+
+# System deps the DeepStream base does not ship:
+#   python3-gi / python3-gst-1.0 — PyGObject + GStreamer Python bindings (gi.repository.Gst)
+#   libpython3.8                 — libpython3.8.so.1.0 that the pyds wheel links against
+#   gstreamer rtp/h264 plugins   — rtph264depay + h264parse for the RTSP camera chain
+# cv2 is NOT apt-installed here: python3-opencv pulls an ffmpeg that clashes with
+# the one in the DS base. We use the self-contained opencv-python-headless wheel
+# instead (requirements-deepstream-xavier.txt) — cv2 is only used for
+# draw/encode/undistort, no VideoCapture/GStreamer, so headless is fine.
+# No compiler toolchain here either: the custom YOLO parser is built in stage 2
+# and copied in below.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3-pip \
+        python3-gi \
+        python3-gst-1.0 \
+        libpython3.8 \
+        gstreamer1.0-plugins-good \
+        gstreamer1.0-plugins-bad \
+        gstreamer1.0-libav \
+    && rm -rf /var/lib/apt/lists/*
+
+# The four L4T multimedia libraries from stage 3, at the paths the DeepStream
+# and L4T GStreamer plugins already look for. The symlinks are the ones the
+# packages normally install (DeepStream's own
+# lib/libnvdsbufferpool.so -> .../tegra/libnvdsbufferpool.so chases the first
+# one), and ldconfig refreshes the cache so the loader finds them without
+# LD_LIBRARY_PATH. Verify on the board after building:
+#   docker run --rm --runtime nvidia --entrypoint gst-inspect-1.0 \
+#       vision-ai:deepstream-xavier nvstreammux
+# and, for the decode path specifically (loading the plugin is what proves
+# libtegrav4l2 landed):
+#   docker run --rm --runtime nvidia --entrypoint ldd vision-ai:deepstream-xavier \
+#       /usr/lib/aarch64-linux-gnu/libv4l/plugins/nv/libv4l2_nvvideocodec.so \
+#       | grep "not found"     # must print nothing
+COPY --from=l4tglue /l4t/payload/usr/lib/aarch64-linux-gnu/ /usr/lib/aarch64-linux-gnu/
+RUN ln -sf libnvdsbufferpool.so.1.0.0 \
+        /usr/lib/aarch64-linux-gnu/tegra/libnvdsbufferpool.so \
+    && ln -sf libgstnvdsseimeta.so.1.0.0 \
+        /usr/lib/aarch64-linux-gnu/tegra/libgstnvdsseimeta.so.1 \
+    && ln -sf libgstnvdsseimeta.so.1.0.0 \
+        /usr/lib/aarch64-linux-gnu/tegra/libgstnvdsseimeta.so \
+    && ldconfig
+
+# The base ships pip 23.1.2. Upgrading is not strictly required but keeps the
+# resolver current; pip honours requires-python, so on this 3.8 interpreter it
+# lands on the newest pip that still supports 3.8 (25.0.x) rather than a 3.9+ one.
+RUN pip3 install --no-cache-dir --upgrade pip
+
+# pyds (DeepStream Python bindings). The 6.3 samples image does NOT bundle the
+# wheel, so install the official build that matches DeepStream 6.3 from the
+# deepstream_python_apps v1.1.8 release (v1.2.0, used by the JetPack 6 image, is
+# the DeepStream 7.1 binding and will not load here). pip installs straight from
+# the URL (its basename is a valid PEP 427 wheel name).
+#
+# --no-deps is REQUIRED, not an optimisation: the 1.1.8 wheel declares PyGObject
+# as a dependency, which pip then tries to build from source (pycairo first) and
+# fails on — "No package 'cairo' found" — because this image has no cairo/
+# gobject-introspection headers and no compiler. It does not need them: PyGObject
+# is already installed, system-wide and prebuilt, by the python3-gi apt package
+# above, which is the copy `import gi` resolves to. Adding the -dev packages and a
+# toolchain just to rebuild what apt already provides would be pure bloat.
+RUN pip3 install --no-cache-dir --no-deps \
+      https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.1.8/pyds-1.1.8-py3-none-linux_aarch64.whl \
+    # Fail here, not at pipeline start, if the binding cannot actually load.
+    && python3 -c "import gi; gi.require_version('Gst','1.0'); import pyds; from gi.repository import Gst; print('pyds + GI import OK')"
+
+COPY requirements-deepstream-xavier.txt constraints-xavier.txt ./
+RUN pip3 install --no-cache-dir \
+      -c constraints-xavier.txt -r requirements-deepstream-xavier.txt
+
+COPY app ./app
+COPY config ./config
+# scripts/ carries healthcheck.py, invoked by the HEALTHCHECK below (every other
+# image copies it too); without this the probe file is missing and the container
+# goes permanently unhealthy after the start period.
+COPY scripts ./scripts
+# deepstream/ carries the nvinfer/tracker configs and labels. NOTE: the
+# libnvdsinfer_custom_impl_Yolo.so committed in that directory is the Orin
+# (DeepStream 7.1 / CUDA 12.6) build and is deliberately NOT used here — the
+# pgie configs point at /opt/vision-service/lib/ instead (below), which is
+# outside the compose bind-mount and therefore cannot be shadowed by the host
+# copy.
+COPY deepstream ./deepstream
+# The JetPack 5 parser built in stage 2, at the absolute path every
+# deepstream/pgie_*.txt names in custom-lib-path.
+COPY --from=parser /parser/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Yolo.so \
+                   /opt/vision-service/lib/libnvdsinfer_custom_impl_Yolo.so
+# The deepstream-yolo-compatible ONNX is baked into deepstream/ so a bare
+# `docker run` (no bind mount) works standalone. But compose ALSO bind-mounts
+# deepstream/ from the host (to persist the built engine and allow model swaps),
+# which shadows this baked copy — and the *.onnx is gitignored, so a fresh
+# clone's host deepstream/ has none. So ALSO stage a copy outside the mount; the
+# entrypoint below seeds it into the bind-mounted deepstream/ on first run.
+# nvinfer then builds the TRT engine next to it (persisted via the mount).
+COPY --from=export /export/yolo11n_ds.onnx ./deepstream/yolo11n_ds.onnx
+COPY --from=export /export/yolo11n_ds.onnx ./deepstream-default/yolo11n_ds.onnx
+
+# Entrypoint: seeds the default COCO ONNX into the (bind-mounted, possibly
+# empty) deepstream/ dir when it's absent, then execs the CMD — so
+# `docker compose ... up -d --build` works from a clean clone in ONE command,
+# with no hand-placed ONNX. Alternative models (forward-watch /
+# marine-surveillance) are still dropped in per docs/jetson-deepstream.md.
+# The script came in with `COPY scripts` above; it is shared with the JetPack 6
+# image (Dockerfile.deepstream).
+
+# Only ONE detection model runs at a time (detector.model in deepstream.yaml).
+# The COCO model (yolo11n_ds.onnx, above) is the default. To run the alternative
+# forward-watch marine model instead, fetch its ONNX into deepstream/ BEFORE the
+# build so the `COPY deepstream` above bakes it in:
+#   python3 scripts/download_forward_watch.py
+# then set `model: forward-watch` (or VISION_DETECTOR_MODEL=forward-watch).
+# The forward-watch nvinfer config + labels are already vendored in deepstream/.
+
+# models/ is bind-mounted in compose; create the mountpoint so a bare `docker run`
+# (no bind) still starts.
+RUN mkdir -p models
+
+ENV VISION_MODE=deepstream \
+    VISION_PORT=7000 \
+    PYTHONUNBUFFERED=1
+
+# Run as a non-root user to reduce blast radius (mirrors the other images).
+# The user is added to the `video` group for GPU device access (/dev/nvhost*),
+# which the DeepStream/nvinfer pipeline needs on the Jetson. nvinfer also writes
+# the built TRT engine into deepstream/ and models/ (both bind-mounted) on first
+# run, so the host directories must be writable by UID 10001 for the engine to
+# persist (otherwise it is harmlessly — but expensively — rebuilt each start).
+# Run scripts/fix_host_permissions.sh once per host to grant this. If your
+# Jetson's nvidia container runtime denies GPU access to non-root, set
+# `user: root` on the compose service as a documented exception.
+RUN useradd --create-home --uid 10001 --groups video appuser \
+    && chown -R appuser /opt/vision-service
+USER appuser
+
+EXPOSE 7000
+# Liveness: probe /health and report `unhealthy` on unreachable or degraded.
+# DeepStream surfaces its auto-restart count in /health (pipeline_restarts), so a
+# wedged GPU pipeline that has exhausted self-restarts shows up here.
+# start-period is 600s — twice the JetPack 6 image's — because the first start
+# builds the TensorRT engine from the ONNX, and the Xavier NX does that
+# appreciably slower than an Orin Nano. See scripts/healthcheck.py.
+# (Runs directly, not via the ENTRYPOINT below.)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=600s --retries=3 \
+    CMD ["python3", "/opt/vision-service/scripts/healthcheck.py"]
+# Seed the default ONNX into the bind-mounted deepstream/ on first start, then
+# exec the CMD (uvicorn) — see scripts/deepstream_entrypoint.sh.
+ENTRYPOINT ["/opt/vision-service/scripts/deepstream_entrypoint.sh"]
+CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7000"]

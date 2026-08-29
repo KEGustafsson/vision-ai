@@ -1,0 +1,30 @@
+# Runtime extras for the JetPack 5 / DeepStream 6.3 image
+# (Dockerfile.deepstream.xavier — Jetson Xavier NX; see docs/jetson-deepstream.md
+#  for why other JetPack 5 boards are untested).
+#
+# Same shape as requirements-deepstream.txt (the JetPack 6 / DeepStream 7.1
+# list): the NVIDIA base already ships CUDA, TensorRT, the nv* GStreamer
+# plugins and the NvDCF tracker lib; cv2 comes from the self-contained
+# headless wheel; PyGObject (python3-gi) and the GStreamer rtp/h264 plugins
+# come from apt in the Dockerfile. nvinfer does the inference, so no
+# torch/ultralytics at runtime — that lives in the build's export stage only.
+#
+# The ONE difference is the floor/ceiling of every bound: the DeepStream 6.3
+# base is Ubuntu 20.04 / **Python 3.8** (forced by the pyds 1.1.8 binding), so
+# the ranges below are the ones that still have 3.8 wheels. The exact versions
+# are pinned in constraints-xavier.txt, which the Dockerfile installs with
+# `-c`; keep the two consistent.
+fastapi>=0.110,<0.125
+starlette>=0.40,<0.45   # cap explicitly: FastAPI imposes no upper bound (see constraints-xavier.txt)
+uvicorn[standard]>=0.29,<0.34
+h11>=0.16.0             # avoid GHSA-vqfr-h8mv-ghfj (uvicorn pulls h11>=0.8)
+pydantic>=2.6,<2.11
+PyYAML>=6.0
+websockets>=12.0,<14
+# Last NumPy with a Python 3.8 build. opencv-python-headless 4.12 also requires
+# numpy<2.0 on 3.8, so the two are consistent.
+numpy<1.25
+# Self-contained cv2 (bundles its own ffmpeg) — avoids the DS base's libavcodec
+# mismatch that breaks apt's python3-opencv. Draw/encode only, no GStreamer needed.
+# 4.12.0.88 is the last release with a cp38 aarch64 wheel.
+opencv-python-headless<4.13

@@ -150,6 +150,14 @@ COPY scripts ./scripts
 # configs and labels. Rebuild the .so with scripts/build_yolo_parser.sh if the
 # DeepStream version changes.
 COPY deepstream ./deepstream
+# The pgie configs name the parser by ABSOLUTE path (custom-lib-path) so the
+# compose bind-mount over deepstream/ cannot shadow the image's copy with a host
+# one built for a different DeepStream/CUDA — an ABI mismatch that shows up as
+# zero detections rather than an error. Install the committed (JetPack 6 /
+# DeepStream 7.1 / CUDA 12.6) build there. The JetPack 5 image compiles its own
+# equivalent instead; see Dockerfile.deepstream.xavier.
+RUN mkdir -p /opt/vision-service/lib \
+    && cp deepstream/libnvdsinfer_custom_impl_Yolo.so /opt/vision-service/lib/
 # The deepstream-yolo-compatible ONNX is baked into deepstream/ so a bare
 # `docker run` (no bind mount) works standalone. But compose ALSO bind-mounts
 # deepstream/ from the host (to persist the built engine and allow model swaps),
@@ -160,25 +168,15 @@ COPY deepstream ./deepstream
 COPY --from=export /export/yolo11n_ds.onnx ./deepstream/yolo11n_ds.onnx
 COPY --from=export /export/yolo11n_ds.onnx ./deepstream-default/yolo11n_ds.onnx
 
-# Entrypoint: seed the default COCO ONNX into the (bind-mounted, possibly empty)
-# deepstream/ dir when it's absent, so `docker compose ... up --build` works from a
-# clean clone in ONE command — no hand-placed ONNX. Alternative models
-# (forward-watch / marine-surveillance) are still dropped in per docs/jetson-setup.md.
-RUN cat > /usr/local/bin/deepstream-entrypoint.sh <<'SH' && chmod +x /usr/local/bin/deepstream-entrypoint.sh
-#!/bin/sh
-set -eu
-seed=/opt/vision-service/deepstream-default/yolo11n_ds.onnx
-dest=/opt/vision-service/deepstream/yolo11n_ds.onnx
-if [ ! -f "$dest" ] && [ -f "$seed" ]; then
-    if cp "$seed" "$dest" 2>/dev/null; then
-        echo "deepstream-entrypoint: seeded default ONNX -> $dest"
-    else
-        echo "deepstream-entrypoint: WARN could not write $dest — make the host" \
-             "deepstream/ dir writable by UID 10001, or place the ONNX yourself" >&2
-    fi
-fi
-exec "$@"
-SH
+# Entrypoint: seeds the default COCO ONNX into the (bind-mounted, possibly
+# empty) deepstream/ dir when it's absent, then execs the CMD — so
+# `docker compose ... up -d --build` works from a clean clone in ONE command,
+# with no hand-placed ONNX. Alternative models (forward-watch /
+# marine-surveillance) are still dropped in per docs/jetson-setup.md.
+# The script came in with `COPY scripts` above and is shared with the JetPack 5
+# image (Dockerfile.deepstream.xavier); it lives in the build context rather
+# than in a Dockerfile heredoc because heredocs need the BuildKit dockerfile
+# 1.4+ frontend, which the older Docker on the JetPack 5 boxes does not have.
 
 # Only ONE detection model runs at a time (detector.model in deepstream.yaml).
 # The COCO model (yolo11n_ds.onnx, above) is the default. To run the alternative
@@ -219,6 +217,6 @@ EXPOSE 7000
 HEALTHCHECK --interval=30s --timeout=10s --start-period=300s --retries=3 \
     CMD ["python3", "/opt/vision-service/scripts/healthcheck.py"]
 # Seed the default ONNX into the bind-mounted deepstream/ on first start, then
-# exec the CMD (uvicorn) — see the script generated above.
-ENTRYPOINT ["/usr/local/bin/deepstream-entrypoint.sh"]
+# exec the CMD (uvicorn) — see scripts/deepstream_entrypoint.sh.
+ENTRYPOINT ["/opt/vision-service/scripts/deepstream_entrypoint.sh"]
 CMD ["python3", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "7000"]
