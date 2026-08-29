@@ -67,7 +67,13 @@ network-type=0
 cluster-mode=2
 
 parse-bbox-func-name=NvDsInferParseYolo
-custom-lib-path=libnvdsinfer_custom_impl_Yolo.so
+# The parser is named by ABSOLUTE path, NOT relative to this file: compose
+# bind-mounts the host's deepstream/ over this directory, so a relative name
+# would resolve to the HOST copy — which on a JetPack 5 board (DeepStream 6.3 /
+# CUDA 11.4) is the wrong ABI and fails to load. /opt/vision-service/lib/ is
+# outside the mount, so each image supplies the build matching its own
+# DeepStream (see Dockerfile.deepstream and Dockerfile.deepstream.xavier).
+custom-lib-path=/opt/vision-service/lib/libnvdsinfer_custom_impl_Yolo.so
 
 # Preserve aspect ratio by letterboxing — prevents horizontal FoV distortion.
 maintain-aspect-ratio=1

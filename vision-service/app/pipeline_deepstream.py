@@ -174,8 +174,10 @@ def _check_imports() -> None:
     except Exception as exc:
         raise ImportError(
             "DeepStream Python bindings (pyds) not available.\n"
-            "Install on Jetson JetPack 6 + DeepStream 7.x:\n"
-            "  sudo apt-get install deepstream-7.1\n"
+            "Both DeepStream images ship them; this usually means the service is\n"
+            "running outside one. Install to match the board's JetPack:\n"
+            "  JetPack 6: sudo apt-get install deepstream-7.1\n"
+            "  JetPack 5: sudo apt-get install deepstream-6.3\n"
             "  pip install /opt/nvidia/deepstream/deepstream/lib/pyds-*.whl\n"
             "See vision-service/config/deepstream.yaml for full setup instructions."
         ) from exc
@@ -190,7 +192,8 @@ def _tracker_cfg_path() -> str:
         return str(_TRACKER_CFG_STOCK)
     raise FileNotFoundError(
         f"NvDCF tracker config not found at {local} or {_TRACKER_CFG_STOCK}. "
-        "Either install DeepStream 7.x or create vision-service/deepstream/nvdcf_config.yml."
+        "Either install DeepStream (7.x on JetPack 6, 6.3 on JetPack 5) or create "
+        "vision-service/deepstream/nvdcf_config.yml."
     )
 
 
@@ -827,7 +830,8 @@ class DeepStreamPipeline:
             if el is None:
                 raise RuntimeError(
                     f"Cannot create GStreamer element '{factory}' (name={name!r}). "
-                    "Verify DeepStream 7.x is installed and GST_PLUGIN_PATH is set."
+                    "Verify DeepStream is installed (7.x on JetPack 6, 6.3 on "
+                    "JetPack 5) and GST_PLUGIN_PATH is set."
                 )
             for k, v in props.items():
                 el.set_property(k.replace("_", "-"), v)

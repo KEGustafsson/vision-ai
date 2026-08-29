@@ -9,13 +9,21 @@ covered in [DeepStream GPU pipeline](jetson-deepstream.md). It shares this
 doc's prerequisites, camera calibration, and autostart steps (§1, §3, §5
 below); only §2 and §4 are `jetson`-backend-specific.
 
+The `deepstream` backend additionally runs on **JetPack 5** boards (Jetson
+Xavier NX / AGX Xavier) from a second compose file; see
+[Hardware targets](jetson-deepstream.md#hardware-targets). Everything in this
+document assumes the Orin Nano / JetPack 6 target unless stated otherwise.
+
 ## 1. Prerequisites on the Jetson
 
-- JetPack 6.x flashed (L4T r36.x).
+- JetPack 6.x flashed (L4T r36.x). *(For the `deepstream` backend on a Xavier,
+  JetPack 5.1.x / L4T r35.x — see
+  [Xavier NX notes](jetson-deepstream.md#xavier-nx-notes).)*
 - Docker + the **NVIDIA Container Runtime** (`nvidia-docker2`); confirm with
   `docker info | grep -i runtime` showing `nvidia`.
 - (Optional) set the Orin Nano to its higher-power "Super" mode:
-  `sudo nvpmodel -m 0 && sudo jetson_clocks`.
+  `sudo nvpmodel -m 0 && sudo jetson_clocks`. On a Xavier NX the equivalent is
+  `sudo nvpmodel -m 8 && sudo jetson_clocks` (20 W, 6 cores).
 
 ## 2. Build the TensorRT engine
 

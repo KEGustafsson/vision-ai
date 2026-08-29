@@ -1,4 +1,9 @@
-# nvinfer primary GIE config for YOLO11n (DeepStream 7.x / JetPack 6)
+# nvinfer primary GIE config for YOLO11n.
+# Shared by both DeepStream images — JetPack 6 / DS 7.1 (Dockerfile.deepstream)
+# and JetPack 5 / DS 6.3 (Dockerfile.deepstream.xavier). Every key below is
+# version-neutral; the one platform-dependent thing, the custom parser, is
+# referenced by absolute path so each image supplies its own build (see the
+# note at custom-lib-path).
 #
 # ENGINE FORMAT REQUIREMENT
 # =========================
@@ -74,7 +79,13 @@ cluster-mode=2
 # libnvdsinfer_custom_impl_Yolo.so (current marcoslucianops repo exports
 # NvDsInferParseYolo; older revisions used NvDsInferParseCustomYoloV8).
 parse-bbox-func-name=NvDsInferParseYolo
-custom-lib-path=libnvdsinfer_custom_impl_Yolo.so
+# The parser is named by ABSOLUTE path, NOT relative to this file: compose
+# bind-mounts the host's deepstream/ over this directory, so a relative name
+# would resolve to the HOST copy — which on a JetPack 5 board (DeepStream 6.3 /
+# CUDA 11.4) is the wrong ABI and fails to load. /opt/vision-service/lib/ is
+# outside the mount, so each image supplies the build matching its own
+# DeepStream (see Dockerfile.deepstream and Dockerfile.deepstream.xavier).
+custom-lib-path=/opt/vision-service/lib/libnvdsinfer_custom_impl_Yolo.so
 
 # input-dims / output-blob-names are taken from the ONNX — do not pin them here.
 

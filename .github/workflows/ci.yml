@@ -72,7 +72,8 @@ jobs:
         run: |
           # Production paths are self-contained — validate them the way they're
           # run: a single -f, no base. (Each redefines the whole vision-service.)
-          for stack in docker-compose.jetson.yml docker-compose.deepstream.yml; do
+          for stack in docker-compose.jetson.yml docker-compose.deepstream.yml \
+                       docker-compose.deepstream.xavier.yml; do
             echo "::group::$stack (standalone)"
             docker compose -f "$stack" config -q
             echo "::endgroup::"

@@ -50,7 +50,7 @@ export OUT=/tmp/vision-verify && mkdir -p $OUT
 ```bash
 docker ps                                   # find vision-service + signalk containers; STATUS shows (healthy)/(unhealthy)
 cat /etc/nv_tegra_release                    # L4T / JetPack version
-sudo nvpmodel -q                             # power mode (want MAXN / "Super")
+sudo nvpmodel -q                             # power mode (Orin: MAXN/"Super"; Xavier NX: 20W 6CORE)
 sudo jetson_clocks --show | head             # clocks pinned?
 tegrastats --interval 1000 | head -n 3       # baseline GPU/CPU/EMC/temp/power
 ```
@@ -58,7 +58,11 @@ tegrastats --interval 1000 | head -n 3       # baseline GPU/CPU/EMC/temp/power
 `HEALTHCHECK` that polls `/health`; `(unhealthy)` means unreachable or
 `status:"degraded"` — go to 2.1. Allow the start-period to elapse first, as the
 first start may build the TensorRT engine); power mode is the high-performance
-one (else `sudo nvpmodel -m 0 && sudo jetson_clocks`). Record JetPack version for the report.
+one (else `sudo nvpmodel -m 0 && sudo jetson_clocks` on an Orin Nano,
+`sudo nvpmodel -m 8 && sudo jetson_clocks` on a Xavier NX). Record the board and
+JetPack version for the report — the DeepStream backend runs on both JetPack 6
+(Orin) and JetPack 5 (Xavier); see
+[Hardware targets](jetson-deepstream.md#hardware-targets).
 
 ---
 

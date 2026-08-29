@@ -8,6 +8,9 @@
 #
 #   Jetson (TensorRT):       docker compose -f docker-compose.jetson.yml up -d
 #   Jetson (DeepStream):     docker compose -f docker-compose.deepstream.yml up -d --build
+#     …on a JetPack 5 board (Xavier NX / AGX Xavier), use the JetPack 5 twin of
+#     that file instead — same pipeline, DeepStream 6.3 instead of 7.1:
+#                            docker compose -f docker-compose.deepstream.xavier.yml up -d --build
 #
 # The one exception is the dev full-stack demo, which LAYERS a signalk-server onto
 # this base (so it does need both files):

@@ -1,7 +1,7 @@
 # Marine Vision-AI 🛥️📡
 
 A **"visual radar"** for boats: two cameras (forward + aft) feeding a YOLO
-detector on an **NVIDIA Jetson Orin Nano Super**, turned into georeferenced,
+detector on an **NVIDIA Jetson** (Orin Nano Super or Xavier NX), turned into georeferenced,
 AIS-fused, navigation-aware situational awareness inside **[SignalK](https://signalk.org)**.
 
 ## What it does
@@ -134,7 +134,8 @@ aren't portable), then run.
 | Mode | Where | Command |
 |------|-------|---------|
 | **`mock`** | any laptop, no GPU/cameras | `docker compose up` |
-| **`deepstream`** | Jetson, full-GPU pipeline (production) | `docker compose -f docker-compose.deepstream.yml up -d --build` |
+| **`deepstream`** | Jetson Orin Nano Super (JetPack 6), full-GPU pipeline (production) | `docker compose -f docker-compose.deepstream.yml up -d --build` |
+| **`deepstream`** | Jetson Xavier NX / AGX Xavier (JetPack 5), same pipeline | `docker compose -f docker-compose.deepstream.xavier.yml up -d --build` |
 | **`jetson`** | Jetson, TensorRT (alternative) | build the engine once (below), then `docker compose -f docker-compose.jetson.yml up -d` |
 
 Set the camera URLs first for the GPU modes (`.env` or exported):
@@ -165,11 +166,16 @@ instead of DeepStream's nvinfer. Two marine-tuned alternatives (YOLOv8-based)
 are also selectable; see
 [Detection model selection](docs/jetson-deepstream.md#detection-model-selection).
 The image builds from a clean clone in one command (it exports the ONNX and
-bakes the committed parser itself; nvinfer builds the TensorRT engine on first
-start):
+supplies the nvinfer parser itself; nvinfer builds the TensorRT engine on first
+start). Pick the compose file for the board — the pipeline, the code and
+`config/deepstream.yaml` are identical, only the DeepStream/CUDA/TensorRT layer
+differs:
 
 ```bash
+# Orin Nano Super — JetPack 6, DeepStream 7.1
 docker compose -f docker-compose.deepstream.yml up -d --build
+# Xavier NX / AGX Xavier — JetPack 5, DeepStream 6.3
+docker compose -f docker-compose.deepstream.xavier.yml up -d --build
 ```
 
 For a reproducible / air-gapped build, pin the export base to a digest by
@@ -183,7 +189,10 @@ docker compose -f docker-compose.deepstream.yml up -d --build
 
 See [Jetson setup & deployment](docs/jetson-setup.md) for shared prerequisites
 and camera calibration, and [DeepStream GPU pipeline](docs/jetson-deepstream.md)
-for this backend's model selection and tuning.
+for this backend's model selection and tuning — plus
+[Hardware targets](docs/jetson-deepstream.md#hardware-targets) and
+[Xavier NX notes](docs/jetson-deepstream.md#xavier-nx-notes) for what differs
+between the two boards.
 
 ### `jetson` — Ultralytics YOLO11 on TensorRT (alternative backend)
 

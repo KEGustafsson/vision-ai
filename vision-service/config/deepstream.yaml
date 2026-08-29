@@ -1,7 +1,13 @@
 # DeepStream GPU pipeline mode
 #
-# Prerequisites (Jetson Orin Nano, JetPack 6, DeepStream 7.x):
-#   sudo apt-get install deepstream-7.1
+# This file is shared by BOTH DeepStream deployments — Jetson Orin Nano Super
+# (JetPack 6 / DeepStream 7.1) and Jetson Xavier NX (JetPack 5 / DeepStream 6.3).
+# Nothing below is board-specific; the platform layer lives in the Dockerfiles.
+# See docs/jetson-deepstream.md#hardware-targets.
+#
+# The container images bring DeepStream + pyds with them, so the host needs only
+# the NVIDIA Container Runtime. The manual host-side equivalent, for reference:
+#   sudo apt-get install deepstream-7.1        # or deepstream-6.3 on JetPack 5
 #   pip install /opt/nvidia/deepstream/deepstream/lib/pyds-*.whl
 #
 # Build the custom YOLO nvinfer parser once (same .so serves YOLOv8/YOLO11):
@@ -42,8 +48,9 @@ detector:
   # COUPLING: for the DeepStream backend this value only sets the NvDCF
   # tracker_width (pipeline_deepstream.py). The ACTUAL nvinfer input size is
   # baked into the ONNX at export time, so it MUST be kept in sync with the
-  # `-s 768` passed to export_yolo11.py in Dockerfile.deepstream. After changing
-  # it, delete any stale *_gpu0_fp16.engine in the mounted deepstream/ dir so
+  # `-s 768` passed to export_yolo11.py in Dockerfile.deepstream (and the
+  # YOLO_IMGSZ build arg of Dockerfile.deepstream.xavier). After changing it,
+  # delete any stale *_gpu0_fp16.engine in the mounted deepstream/ dir so
   # nvinfer rebuilds at the new size.
   imgsz: 768
   # Native camera/display/geometry resolution. nvstreammux outputs this size and
