@@ -7,16 +7,17 @@ AIS-fused, navigation-aware situational awareness inside **[SignalK](https://sig
 > **⚠️ Read first — this project ships as two separate parts, and you need both.**
 >
 > 1. **`signalk-vision-ai` plugin** ([`signalk-plugin/`](signalk-plugin/)) — installed
->    into your SignalK server. It does the navigation-relative math and publishes
->    the `vision.*` deltas and notifications.
+>    from the **SignalK App Store** into your SignalK server. It does the
+>    navigation-relative math and publishes the `vision.*` deltas and notifications.
 > 2. **Vision-AI container** ([`vision-service/`](vision-service/)) — a separate
 >    service (typically on an NVIDIA Jetson) that owns the cameras, the GPU and the
->    detector, and emits detection events.
+>    detector, and emits detection events. It is **not** part of the App Store
+>    install and **must be deployed manually**.
 >
-> Neither part is a drop-in install: **both must be installed and configured
-> manually**, and the plugin must be pointed at the container's host/port. With only
-> the plugin installed there is nothing to detect; with only the container running
-> nothing reaches SignalK. See [Quick start](#quick-start-no-gpu-no-cameras) and
+> Installing the plugin alone is not enough: you also have to bring up the
+> container yourself and point the plugin at its host/port. With only the plugin
+> there is nothing to detect; with only the container nothing reaches SignalK. See
+> [Quick start](#quick-start-no-gpu-no-cameras) and
 > [Deployment modes](#deployment-modes) for the setup of each part.
 
 ## What it does
