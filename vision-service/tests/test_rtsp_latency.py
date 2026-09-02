@@ -22,6 +22,12 @@ def test_gstreamer_pipeline_drops_late_frames():
     assert "appsink sync=false drop=true max-buffers=1" in pipeline
 
 
+def test_gstreamer_pipeline_runs_nvdec_at_max_performance():
+    # NVDEC must not DVFS down between frames: steady, minimal decode latency.
+    pipeline = build_pipeline("rtsp://camera.example/live")
+    assert "nvv4l2decoder enable-max-performance=1 !" in pipeline
+
+
 def _bare_source() -> RtspCpuSource:
     """RtspCpuSource with just the read()-path state (no capture, no reader
     thread), to exercise the consumer-side delivery logic in isolation."""

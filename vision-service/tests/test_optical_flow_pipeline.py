@@ -142,12 +142,12 @@ def test_required_without_enabled_is_rejected_at_config_load():
 
 
 def test_chain_without_ofa_is_the_original_pipeline():
-    mux, pgie, tracker, dispconv, dispcaps, demux = (
+    mux, pgie, tracker, dispconv, dispcaps, probeq, demux = (
         _FakeElement("f", n) for n in
-        ("mux", "pgie", "tracker", "dispconv", "dispcaps", "demux"))
-    links = _main_chain_links(mux, pgie, tracker, (), dispconv, dispcaps, demux)
+        ("mux", "pgie", "tracker", "dispconv", "dispcaps", "probeq", "demux"))
+    links = _main_chain_links(mux, pgie, tracker, (), dispconv, dispcaps, probeq, demux)
     assert links == [(mux, pgie), (pgie, tracker), (tracker, dispconv),
-                     (dispconv, dispcaps), (dispcaps, demux)]
+                     (dispconv, dispcaps), (dispcaps, probeq), (probeq, demux)]
 
 
 def test_ofa_branch_is_spliced_between_tracker_and_dispconv():
@@ -158,15 +158,15 @@ def test_ofa_branch_is_spliced_between_tracker_and_dispconv():
     chain = p._build_optical_flow(
         _fake_gst(), _FakePipeline(), _maker([]), p.settings.cameras)
     conv, caps, of = chain
-    mux, pgie, tracker, dispconv, dispcaps, demux = (
+    mux, pgie, tracker, dispconv, dispcaps, probeq, demux = (
         _FakeElement("f", n) for n in
-        ("mux", "pgie", "tracker", "dispconv", "dispcaps", "demux"))
+        ("mux", "pgie", "tracker", "dispconv", "dispcaps", "probeq", "demux"))
 
-    links = _main_chain_links(mux, pgie, tracker, chain, dispconv, dispcaps, demux)
+    links = _main_chain_links(mux, pgie, tracker, chain, dispconv, dispcaps, probeq, demux)
 
     assert links == [(mux, pgie), (pgie, tracker),
                      (tracker, conv), (conv, caps), (caps, of), (of, dispconv),
-                     (dispconv, dispcaps), (dispcaps, demux)]
+                     (dispconv, dispcaps), (dispcaps, probeq), (probeq, demux)]
 
 
 def test_disabled_pipeline_ignores_flow_metadata():

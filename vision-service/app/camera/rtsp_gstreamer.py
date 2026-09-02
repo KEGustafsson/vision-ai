@@ -37,10 +37,14 @@ def build_pipeline(url: str, codec: str = "h264",
     # native resolution through unscaled — forcing a fixed size (e.g. 1280x720)
     # would distort a 4:3 (1280x960) sensor into 16:9 and corrupt the vertical
     # geometry (horizon depression / range) which assumes square pixels.
+    #
+    # enable-max-performance keeps NVDEC at its max clock instead of letting it
+    # DVFS down between frames: lower, steadier per-frame decode latency for a
+    # small bounded power cost (NVIDIA's low-latency pipelines set it too).
     scale = f",width={width},height={height}" if width and height else ""
     return (
         f"rtspsrc location={url} protocols=tcp latency=50 drop-on-latency=true ! {depay} ! "
-        f"nvv4l2decoder ! nvvidconv ! "
+        f"nvv4l2decoder enable-max-performance=1 ! nvvidconv ! "
         f"video/x-raw,format=BGRx{scale} ! "
         f"videoconvert ! video/x-raw,format=BGR ! appsink sync=false drop=true max-buffers=1"
     )

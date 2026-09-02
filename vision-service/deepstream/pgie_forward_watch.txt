@@ -79,6 +79,15 @@ custom-lib-path=/opt/vision-service/lib/libnvdsinfer_custom_impl_Yolo.so
 maintain-aspect-ratio=1
 symmetric-padding=1
 
+# Pre-scale filter for the mux-resolution → network-input letterbox (done on
+# the VIC on Jetson). nvinfer's default is NEAREST, which on the 1280→768
+# downscale simply discards 40% of the source rows/columns — thin masts, far
+# hulls and a swimmer's head alias or vanish, exactly the small targets the
+# larger imgsz exists to keep. 1 = bilinear, the same interpolation Ultralytics
+# uses for its own letterbox in training and in the torch/TensorRT backends, so
+# the network sees the input statistics it was trained on. Same cost on the VIC.
+scaling-filter=1
+
 [class-attrs-all]
 # Keep low here; the pipeline's stabilizer and confidence gate filter downstream.
 pre-cluster-threshold=0.1
