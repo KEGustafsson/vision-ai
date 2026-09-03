@@ -22,7 +22,7 @@ Everything below is specific to this backend.
 `VISION_MODE=deepstream` runs a fully GPU-resident pipeline instead of the
 Python/TensorRT one: frames stay in NVMM end to end.
 
-![DeepStream GStreamer pipeline, fully GPU-resident in NVMM: rtspsrc → nvv4l2decoder → optional nvdewarper → nvstreammux (batches both cameras) → nvinfer (TensorRT) → nvtracker (NvDCF); then per camera after nvstreamdemux: nvvideoconvert (RGBA) → a pad probe that reads metadata only → nvstreamdemux → nvdsosd (GPU overlay) → nvjpegenc (I420 to JPEG) → appsink → LatestFrame. Detection metadata also feeds the bearing/range geometry into the DetectionEvent without copying any pixels.](images/deepstream-pipeline.svg)
+![DeepStream GStreamer pipeline, fully GPU-resident in NVMM: rtspsrc → nvv4l2decoder → optional nvdewarper → nvstreammux (batches both cameras) → nvinfer (TensorRT) → nvtracker (NvDCF) → nvvideoconvert (RGBA) → a queue whose source-pad probe reads metadata only on its own thread → nvstreamdemux; then per camera: nvdsosd (GPU overlay) → nvjpegenc (I420 to JPEG) → appsink → LatestFrame. Detection metadata also feeds the bearing/range geometry into the DetectionEvent without copying any pixels.](images/deepstream-pipeline.svg)
 
 Overlays are drawn on the GPU (`nvdsosd`) and the MJPEG is encoded on
 the NVJPG block (`nvjpegenc`), so the CPU only handles the finished JPEG bytes —
@@ -158,6 +158,37 @@ Tuning lives in `config/deepstream.yaml` (bind-mounted, takes effect on restart)
   Kept short so both cameras pipeline at full input rate; a per-camera PTS guard
   in the probe drops any muxer frame repeats so output never exceeds the camera's
   real frame rate.
+- **Tracker working resolution** — derived, not configured: NvDCF runs at
+  `imgsz` wide and a height that keeps the `mux_width:mux_height` aspect ratio,
+  both rounded to NvDCF's 32-px grid (1280×960 at `imgsz: 768` → 768×576). The
+  tracker therefore sees a uniform downscale of the camera frame rather than a
+  squashed one. Logged once per pipeline build
+  (`nvtracker NvDCF working resolution …`).
+- **nvinfer pre-scale filter** — every `deepstream/pgie_*.txt` sets
+  `scaling-filter=1` (bilinear on the VIC). nvinfer's default is
+  nearest-neighbour, which on the 1280→768 letterbox simply discards 40% of the
+  source rows and aliases exactly the small, distant targets the larger `imgsz`
+  exists to keep; bilinear is what Ultralytics uses for its own letterbox, so
+  the network gets the input it was trained on. Keep it when adding a model
+  config (`tests/test_pgie_configs.py` pins it).
+
+Two properties of the graph itself are worth knowing when reading
+`tegrastats`/`jtop` or the `latency_ms` in events:
+
+- **The host-side probe has its own thread.** A pad probe runs on whichever
+  thread pushes the buffer, and upstream of it the muxer, `nvinfer`,
+  `nvtracker` and the RGBA convert form one GPU chain. The probe (stabilizer,
+  geometry, event serialisation, overlay meta — milliseconds of Python per
+  batch) therefore hangs off a two-buffer `queue` placed after the RGBA
+  capsfilter, so inference of batch *N+1* overlaps the host processing of batch
+  *N* instead of waiting for it. The queue is not leaky: a slow probe
+  back-pressures the leaky per-camera source queues, which shed load at the
+  decoder (a stale frame skipped) rather than dropping a batch that was already
+  inferred and tracked.
+- **NVDEC runs at max performance.** Each `nvv4l2decoder` is created with
+  `enable-max-performance` so the decoder does not clock down between frames;
+  it costs a little power and buys steadier per-frame decode latency. The
+  property is set best-effort — a plugin build without it just uses its default.
 
 The deepstream compose bind-mounts `app/`, `config/`, `deepstream/`, and `models/`,
 so code, config, model ONNX/labels, and the built TRT engine all live on the host

@@ -8,13 +8,16 @@ decode through TRT inference. The CPU never touches a pixel before inference.
     rtspsrc(N)
         → nvv4l2decoder       # hardware H.264/H.265 decode; output: NVMM NV12
         → nvvideoconvert      # colour-space: stays in NVMM
-        → nvstreammux         # batch N cameras into one NVMM buffer; resizes to 640×640
+        → nvstreammux         # batch N cameras into one NVMM buffer (native WxH)
         → nvinfer             # reads NVMM directly → TRT engine (FP16) → detections
+                              # (VIC letterbox-scales the batch to imgsz on the way in)
         → nvtracker           # NvDCF on GPU → stable track IDs
         → [nvvideoconvert(NVMM NV12) → nvof]   # OPTIONAL (detector.optical_flow):
                               # Orin OFA hardware block; attaches per-source flow
                               # vectors as frame user meta. Off by default.
         → nvvideoconvert      # → NVMM RGBA (for nvdsosd; probe maps it for horizon)
+        → queue               # own streaming thread: the Python probe below can
+                              # never stall the GPU chain above (see _build_pipeline)
         → [pad probe]         # reads NvDsObjectMeta + attaches display meta (no pixel copy)
         → nvstreamdemux       # split batch back into per-camera NVMM buffers
         → (per camera) nvdsosd → nvvideoconvert(NVMM I420) → nvjpegenc → appsink
@@ -140,14 +143,16 @@ _TRACKER_CFG_STOCK = Path(
 )
 
 
-def _main_chain_links(mux, pgie, tracker, of_chain, dispconv, dispcaps, demux) -> List[tuple]:
+def _main_chain_links(mux, pgie, tracker, of_chain, dispconv, dispcaps, probeq,
+                      demux) -> List[tuple]:
     """Element pairs to link for the batched chain, in order.
 
     Pure list-building, kept out of _build_pipeline so the optical-flow splice
-    can be asserted without GStreamer: a wrong order here would only surface as
-    a link failure on the Jetson.
+    and the probe-queue placement can be asserted without GStreamer: a wrong
+    order here would only surface as a link failure on the Jetson.
 
-        mux → pgie → tracker [→ ofconv → ofcaps → nvof] → dispconv → dispcaps → demux
+        mux → pgie → tracker [→ ofconv → ofcaps → nvof] → dispconv → dispcaps
+            → probeq → demux
     """
     links = [(mux, pgie), (pgie, tracker)]
     if of_chain:
@@ -156,8 +161,35 @@ def _main_chain_links(mux, pgie, tracker, of_chain, dispconv, dispcaps, demux) -
         links += list(zip((tracker, *of_chain), (*of_chain, dispconv)))
     else:
         links.append((tracker, dispconv))
-    links += [(dispconv, dispcaps), (dispcaps, demux)]
+    links += [(dispconv, dispcaps), (dispcaps, probeq), (probeq, demux)]
     return links
+
+
+# NvDCF requires its working resolution to be a multiple of this (both axes).
+_TRACKER_ALIGN = 32
+
+
+def _tracker_dims(imgsz: int, mux_w: int, mux_h: int) -> tuple:
+    """NvDCF working resolution ``(width, height)`` for the tracker.
+
+    Width follows the inference size (``imgsz``); height keeps the muxer's
+    aspect ratio so the frame the tracker sees is a uniform downscale of the
+    camera image, not a squashed one — the correlation filter and the
+    colour-names features behave the same in x and y, and a hull keeps its
+    shape between frames. Both axes are rounded to a multiple of 32 (an NvDCF
+    requirement) and never below 32.
+
+    1280x960 at imgsz 768 → 768x576; at 640 → 640x480. (The previous fixed
+    768x384 was inherited from NVIDIA's 16:9 sample and squashed a 4:3 source
+    2:1 vertically, halving the vertical resolution the tracker had to work
+    with.)
+    """
+    a = _TRACKER_ALIGN
+    w = max(a, (int(imgsz) // a) * a)
+    if mux_w <= 0 or mux_h <= 0:
+        return w, w
+    h = int(round(w * mux_h / mux_w / a)) * a
+    return w, max(a, h)
 
 
 def _now_iso() -> str:
@@ -271,6 +303,9 @@ class DeepStreamPipeline:
         # GStreamer pipeline + GLib main loop (in daemon thread)
         self._gst = None
         self._loop = None
+        # Binding modules, cached by start() for the per-frame callbacks.
+        self._Gst = None
+        self._pyds = None
         # Supervisor thread: runs the GLib loop and rebuilds the pipeline with
         # backoff after a fatal GStreamer error/EOS (see _supervise).
         self._supervisor: Optional[threading.Thread] = None
@@ -325,9 +360,15 @@ class DeepStreamPipeline:
         _check_imports()
         import gi
         gi.require_version("Gst", "1.0")
+        import pyds  # type: ignore[import]
         from gi.repository import GLib, Gst
 
         Gst.init(None)
+        # Cache the bindings: the appsink and probe callbacks run per frame and
+        # per batch, and `gi.require_version` + `from gi.repository import`
+        # on every call is avoidable overhead on those hot paths.
+        self._Gst = Gst
+        self._pyds = pyds
         self._stopping.clear()
 
         # First bring-up happens synchronously so a hard misconfiguration (bad
@@ -402,9 +443,11 @@ class DeepStreamPipeline:
             )
 
         self._loop = GLib.MainLoop()
-        # Stall watchdog: fires in the GLib loop thread (same thread as the probe
-        # that writes last_frame_at, so no extra locking). Reset each camera's
-        # clock to "now" first so the RTSP preroll grace period starts here.
+        # Stall watchdog: fires in the GLib loop thread. last_frame_at is written
+        # by the per-camera appsink streaming threads (_on_jpeg_sample); a float
+        # attribute store is atomic under the GIL, so no extra locking. Reset
+        # each camera's clock to "now" first so the RTSP preroll grace period
+        # starts here.
         now = time.time()
         for proxy in self.workers.values():
             proxy.last_frame_at = now
@@ -838,6 +881,18 @@ class DeepStreamPipeline:
             pipeline.add(el)
             return el
 
+        def try_set(el, prop: str, value) -> bool:
+            """Set a tuning property that not every plugin build exposes.
+            PyGObject raises on an unknown property; a missing knob must
+            degrade to the plugin default, never fail the build."""
+            try:
+                el.set_property(prop, value)
+                return True
+            except Exception as exc:
+                self._log.debug("%s: property %s not settable (%s); using default",
+                                el.get_name(), prop, exc)
+                return False
+
         # nvstreammux: batches all camera feeds into a single NVMM buffer.
         # batched-push-timeout (µs): how long to wait for a full batch before
         # pushing a partial one. Kept LONGER than the camera frame interval so the
@@ -863,6 +918,12 @@ class DeepStreamPipeline:
             depay = make("rtph264depay", f"depay{i}")
             parser = make("h264parse", f"parse{i}")
             decoder = make("nvv4l2decoder", f"dec{i}")
+            # Run NVDEC at its max clock instead of letting it DVFS down between
+            # frames: lower and steadier decode latency per frame for a small,
+            # bounded power cost (NVIDIA's own low-latency pipelines set this).
+            # Best-effort — the L4T plugin has carried it since r32, but a
+            # build without it must still come up.
+            try_set(decoder, "enable-max-performance", True)
 
             # GPU lens correction (optional, in NVMM): nvdewarper straightens the
             # frame before the mux, so inference + geometry see the corrected image
@@ -936,18 +997,23 @@ class DeepStreamPipeline:
         # nvtracker: NvDCF GPU tracker. Assigns stable object_id (track ID) to
         # each detection across frames. Runs entirely on the GPU.
         # Tracker works at its own internal resolution (GPU cost scales with it);
-        # keep it decoupled from the larger native display res. 640x384 matches
-        # the inference scale and keeps NvDCF cheap. Coords are still reported in
-        # the streammux WxH space, so this does not affect bbox geometry.
+        # keep it decoupled from the larger native display res: width follows
+        # the inference size, height keeps the mux aspect ratio so the tracker
+        # sees a uniform downscale rather than a squashed frame (_tracker_dims).
+        # Coords are still reported in the streammux WxH space, so this does not
+        # affect bbox geometry.
+        trk_w, trk_h = _tracker_dims(self.settings.detector.imgsz, W, H)
         tracker = make("nvtracker", "tracker",
                        ll_lib_file=_TRACKER_LIB,
                        ll_config_file=tracker_cfg,
-                       tracker_width=self.settings.detector.imgsz,
-                       tracker_height=384,  # power-of-2 height for GPU efficiency
+                       tracker_width=trk_w,
+                       tracker_height=trk_h,
                        # 0 = don't let the tracker stamp "<label> <id>" object text
                        # onto the OSD: we draw every label ourselves from the
                        # stabilized event (draw_event), so this would double up.
                        display_tracking_id=0)
+        self._log.info("nvtracker NvDCF working resolution %dx%d (mux %dx%d, imgsz %d)",
+                       trk_w, trk_h, W, H, self.settings.detector.imgsz)
 
         # ── Zero-copy NVMM display + HW JPEG path ─────────────────────────────
         # Everything from here stays in NVMM until nvjpegenc emits compressed
@@ -964,29 +1030,47 @@ class DeepStreamPipeline:
             "caps",
             Gst.Caps.from_string("video/x-raw(memory:NVMM),format=RGBA"),
         )
+        # Probe queue: a pad probe runs synchronously on whichever thread pushes
+        # the buffer, and everything upstream of it (mux → nvinfer → nvtracker →
+        # dispconv) is one GPU chain. Without this queue the Python probe
+        # (stabilizer, geometry, Pydantic dump, display meta — milliseconds per
+        # batch) executes on the tracker's output thread and holds the whole
+        # chain until it returns, so GPU inference of batch N+1 cannot overlap
+        # the host-side processing of batch N. The queue gives the probe its own
+        # streaming thread; the metadata travels with the buffer, so nothing
+        # else changes. NOT leaky: a momentarily slow probe applies back-pressure
+        # and the per-camera source queues (leaky, drop-oldest) shed the load at
+        # the decoder, where dropping means "skip a stale frame" rather than
+        # "lose a batch that was already inferred and tracked". Two buffers is
+        # enough to keep the GPU busy; a deeper queue only adds latency.
+        probeq = make("queue", "probeq")
+        probeq.set_property("max-size-buffers", 2)
+        probeq.set_property("max-size-bytes", 0)
+        probeq.set_property("max-size-time", 0)
         demux = make("nvstreamdemux", "demux")
 
         of_chain = self._build_optical_flow(Gst, pipeline, make, cams)
 
         # Main batched chain: mux → pgie → tracker [→ nvvideoconvert(NV12) → nvof]
-        #                     → dispconv → dispcaps(RGBA) → nvstreamdemux.
+        #                     → dispconv → dispcaps(RGBA) → probeq → nvstreamdemux.
         # The OFA branch is spliced in AFTER the tracker: nvinfer keeps seeing
         # exactly the buffer format it sees today (detection is untouched), and
         # the flow is measured on the same corrected, mux-resolution image that
         # detection and tracking used.
         for src_el, dst_el in _main_chain_links(
-                mux, pgie, tracker, of_chain, dispconv, dispcaps, demux):
+                mux, pgie, tracker, of_chain, dispconv, dispcaps, probeq, demux):
             if not src_el.link(dst_el):
                 raise RuntimeError(
                     f"Failed to link {src_el.get_name()} → {dst_el.get_name()}"
                 )
 
-        # Probe on the RGBA capsfilter src pad: fires after tracking + conversion
-        # and BEFORE the demux, so the display meta it attaches to each frame_meta
-        # travels with that frame to its per-camera nvdsosd. It reads NvDsObjectMeta
-        # (small) to build events and, at most once per _HORIZON_REFRESH_S, maps the
-        # RGBA surface to re-detect the horizon.
-        probe_pad = dispcaps.get_static_pad("src")
+        # Probe on the probe queue's src pad: fires after tracking + RGBA
+        # conversion, on the queue's own thread, and BEFORE the demux, so the
+        # display meta it attaches to each frame_meta travels with that frame to
+        # its per-camera nvdsosd. It reads NvDsObjectMeta (small) to build events
+        # and, at most once per _HORIZON_REFRESH_S, maps the RGBA surface to
+        # re-detect the horizon.
+        probe_pad = probeq.get_static_pad("src")
         probe_pad.add_probe(Gst.PadProbeType.BUFFER, self._probe_callback, None)
 
         # Per-camera tail: demux.src_N → queue → nvdsosd → nvvideoconvert → NVMM
@@ -1062,10 +1146,7 @@ class DeepStreamPipeline:
         ever leaves NVMM on the display path; LatestFrame.set() is a no-op while
         paused (detection disabled), so a frame can't resurface after a disable.
         """
-        import gi
-        gi.require_version("Gst", "1.0")
-        from gi.repository import Gst
-
+        Gst = self._Gst
         sample = appsink.emit("pull-sample")
         if sample is None:
             return Gst.FlowReturn.OK
@@ -1091,16 +1172,20 @@ class DeepStreamPipeline:
     def _probe_callback(self, pad, info, user_data):
         """Extract detections from NvDsObjectMeta and emit DetectionEvents.
 
-        Called in the GLib main loop thread for every batch pushed by nvtracker.
-        Only NvDsObjectMeta structs (small) are read — no pixel data is copied
-        to host until the display path below (one copy per camera, after inference).
+        Runs on the probe queue's streaming thread (see _build_pipeline) for
+        every batch that leaves nvtracker — not on the GLib main loop and not
+        on the GPU chain's thread, so the Python work here overlaps the next
+        batch's inference. Only NvDsObjectMeta structs (small) are read — no
+        pixel data is copied to host (the throttled auto-horizon map aside).
 
         Returns Gst.PadProbeReturn.OK (= 1) to let the buffer continue.
         """
-        try:
-            import pyds  # type: ignore[import]
-        except ImportError:
-            return 1  # Gst.PadProbeReturn.OK
+        pyds = self._pyds
+        if pyds is None:
+            try:
+                import pyds  # type: ignore[import]
+            except ImportError:
+                return 1  # Gst.PadProbeReturn.OK
 
         if not self.enabled:
             return 1

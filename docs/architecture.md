@@ -54,7 +54,7 @@ chosen by `VISION_MODE`/`detector.backend`; all of them emit the identical
   (see [Detection model selection](jetson-deepstream.md#detection-model-selection)).
   Frames stay in NVMM end to end:
 
-  ![DeepStream GStreamer pipeline, fully GPU-resident in NVMM: rtspsrc → nvv4l2decoder → optional nvdewarper → nvstreammux (batches both cameras) → nvinfer (TensorRT) → nvtracker (NvDCF); then per camera after nvstreamdemux: nvvideoconvert (RGBA) → a pad probe that reads metadata only → nvstreamdemux → nvdsosd (GPU overlay) → nvjpegenc (I420 to JPEG) → appsink → LatestFrame. Detection metadata also feeds the bearing/range geometry into the DetectionEvent without copying any pixels.](images/deepstream-pipeline.svg)
+  ![DeepStream GStreamer pipeline, fully GPU-resident in NVMM: rtspsrc → nvv4l2decoder → optional nvdewarper → nvstreammux (batches both cameras) → nvinfer (TensorRT) → nvtracker (NvDCF) → nvvideoconvert (RGBA) → a queue whose source-pad probe reads metadata only on its own thread → nvstreamdemux; then per camera: nvdsosd (GPU overlay) → nvjpegenc (I420 to JPEG) → appsink → LatestFrame. Detection metadata also feeds the bearing/range geometry into the DetectionEvent without copying any pixels.](images/deepstream-pipeline.svg)
 
   Both cameras are batched by `nvstreammux`; inference + GPU tracking run on the
   batch in one pass. `nvstreammux` outputs the native camera resolution (display

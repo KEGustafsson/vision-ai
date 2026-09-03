@@ -22,6 +22,41 @@ def test_gstreamer_pipeline_drops_late_frames():
     assert "appsink sync=false drop=true max-buffers=1" in pipeline
 
 
+def test_gstreamer_pipeline_runs_nvdec_at_max_performance_when_supported():
+    # NVDEC must not DVFS down between frames: steady, minimal decode latency.
+    pipeline = build_pipeline("rtsp://camera.example/live", max_performance=True)
+    assert "nvv4l2decoder enable-max-performance=1 !" in pipeline
+
+
+def test_gstreamer_pipeline_omits_the_clock_knob_when_the_plugin_lacks_it():
+    # gst_parse_launch rejects an unknown property outright, so the capture
+    # would never open: the property must be left out, not risked.
+    pipeline = build_pipeline("rtsp://camera.example/live", max_performance=False)
+    assert "enable-max-performance" not in pipeline
+    assert "! nvv4l2decoder ! nvvidconv !" in pipeline
+
+
+def test_gstreamer_pipeline_probes_the_plugin_once_by_default(monkeypatch):
+    from app.camera import rtsp_gstreamer as mod
+
+    calls = []
+
+    def probe():
+        calls.append(1)
+        return True
+
+    monkeypatch.setattr(mod, "_probe_nvdec_max_performance", probe)
+    monkeypatch.setattr(mod, "_NVDEC_MAX_PERF", None)
+    assert "enable-max-performance=1" in build_pipeline("rtsp://camera.example/live")
+    assert "enable-max-performance=1" in build_pipeline("rtsp://camera.example/live")
+    assert len(calls) == 1  # cached: the plugin set does not change at runtime
+
+    # No PyGObject / no plugin (this CI host): the knob is omitted, never guessed.
+    monkeypatch.setattr(mod, "_NVDEC_MAX_PERF", None)
+    monkeypatch.setattr(mod, "_probe_nvdec_max_performance", lambda: False)
+    assert "enable-max-performance" not in build_pipeline("rtsp://camera.example/live")
+
+
 def _bare_source() -> RtspCpuSource:
     """RtspCpuSource with just the read()-path state (no capture, no reader
     thread), to exercise the consumer-side delivery logic in isolation."""
