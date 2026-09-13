@@ -8,6 +8,7 @@ container has already accepted is beyond the client's reach — so the container
 refuses one carrying an older ordering token.
 """
 
+import threading
 import time
 
 from fastapi.testclient import TestClient
@@ -101,3 +102,49 @@ def test_a_stale_request_is_refused_before_anything_is_applied():
         health = client.get("/health").json()
         assert health["detection_enabled"] is True
         assert health["max_targets"] != 3
+
+
+def test_a_superseded_request_cannot_apply_after_the_newer_one(monkeypatch):
+    """The fence decision and the writes it guards must be one critical section.
+
+    FastAPI runs a sync handler in a threadpool. With only the check
+    serialised, a superseded request could pass the fence, be preempted, and
+    then apply its fields *after* the newer request had applied its own —
+    leaving exactly the stale state the fence exists to prevent.
+    """
+    app = _app()
+    with TestClient(app) as client:
+        pipeline = app.state.pipeline
+        real_set = pipeline.set_confidence
+        order: list = []
+        first = threading.Event()
+
+        def slow_set(value):
+            order.append(value)
+            if not first.is_set():
+                first.set()
+                time.sleep(0.3)  # wide enough for the other request to overtake
+            real_set(value)
+
+        monkeypatch.setattr(pipeline, "set_confidence", slow_set)
+
+        results: dict = {}
+
+        def post(tag, generation, value):
+            r = client.post(
+                "/control", json={"confidence": value, "client_generation": generation})
+            results[tag] = r.status_code
+
+        old = threading.Thread(target=post, args=("old", 1_000, 0.11))
+        new = threading.Thread(target=post, args=("new", 2_000, 0.99))
+        old.start()
+        first.wait(timeout=5)   # the old request is now inside the handler
+        new.start()
+        old.join(timeout=10)
+        new.join(timeout=10)
+
+        assert results.get("old") == 200      # it got in first, fair and square
+        assert results.get("new") == 200      # and the newer one is never refused
+        # Whatever the interleaving, the newer client's value is what survives.
+        assert {w.confidence for w in pipeline.workers.values()} == {0.99}
+        assert order == [0.11, 0.99]          # serialised, not interleaved
