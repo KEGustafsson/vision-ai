@@ -110,11 +110,27 @@ class RtspCpuSource(FrameSource):
             except Exception:
                 pass
             self._cap = None
-        if self._closed:
-            # close() landed while we were releasing: don't dial the camera
-            # again on the way out (see _reader_loop).
-            return
-        self._cap = self._open_capture()  # may be None; retried next interval
+        # Decide under the lock close() sets _closed with, so an open can never
+        # START after close() has taken effect.
+        with self._lock:
+            if self._closed:
+                return
+        # The open itself stays OUTSIDE the lock: it can take the full connect
+        # timeout, and read() waits on this lock (and close() takes it to wake
+        # that wait), so holding it across the dial would block a shutdown for
+        # seconds — the very thing this guard exists to avoid. A close() landing
+        # while we are dialling therefore still completes one connect; it is
+        # released immediately below rather than kept.
+        cap = self._open_capture()          # may be None; retried next interval
+        with self._lock:
+            if self._closed:
+                if cap is not None:
+                    try:
+                        cap.release()
+                    except Exception:  # pragma: no cover - best-effort teardown
+                        pass
+                return
+            self._cap = cap
 
     def _reader_loop(self) -> None:
         """Continuously drain FFmpeg so slow inference never sees stale frames.
@@ -215,8 +231,11 @@ class RtspCpuSource(FrameSource):
             return Frame(image=self._latest_img.copy(), seq=self._latest_seq)
 
     def close(self) -> None:
-        self._closed = True
+        # Set the flag under the lock the reader checks it with, so a reconnect
+        # cannot slip an RTSP open past a close that has already taken effect
+        # (see _reconnect).
         with self._frame_ready:
+            self._closed = True
             self._frame_ready.notify_all()
         # The reader owns the capture and releases it as it exits (see
         # _reader_loop); joining is bounded by the read timeout it may be

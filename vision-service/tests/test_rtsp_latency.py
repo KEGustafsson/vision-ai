@@ -1,4 +1,5 @@
 import threading
+import time
 
 import cv2
 import numpy as np
@@ -180,3 +181,59 @@ def test_the_reader_does_not_dial_the_camera_again_while_shutting_down(monkeypat
 
     assert opened == [], "reconnected during shutdown"
     assert src._cap is None  # released by the loop, which owns it
+
+
+def _reconnectable_source():
+    src = RtspCpuSource.__new__(RtspCpuSource)
+    src._url = "rtsp://camera.example/live"
+    src._closed = False
+    src._lock = threading.Lock()
+    src._frame_ready = threading.Condition(src._lock)
+    src._latest_img = None
+    src._latest_seq = 0
+    src._last_delivered_seq = 0
+    src._last_error = None
+    src._last_reopen = 0.0
+    src._cap = None
+    src._reader = threading.current_thread()
+    return src
+
+
+def test_no_rtsp_open_starts_once_close_has_taken_effect(monkeypatch):
+    """close() sets the flag under the same lock the reconnect decides with, so
+    an open can never START after a close that has already completed."""
+    src = _reconnectable_source()
+    opened = []
+    monkeypatch.setattr(RtspCpuSource, "_open_capture",
+                        lambda self: opened.append(1) or object())
+
+    src.close()          # completes before the reader gets there
+    src._reconnect()
+
+    assert opened == []
+    assert src._cap is None
+
+
+def test_a_capture_opened_as_close_lands_is_released_at_once(monkeypatch):
+    """A close() that lands while the dial is already in flight cannot be
+    stopped — holding the lock across the connect would block shutdown for the
+    whole connect timeout. What must not happen is the capture being KEPT."""
+    src = _reconnectable_source()
+    released = []
+
+    class _Cap:
+        def release(self):
+            released.append(1)
+
+    def open_then_close(self):
+        # close() runs while this open is in progress.
+        threading.Thread(target=self.close).start()
+        time.sleep(0.05)
+        return _Cap()
+
+    monkeypatch.setattr(RtspCpuSource, "_open_capture", open_then_close)
+
+    src._reconnect()
+
+    assert released == [1], "capture opened during shutdown was not released"
+    assert src._cap is None
