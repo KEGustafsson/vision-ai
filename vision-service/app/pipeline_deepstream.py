@@ -70,6 +70,8 @@ Prerequisites
 
 from __future__ import annotations
 
+import logging
+import os
 import tempfile
 import threading
 import time
@@ -132,6 +134,18 @@ _RESTART_BACKOFF_MAX_S = 30.0
 # its whole life. Comfortably longer than the max backoff so a flapping pipeline
 # (which restarts again before the window closes) keeps reading degraded.
 _RESTART_DEGRADED_WINDOW_S = 120.0
+# Longest a teardown may take to reach NULL. Normally about a second, RTSP
+# TEARDOWN included. Beyond this the graph is wedged, and nothing inside the
+# process can unwedge it: observed on an Orin Nano when a rebuild ran short of
+# NVMM, the decoders sat waiting on buffer pools that could never fill, and
+# set_state(NULL) never returned — the supervisor hung with it, so detection
+# stayed down indefinitely while the process, and so the container, stayed up.
+# A fresh process starts cleanly under the same memory pressure (it does not
+# carry the old graph's allocations), so exit and let the container's restart
+# policy provide one.
+_TEARDOWN_TIMEOUT_S = 15.0
+# Exit status for that case (EX_SOFTWARE), distinct from a normal shutdown.
+_WEDGED_EXIT_CODE = 70
 # Element names of the optional NVIDIA OFA (optical flow) branch. Kept in one
 # place so the bus-error handler can recognise an OFA fault and fall back.
 _OF_ELEMENTS = ("ofconv", "ofcaps", "of")
@@ -319,6 +333,8 @@ class DeepStreamPipeline:
         # backoff after a fatal GStreamer error/EOS (see _supervise).
         self._supervisor: Optional[threading.Thread] = None
         self._stopping = threading.Event()
+        # Process exit for a wedged teardown; a seam so tests can observe it.
+        self._exit = os._exit
         self._restart_count = 0
         self._last_error: Optional[str] = None
         # Frames whose probe work raised (see _probe_callback); logged with a
@@ -518,12 +534,42 @@ class DeepStreamPipeline:
                 pass
             self._bus = None
         if self._gst is not None:
+            pipeline, self._gst = self._gst, None
+            self._set_null_or_exit(Gst, pipeline)
+        self._loop = None
+
+    def _set_null_or_exit(self, Gst, pipeline) -> None:
+        """Drive ``pipeline`` to NULL, or give up on the process if it can't.
+
+        The state change runs on a helper thread so the caller can stop waiting:
+        a graph wedged in buffer-pool allocation never finishes going to NULL,
+        and without a bound the supervisor (or stop()) blocks on it for good.
+        Past ``_TEARDOWN_TIMEOUT_S`` the process exits so the container restarts
+        it — an in-process rebuild is not possible once teardown itself hangs.
+        """
+        done = threading.Event()
+
+        def to_null() -> None:
             try:
-                self._gst.set_state(Gst.State.NULL)
+                pipeline.set_state(Gst.State.NULL)
             except Exception:
                 pass
-            self._gst = None
-        self._loop = None
+            finally:
+                done.set()
+
+        threading.Thread(target=to_null, name="ds-teardown", daemon=True).start()
+        if done.wait(timeout=_TEARDOWN_TIMEOUT_S):
+            return
+        self._log.critical(
+            "DeepStream teardown did not reach NULL within %.0fs — the graph is "
+            "wedged (typically decoders stuck waiting for NVMM buffers). Exiting "
+            "so the container restarts with a fresh process.", _TEARDOWN_TIMEOUT_S)
+        for handler in logging.getLogger().handlers:
+            try:
+                handler.flush()
+            except Exception:  # pragma: no cover - best effort before exit
+                pass
+        self._exit(_WEDGED_EXIT_CODE)
 
     def _supervise(self, Gst, GLib) -> None:
         """Run the GLib loop; on a fatal error/EOS, rebuild with backoff.
@@ -739,6 +785,11 @@ class DeepStreamPipeline:
                 "DeepStream watchdog: all cameras stalled > %.0fs — rebuilding pipeline",
                 _STALL_REBUILD_S)
             self._quit_loop(f"all cameras stalled > {int(_STALL_REBUILD_S)}s")
+            # Returning False destroys this timer. Forget its id so _tear_down
+            # doesn't try to remove it again (GLib warns "Source ID ... was not
+            # found"). Only here: the loop is running, so this is the current
+            # pipeline's watchdog, not a stale one.
+            self._watchdog_id = None
             return False
         return True
 

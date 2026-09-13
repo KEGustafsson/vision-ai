@@ -9,11 +9,14 @@ queue sits, what the decoders and the tracker are configured with.
 """
 
 import logging
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 
 from app.config import load_settings
+import app.pipeline_deepstream as ds
 from app.pipeline_deepstream import DeepStreamPipeline, _tracker_dims
 
 LOG = logging.getLogger("test-ds-graph")
@@ -345,3 +348,61 @@ def test_a_pipeline_that_fails_to_build_is_still_reachable_for_teardown():
     p._gst = SimpleNamespace(set_state=states.append)
     p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
     assert states == [0] and p._gst is None
+
+
+def test_a_teardown_that_never_reaches_null_exits_the_process(monkeypatch):
+    """Seen on the Orin Nano: a rebuild ran short of NVMM, the decoders waited
+    on buffer pools that could never fill, and set_state(NULL) never returned.
+    The supervisor hung inside teardown, so detection stayed down with the
+    process (and the container) still up. Nothing in-process can recover that,
+    so teardown must stop waiting and exit for the restart policy."""
+    monkeypatch.setattr(ds, "_TEARDOWN_TIMEOUT_S", 0.1)
+    p = _pipeline()
+    exits: list = []
+    p._exit = exits.append
+    release = threading.Event()
+    p._gst = SimpleNamespace(set_state=lambda state: release.wait(10))
+
+    t0 = time.monotonic()
+    try:
+        p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
+    finally:
+        release.set()
+
+    assert exits == [ds._WEDGED_EXIT_CODE]
+    assert time.monotonic() - t0 < 2.0, "teardown waited on the wedged graph"
+    assert p._gst is None
+
+
+def test_a_teardown_that_reaches_null_does_not_exit(monkeypatch):
+    monkeypatch.setattr(ds, "_TEARDOWN_TIMEOUT_S", 5.0)
+    p = _pipeline()
+    exits: list = []
+    p._exit = exits.append
+    states: list = []
+    p._gst = SimpleNamespace(set_state=states.append)
+
+    p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
+
+    assert states == [0] and exits == []
+
+
+def test_the_stall_rebuild_forgets_the_timer_it_is_ending():
+    """Returning False from a GLib timer destroys it. If teardown then removed
+    the same id, GLib logs "Source ID ... was not found" on every stall rebuild
+    — seen on the boat right after the watchdog fired."""
+    p = _pipeline()
+    removed: list = []
+    p._GLib = SimpleNamespace(source_remove=removed.append)
+    p._watchdog_id = 6
+    p._loop = SimpleNamespace(is_running=lambda: True, quit=lambda: None)
+    long_ago = time.monotonic() - ds._STALL_REBUILD_S - 5
+    for proxy in p.workers.values():
+        proxy.last_frame_at = long_ago
+
+    assert p._watchdog() is False
+    assert p._watchdog_id is None
+
+    p._gst = SimpleNamespace(set_state=lambda state: None)
+    p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
+    assert removed == []
