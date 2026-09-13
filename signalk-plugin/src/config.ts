@@ -298,5 +298,15 @@ export function withDefaults(partial: Partial<PluginConfig> | undefined): Plugin
   cfg.notifyHoldS = clampMin(cfg.notifyHoldS, 0, DEFAULT_CONFIG.notifyHoldS);
   cfg.eventMaxAgeS = clampMin(cfg.eventMaxAgeS, 0, DEFAULT_CONFIG.eventMaxAgeS);
   cfg.minConfidence = clampRange(cfg.minConfidence, 0, 1, DEFAULT_CONFIG.minConfidence);
+  // MOB is the most safety-critical path in the plugin and its persistence
+  // counter is an integer frame count: a non-numeric saved value made every
+  // `count >= mobPersistFrames` comparison false — man-overboard would never
+  // fire, with nothing logged — and 0/negative fired on a single frame.
+  cfg.mobPersistFrames = clampMin(
+    Math.round(cfg.mobPersistFrames), 1, DEFAULT_CONFIG.mobPersistFrames);
+  cfg.mobMinConfidence = clampRange(cfg.mobMinConfidence, 0, 1, DEFAULT_CONFIG.mobMinConfidence);
+  cfg.collisionTcpaS = clampMin(cfg.collisionTcpaS, 0, DEFAULT_CONFIG.collisionTcpaS);
+  cfg.collisionAlarmTcpaS = clampMin(
+    cfg.collisionAlarmTcpaS, 0, DEFAULT_CONFIG.collisionAlarmTcpaS);
   return cfg;
 }

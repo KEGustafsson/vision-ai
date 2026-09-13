@@ -73,6 +73,13 @@ def _drop_contained_targets(targets: list, frac: float) -> list:
 # A camera whose source returns no frames for this long is reported as an error
 # in /health, instead of silently disappearing (read()==None sets no error).
 STALL_TIMEOUT_S = 5.0
+# ...and after this long it is torn down and re-created. A GStreamer capture
+# does not recover on its own: once rtspsrc has errored or hit EOS (camera
+# reboot, TCP reset, a cable pulled and replaced) every later read() returns
+# None forever, so the camera stays dead until someone restarts the container.
+# Re-creating the source is what the DeepStream backend's watchdog already does
+# for its graph, and what docs/onboard-verification.md promises should happen.
+STALL_REOPEN_S = 15.0
 
 
 class CameraWorker(threading.Thread):
@@ -87,7 +94,11 @@ class CameraWorker(threading.Thread):
         # One detector instance is shared across all camera workers (single
         # model / CUDA context); it isolates tracker state per camera name.
         self._detector = detector
-        self._stop = threading.Event()
+        # NB: not `_stop` — threading.Thread has its own private _stop() that
+        # join()/is_alive() call once the thread has finished; shadowing it with
+        # an Event made both raise TypeError, so Pipeline.stop() never joined a
+        # worker or released its capture.
+        self._stopping = threading.Event()
         # Master on/off (set => running). When cleared the worker releases its
         # capture device and idles; toggled from SignalK via /control `enabled`.
         self._enabled = threading.Event()
@@ -118,9 +129,27 @@ class CameraWorker(threading.Thread):
         # Track ids emitted in the last event, for the sticky max-targets cap.
         self._emitted_ids: set = set()
         self.error: str | None = None
+        # Monotonic time of the last frame processed, so a worker wedged INSIDE
+        # a blocking call (a GStreamer read with no timeout, a stalled GPU)
+        # still shows up in /health. The stall flag below only catches a read()
+        # that returns; this catches one that never does.
+        self.last_frame_at = time.monotonic()
+        # Whether the annotate/encode path ran last frame (see _publish_frame).
+        self._display_active = False
+        # Frame sequence numbers must keep rising across a source re-create.
+        # Each FrameSource starts its own counter at 1, but the stabilizer and
+        # the per-camera VelocityTracker are long-lived and key their coast /
+        # prune / re-id windows on the difference between sequence numbers. A
+        # restart to 1 makes every one of those differences negative, so no
+        # state ever ages out: the stabilizer re-emits every pre-restart track
+        # as a coasting (dashed) box — which also feeds CPA — for as many
+        # frames as the camera had been up, and the tracker keeps matching new
+        # detections against long-dead identities. Carry an offset instead.
+        self._seq_base = 0
+        self._last_seq = 0
 
     def stop(self) -> None:
-        self._stop.set()
+        self._stopping.set()
         # Unblock the run loop if it's parked in the disabled-idle wait.
         self._enabled.set()
 
@@ -139,6 +168,9 @@ class CameraWorker(threading.Thread):
             except Exception:  # pragma: no cover
                 pass
             self._source = None
+        # The replacement source restarts its counter at 1; keep the sequence
+        # the rest of the pipeline sees monotonic (see _seq_base).
+        self._seq_base = self._last_seq
 
     def run(self) -> None:
         if self._detector is None:
@@ -150,7 +182,7 @@ class CameraWorker(threading.Thread):
         backend = Backend(self._detector.backend)
         stalled_since: float | None = None
         try:
-            while not self._stop.is_set():
+            while not self._stopping.is_set():
                 t0 = time.perf_counter()
 
                 # Detection disabled from SignalK: release the capture device so
@@ -162,6 +194,9 @@ class CameraWorker(threading.Thread):
                     self._frames.clear(self._cam.name)
                     self.error = None
                     stalled_since = None
+                    # Keep the liveness clock fresh while deliberately idle, so
+                    # re-enabling doesn't report the paused time as a stall.
+                    self.last_frame_at = time.monotonic()
                     self._enabled.wait(timeout=0.5)
                     continue
 
@@ -174,7 +209,7 @@ class CameraWorker(threading.Thread):
                     except Exception as exc:  # pragma: no cover - hardware dependent
                         self.error = f"init failed: {exc}"
                         self._log.error("camera %s init failed: %s", self._cam.name, exc)
-                        if self._stop.wait(timeout=2.0):
+                        if self._stopping.wait(timeout=2.0):
                             break
                         continue
 
@@ -182,8 +217,16 @@ class CameraWorker(threading.Thread):
                     frame = self._source.read()
                     if frame is None:
                         # No frame: flag a sustained stall so a wedged RTSP feed
-                        # shows up in /health rather than vanishing silently.
+                        # shows up in /health rather than vanishing silently,
+                        # then re-create the source — a capture that has errored
+                        # or hit EOS never yields another frame on its own.
                         if stalled_since is None:
+                            stalled_since = t0
+                        elif t0 - stalled_since > STALL_REOPEN_S:
+                            self._log.warning(
+                                "camera %s: reopening source after %ds without a frame",
+                                self._cam.name, int(t0 - stalled_since))
+                            self.close_source()
                             stalled_since = t0
                         elif t0 - stalled_since > STALL_TIMEOUT_S:
                             self.error = (f"no frames for {int(t0 - stalled_since)}s "
@@ -191,6 +234,10 @@ class CameraWorker(threading.Thread):
                         time.sleep(0.1)
                         continue
                     stalled_since = None
+                    # Keep the sequence monotonic across a source re-create.
+                    frame.seq += self._seq_base
+                    self._last_seq = frame.seq
+                    t_infer = time.perf_counter()
 
                     # EXPERIMENTAL: correct the frame before detection so the
                     # detector + geometry see the straightened image. Otherwise
@@ -206,25 +253,27 @@ class CameraWorker(threading.Thread):
                         # publish threshold so /control confidence still applies.
                         tracks = self._stabilizer.update(
                             tracks, frame.seq, self.confidence)
-                    latency_ms = (time.perf_counter() - t0) * 1000.0
+                    # Measured from AFTER the read: waiting for the camera is
+                    # not inference cost, and mixing the two makes the reported
+                    # latency (event + HUD) useless for tuning.
+                    latency_ms = (time.perf_counter() - t_infer) * 1000.0
                     event = self._build_event(frame, tracks, backend, latency_ms)
 
                     payload = event.model_dump(mode="json")
                     self._events.publish(payload)
-                    # Display-only lens correction: undistort the shown frame and
-                    # remap the overlay to match. The published event above keeps
-                    # the raw-frame geometry, so bearings/range are unaffected.
-                    disp_img, disp_event = self._for_display(frame.image, event)
-                    jpeg = self._encoder.encode(annotate(disp_img, disp_event))
-                    # set() is a no-op while the store is paused (detection off),
-                    # so a frame encoded just before a disable cannot resurface.
-                    if jpeg:
-                        self._frames.set(self._cam.name, jpeg)
+                    self._publish_frame(frame, event)
+                    self.last_frame_at = time.monotonic()
                     self.error = None
                 except Exception as exc:
                     # One bad frame must not kill the camera; log and carry on.
-                    self.error = f"frame error: {exc}"
-                    self._log.error("camera %s frame error: %s", self._cam.name, exc)
+                    # A persistent fault repeats at the frame rate, so log the
+                    # full traceback once per distinct message instead of
+                    # filling the vessel's log with thousands of identical
+                    # one-liners a day (and no traceback when it matters).
+                    msg = f"frame error: {exc}"
+                    if msg != self.error:
+                        self._log.error("camera %s %s", self._cam.name, msg, exc_info=True)
+                    self.error = msg
                     time.sleep(0.2)
 
                 dt = time.perf_counter() - t0
@@ -233,6 +282,38 @@ class CameraWorker(threading.Thread):
         finally:
             self.close_source()
             self._encoder.close()
+
+    def _publish_frame(self, frame, event: DetectionEvent) -> None:
+        """Annotate + JPEG-encode the frame for the MJPEG/snapshot viewers.
+
+        Skipped entirely when nobody is watching. Annotating and encoding a
+        1280x960 frame is the single most expensive CPU step after inference,
+        and on a vessel underway the video is usually closed — spending it on
+        frames no one will see steals cycles from detection. The frame store is
+        cleared on the way into the idle state so a snapshot can never serve an
+        old image as current; a snapshot request marks demand and the next frame
+        is encoded (see LatestFrame.note_demand)."""
+        if not self._frames.wanted(self._cam.name):
+            if self._display_active:
+                # Going idle: drop the retained frame so /snapshot can never
+                # hand back an image older than the demand that produced it.
+                self._display_active = False
+                self._frames.clear(self._cam.name)
+            return
+        self._display_active = True
+        # Display-only lens correction: undistort the shown frame and remap the
+        # overlay to match. The published event keeps the raw-frame geometry, so
+        # bearings/range are unaffected.
+        disp_img, disp_event = self._for_display(frame.image, event)
+        # annotate() may draw straight onto the frame: it is this worker's own
+        # buffer (every source hands back a fresh array) and nothing reads it
+        # after this point, so the full-frame copy it would otherwise make is
+        # pure memcpy on the hot path.
+        jpeg = self._encoder.encode(annotate(disp_img, disp_event, inplace=True))
+        # set() is a no-op while the store is paused (detection off), so a frame
+        # encoded just before a disable cannot resurface.
+        if jpeg:
+            self._frames.set(self._cam.name, jpeg)
 
     def _undistorter_for(self, w, h) -> Undistorter:
         """Lazily build + cache this camera's undistorter for the frame size."""
@@ -438,4 +519,19 @@ class Pipeline:
             w.set_enabled(value)
 
     def camera_errors(self) -> dict:
-        return {name: w.error for name, w in self.workers.items() if w.error}
+        """Per-camera error strings for /health.
+
+        Includes a liveness check: the worker's own stall flag only fires when
+        read() RETURNS without a frame. A worker blocked inside a read with no
+        timeout, or on a wedged GPU call, would otherwise keep /health green
+        while producing nothing at all.
+        """
+        now = time.monotonic()
+        errors = {}
+        for name, w in self.workers.items():
+            if w.error:
+                errors[name] = w.error
+            elif self.enabled and now - w.last_frame_at > STALL_TIMEOUT_S:
+                errors[name] = (f"no frames for {int(now - w.last_frame_at)}s "
+                                "(worker stalled)")
+        return errors

@@ -33,6 +33,15 @@ services:
       # on a restart without rebuilding the image (see docs/onboard-verification.md
       # §7), while the container can't rewrite host-side calibration.
       - ./vision-service/config:/opt/vision-service/config:ro
+    # Bound the container log. A vessel runs this for days between reboots and
+    # the Jetson writes to eMMC; an unrotated json-file log from a chatty fault
+    # (GStreamer warnings under packet loss, a repeating frame error) fills the
+    # disk and takes the whole stack down with it.
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
     # Bind to localhost on the boat network; the SignalK plugin proxies it.
     ports:
       - "127.0.0.1:7000:7000"

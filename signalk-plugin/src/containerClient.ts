@@ -34,41 +34,46 @@ export interface PtzBody {
   zoom?: number;
 }
 
+// Bound every control-plane request. On a boat network a half-open link (the
+// container host rebooting, a switch power-cycle) makes an unbounded fetch hang
+// for the kernel's connect/read timeout — minutes — while the 5 s sync/health
+// timers keep starting new ones, piling up pending requests for the whole
+// outage. Shorter than the 5 s poll so at most one request per poll is in flight.
+const REQUEST_TIMEOUT_MS = 4000;
+
 export class ContainerClient {
-  constructor(private baseUrl: string) {}
+  constructor(private baseUrl: string, private timeoutMs: number = REQUEST_TIMEOUT_MS) {}
 
   private url(path: string): string {
     return `${this.baseUrl.replace(/\/$/, '')}${path}`;
   }
 
-  async health(): Promise<HealthInfo> {
-    const r = await fetch(this.url('/health'));
-    if (!r.ok) throw new Error(`health ${r.status}`);
-    return (await r.json()) as HealthInfo;
+  private fetch(path: string, init: RequestInit = {}): Promise<Response> {
+    return fetch(this.url(path), { ...init, signal: AbortSignal.timeout(this.timeoutMs) });
   }
 
-  async cameras(): Promise<string[]> {
-    const r = await fetch(this.url('/cameras'));
-    if (!r.ok) throw new Error(`cameras ${r.status}`);
-    return (await r.json()) as string[];
-  }
-
-  async control(body: ControlBody): Promise<any> {
-    const r = await fetch(this.url('/control'), {
+  private post(path: string, body: unknown): Promise<Response> {
+    return this.fetch(path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
+  }
+
+  async health(): Promise<HealthInfo> {
+    const r = await this.fetch('/health');
+    if (!r.ok) throw new Error(`health ${r.status}`);
+    return (await r.json()) as HealthInfo;
+  }
+
+  async control(body: ControlBody): Promise<any> {
+    const r = await this.post('/control', body);
     if (!r.ok) throw new Error(`control ${r.status}`);
     return r.json();
   }
 
   async ptz(camera: string, body: PtzBody): Promise<any> {
-    const r = await fetch(this.url(`/ptz/${encodeURIComponent(camera)}`), {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const r = await this.post(`/ptz/${encodeURIComponent(camera)}`, body);
     if (!r.ok) throw new Error(`ptz ${r.status}`);
     return r.json();
   }

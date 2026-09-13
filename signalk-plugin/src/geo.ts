@@ -7,8 +7,6 @@ export const EARTH_RADIUS_M = 6371000;
 
 export const deg2rad = (d: number): number => (d * Math.PI) / 180;
 export const rad2deg = (r: number): number => (r * 180) / Math.PI;
-export const kn2ms = (kn: number): number => kn * 0.514444;
-export const ms2kn = (ms: number): number => ms / 0.514444;
 
 /** Normalise an angle (radians) to [0, 2π). */
 export function normalizeRad(r: number): number {
@@ -67,21 +65,4 @@ export function angularDiff(a: number, b: number): number {
   let d = Math.abs(normalizeRad(a) - normalizeRad(b));
   if (d > Math.PI) d = 2 * Math.PI - d;
   return d;
-}
-
-/**
- * Convert a local geographic offset (metres) to a lat/lon near a reference
- * point using an equirectangular approximation (fine for short ranges).
- */
-export function offsetToLatLon(
-  ref: LatLon,
-  eastM: number,
-  northM: number
-): LatLon {
-  const dLat = northM / EARTH_RADIUS_M;
-  const dLon = eastM / (EARTH_RADIUS_M * Math.cos(deg2rad(ref.latitude)));
-  return {
-    latitude: ref.latitude + rad2deg(dLat),
-    longitude: ref.longitude + rad2deg(dLon),
-  };
 }

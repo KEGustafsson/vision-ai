@@ -276,3 +276,50 @@ def test_each_camera_gets_its_own_osd_and_hw_jpeg_tail():
         assert sink.props["sync"] is False and sink.props["drop"] is True
         assert sink.props["max-buffers"] == 1
         assert [s[0] for s in sink.signals] == ["new-sample"]
+
+
+# ── Fault containment ─────────────────────────────────────────────────────────
+
+
+def test_probe_never_drops_the_batch_when_the_frame_work_raises():
+    """A GI callback that raises returns 0 — which is Gst.PadProbeReturn.DROP,
+    so one unexpected exception would swallow the whole batch (both cameras:
+    no OSD, no JPEG, no event) and, if it repeated, starve the watchdog into
+    rebuilding the pipeline forever. The guard must pass the buffer through."""
+    p = _pipeline()
+
+    def boom(pad, info, user_data):
+        raise ValueError("unexpected metadata")
+
+    p._probe_frames = boom
+    assert p._probe_callback(None, None, None) == 1  # Gst.PadProbeReturn.OK
+    assert p._probe_errors == 1
+    assert p._probe_callback(None, None, None) == 1
+    assert p._probe_errors == 2
+
+
+def test_teardown_removes_the_watchdog_timer_and_the_bus_watch():
+    """Both are re-created on every bring-up. A GLib timer cannot fire while no
+    main loop runs the default context, so a stale watchdog survives the gap
+    between loops and then runs alongside the new one; the bus signal watch
+    leaks a source and a closure holding the pipeline. Over a flapping
+    multi-day deployment they accumulate."""
+    p = _pipeline()
+    removed: list = []
+    watches_removed: list = []
+
+    p._GLib = SimpleNamespace(source_remove=removed.append)
+    p._watchdog_id = 4242
+    p._bus = SimpleNamespace(remove_signal_watch=lambda: watches_removed.append(True))
+    p._gst = SimpleNamespace(set_state=lambda state: None)
+
+    p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
+
+    assert removed == [4242]
+    assert watches_removed == [True]
+    assert p._watchdog_id is None and p._bus is None and p._gst is None
+
+    # Idempotent: a second teardown (stop() after a supervised restart) is a
+    # no-op rather than a double remove.
+    p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
+    assert removed == [4242]

@@ -32,7 +32,11 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        pipeline.events.bind_loop(asyncio.get_running_loop())
+        loop = asyncio.get_running_loop()
+        pipeline.events.bind_loop(loop)
+        # Lets MJPEG clients be woken by the producer thread the moment a frame
+        # lands, instead of polling for it (see LatestFrame.subscribe).
+        pipeline.frames.bind_loop(loop)
         pipeline.start()
         try:
             yield
@@ -67,8 +71,10 @@ app = create_app()
 def main() -> None:  # pragma: no cover - process entrypoint
     import uvicorn
 
-    settings = load_settings()
-    uvicorn.run(app, host=settings.server.host, port=settings.server.port)
+    # create_app() already loaded (and logged) the settings; re-reading the YAML
+    # + env here only risks the two disagreeing.
+    server = app.state.pipeline.settings.server
+    uvicorn.run(app, host=server.host, port=server.port)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -200,16 +200,21 @@ allocation can OOM (`failed to activate bufferpool`); restart them after.
 
 ## Runtime behaviour
 
-- **Disable detection (master off):** unlike the CPU/Jetson backend (whose workers
-  release the camera capture device), DeepStream transitions the whole GStreamer
-  graph to **PAUSED** — decoders and `nvinfer` stop pulling data, so disabling
-  actually drops the GPU/thermal load. Re-enabling returns it to PLAYING. A
-  pipeline that recovers from a fault while disabled comes back PAUSED.
+- **Disable detection (master off):** like the CPU/Jetson backend (whose workers
+  release the camera capture device), DeepStream tears the whole GStreamer graph
+  down — decoders and `nvinfer` stop entirely, so disabling really does drop the
+  GPU/thermal load, and the RTSP sessions are released rather than left to go
+  stale (a paused live pipeline never delivers again on resume). Re-enabling
+  rebuilds it with fresh RTSP connections; the supervisor stays torn down in the
+  meantime instead of restarting into a disabled state.
 - **Auto-recovery:** a fatal GStreamer error or EOS (e.g. a transient RTSP/decoder
   glitch) no longer takes detection down until a manual container restart. A
   supervisor rebuilds the pipeline with exponential backoff (2 s → 30 s) and keeps
   retrying. `GET /health` reports `pipeline_restarts` and `pipeline_last_error` so
-  a flapping feed is visible; `status` goes `degraded` while restarts have occurred.
+  a flapping feed is visible; `status` goes `degraded` while a restart is recent
+  (the pipeline is actively recovering), not for the container's whole life once
+  a single restart has happened — the cumulative count stays in
+  `pipeline_restarts`.
 - **Non-root:** the runtime image runs as a non-root user (UID 10001, in the
   `video` group for GPU access). nvinfer writes the TRT engine into the
   bind-mounted `deepstream/` and `models/`, so those host dirs must be writable by

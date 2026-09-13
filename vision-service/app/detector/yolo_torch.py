@@ -212,6 +212,24 @@ class YoloTorchDetector(Detector):
         cfg = IterableSimpleNamespace(**YAML.load(check_yaml(self._tracker_cfg)))
         return [TRACKER_MAP[cfg.tracker_type](args=cfg)]
 
+    @staticmethod
+    def _box_arrays(boxes):
+        """Pull the whole result off the device in four transfers.
+
+        Iterating a Boxes object and reading ``b.cls[0]`` / ``b.conf[0]`` /
+        ``b.xyxy[0]`` / ``b.id[0]`` per detection is four device-to-host copies
+        (each a CUDA sync) per box — ~80 syncs a frame at max_det 20, all of it
+        inside the detector lock, so the other camera's inference waits on it.
+        The tensors are contiguous, so one .cpu() each covers every box.
+        """
+        def host(t):
+            if t is None:
+                return None
+            cpu = getattr(t, "cpu", None)
+            return t if cpu is None else cpu().numpy()
+
+        return host(boxes.xyxy), host(boxes.conf), host(boxes.cls), host(boxes.id)
+
     def _parse(self, results, frame: Frame, vel: VelocityTracker) -> List[RawTrack]:
         out: List[RawTrack] = []
         if not results:
@@ -219,13 +237,14 @@ class YoloTorchDetector(Detector):
         boxes = results[0].boxes
         if boxes is None:
             return out
+        xyxy, confs, classes, ids = self._box_arrays(boxes)
         active = set()
-        for b in boxes:
-            raw_cls = int(b.cls[0])
-            conf = float(b.conf[0])
-            x1, y1, x2, y2 = (float(v) for v in b.xyxy[0].tolist())
+        for i in range(len(xyxy)):
+            raw_cls = int(classes[i])
+            conf = float(confs[i])
+            x1, y1, x2, y2 = (float(v) for v in xyxy[i])
             w, h = x2 - x1, y2 - y1
-            tid: Optional[int] = int(b.id[0]) if b.id is not None else None
+            tid: Optional[int] = None if ids is None else int(ids[i])
             # Decode through the active model's class map (and remap non-COCO raw
             # ids into their wire-safe synthetic band), same as the DeepStream
             # pipeline, so `coco_class` on the wire is unambiguous.

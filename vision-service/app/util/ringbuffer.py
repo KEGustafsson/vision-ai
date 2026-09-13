@@ -9,14 +9,29 @@ from __future__ import annotations
 
 import asyncio
 import threading
+import time
 from collections import deque
 from typing import Deque, Dict, List, Optional
+
+# How long a one-off frame request (a /snapshot) keeps a camera's display path
+# alive after it. Long enough that a client polling snapshots once a second
+# always finds a fresh frame waiting, short enough that the pipeline goes back
+# to spending the CPU on detection soon after the client stops.
+DEMAND_TTL_S = 5.0
 
 
 class LatestFrame:
     def __init__(self):
         self._lock = threading.Lock()
         self._frames: Dict[str, bytes] = {}
+        # Async waiters (one per MJPEG client) woken the moment a frame for
+        # their camera lands, so a stream forwards it immediately instead of
+        # discovering it on the next poll tick.
+        self._waiters: Dict[str, List[asyncio.Event]] = {}
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # Monotonic deadline per camera set by a one-off frame request, so a
+        # /snapshot keeps the display path running briefly without a stream.
+        self._demand_until: Dict[str, float] = {}
         # Monotonic per-camera counter bumped on every set(). MJPEG clients use it
         # to send each frame at most once (the inference loop produces only
         # ~4-9 fps; re-sending the latest frame at the full poll rate would
@@ -29,12 +44,27 @@ class LatestFrame:
         # can never land after pause() has cleared the store.
         self._paused = False
 
+    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """Bind the event loop that async waiters live on (see :meth:`subscribe`).
+        Called once at startup, like :meth:`EventBuffer.bind_loop`."""
+        self._loop = loop
+
     def set(self, camera: str, jpeg: bytes) -> None:
         with self._lock:
             if self._paused:
                 return  # detection disabled: never publish a new frame
             self._frames[camera] = jpeg
             self._seq[camera] = self._seq.get(camera, 0) + 1
+            waiters = list(self._waiters.get(camera, ()))
+        # Wake this camera's streams from the producer thread. Frames are
+        # produced on a worker/GStreamer thread, so hop to the loop thread.
+        if waiters and self._loop is not None:
+            self._loop.call_soon_threadsafe(self._wake, waiters)
+
+    @staticmethod
+    def _wake(waiters: List["asyncio.Event"]) -> None:
+        for ev in waiters:
+            ev.set()
 
     def get(self, camera: str) -> Optional[bytes]:
         with self._lock:
@@ -68,6 +98,53 @@ class LatestFrame:
         with self._lock:
             self._paused = False
 
+    def note_demand(self, camera: str, ttl_s: float = DEMAND_TTL_S) -> None:
+        """Record that someone wants frames for *camera* right now."""
+        with self._lock:
+            self._demand_until[camera] = time.monotonic() + ttl_s
+
+    def wanted(self, camera: str) -> bool:
+        """Whether anyone is waiting for this camera's annotated frames — a live
+        stream client, or a recent one-off request. False lets the producer skip
+        annotating and JPEG-encoding a frame nobody will look at."""
+        with self._lock:
+            if self._waiters.get(camera):
+                return True
+            return time.monotonic() < self._demand_until.get(camera, 0.0)
+
+    async def wait_for_frame(self, camera: str, timeout: float) -> Optional[bytes]:
+        """Wait for the next frame for *camera*, or None if none arrives in time.
+        Subscribing for the wait also marks demand, so a producer that had gone
+        idle starts encoding again."""
+        ev = self.subscribe(camera)
+        try:
+            await asyncio.wait_for(ev.wait(), timeout=timeout)
+        except asyncio.TimeoutError:
+            return None
+        finally:
+            self.unsubscribe(camera, ev)
+        return self.get(camera)
+
+    def subscribe(self, camera: str) -> "asyncio.Event":
+        """Register an :class:`asyncio.Event` set whenever a frame for *camera*
+        is stored. Lets a stream wait for the next frame instead of polling —
+        the frame reaches the client as soon as it exists, and an idle camera
+        costs no wakeups. Always pair with :meth:`unsubscribe`."""
+        ev = asyncio.Event()
+        with self._lock:
+            self._waiters.setdefault(camera, []).append(ev)
+        return ev
+
+    def unsubscribe(self, camera: str, ev: "asyncio.Event") -> None:
+        with self._lock:
+            waiters = self._waiters.get(camera)
+            if not waiters:
+                return
+            if ev in waiters:
+                waiters.remove(ev)
+            if not waiters:
+                self._waiters.pop(camera, None)
+
 
 class EventBuffer:
     def __init__(self, maxlen: int = 200):
@@ -84,17 +161,35 @@ class EventBuffer:
         with self._lock:
             self._events.append(event)
             subs = list(self._subscribers)
-        if self._loop is None:
+        if self._loop is None or not subs:
             return
+        # One hop for the whole fan-out: call_soon_threadsafe writes to the
+        # loop's self-pipe, so one call per subscriber per frame is one syscall
+        # per subscriber per frame from the inference thread.
+        self._loop.call_soon_threadsafe(self._fanout, subs, event)
+
+    @staticmethod
+    def _fanout(subs: List[asyncio.Queue], event: dict) -> None:
         for q in subs:
-            self._loop.call_soon_threadsafe(self._safe_put, q, event)
+            EventBuffer._safe_put(q, event)
 
     @staticmethod
     def _safe_put(q: asyncio.Queue, event: dict) -> None:
         try:
             q.put_nowait(event)
         except asyncio.QueueFull:
-            pass
+            # A slow subscriber must not be fed a backlog of history while the
+            # live scene moves on: shed its OLDEST queued event and keep this
+            # one. Dropping the newest instead would hand a safety consumer
+            # progressively staler detections the longer it lags.
+            try:
+                q.get_nowait()
+            except asyncio.QueueEmpty:  # pragma: no cover - raced empty
+                pass
+            try:
+                q.put_nowait(event)
+            except asyncio.QueueFull:  # pragma: no cover - raced full
+                pass
 
     def recent(self, n: int = 20) -> List[dict]:
         # Guard n=0 (``[-0:]`` is ``[0:]`` and would dump the whole buffer) and

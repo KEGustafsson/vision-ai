@@ -292,6 +292,10 @@ function threatRank(t) {
   return { high: 3, medium: 2, low: 1, none: 0 }[t.threatLevel] ?? 0;
 }
 
+// True while the plugin is unreachable, so the stream can be revived once it
+// comes back (see the end of poll()).
+let wasOffline = false;
+
 async function poll() {
   try {
     // Camera list comes from /targets' `system` block, not /config: SignalK
@@ -315,7 +319,16 @@ async function poll() {
     document.getElementById('status').textContent = detectionEnabled === false
       ? `detection off · updated ${new Date().toLocaleTimeString()}`
       : `${(data.targets || []).length} targets · ${activeCamera || '—'} · updated ${new Date().toLocaleTimeString()}`;
+    // Back after an outage: when the SIGNALK server restarts (rather than the
+    // container), the stream simply ends — the <img> fires no `error`, so
+    // onStreamError never runs and the last frame stays frozen on screen even
+    // though the page is talking to the plugin again. Re-point it once here.
+    if (wasOffline) {
+      wasOffline = false;
+      applyStream();
+    }
   } catch (e) {
+    wasOffline = true;
     document.getElementById('status').textContent = 'plugin offline';
   }
 }

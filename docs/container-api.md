@@ -111,10 +111,19 @@ velocities in `-1..1` (`+pan` = right, `+tilt` = up, `+zoom` = in).
 ### `GET /snapshot/{camera}` · `GET /stream/{camera}.mjpg`
 
 `snapshot` returns the single latest annotated JPEG. `stream` is a
-`multipart/x-mixed-replace; boundary=frame` MJPEG feed that emits only newly
-produced frames (output rate tracks real production, not the poll rate), so a
-slow client can never stall inference. Stream clients are capped
-(`server.max_stream_clients`); over the cap returns `503`.
+`multipart/x-mixed-replace; boundary=frame` MJPEG feed; each frame is forwarded
+as soon as the pipeline produces it (output rate tracks real production, and
+nothing is re-sent), and a slow client can never stall inference.
+Stream clients are capped (`server.max_stream_clients`); over the cap returns
+`503`.
+
+Annotating and JPEG-encoding is done **only while someone is watching** — a live
+stream client, or for a few seconds after a `snapshot` — so a vessel underway
+with the video closed spends that CPU on detection instead. A `snapshot` after
+an idle period therefore waits briefly for the next frame rather than returning
+a stale one; `404` means no frame arrived in that window (camera down, or
+detection disabled). Detection, events and the WebSocket stream are unaffected
+by whether anyone is watching the video.
 
 ## WebSocket — `GET /ws/events`
 

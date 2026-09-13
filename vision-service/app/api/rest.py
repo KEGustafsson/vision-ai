@@ -140,10 +140,25 @@ def ptz(request: Request, camera: str, body: PtzRequest):
     return {"ok": True, "action": body.action}
 
 
+# A snapshot waits at most this long for the next annotated frame. Generous
+# against a slow frame (inference + encode at a low target_fps) while still
+# answering promptly when a camera is genuinely dead.
+_SNAPSHOT_WAIT_S = 2.0
+
+
 @router.get("/snapshot/{camera}")
-def snapshot(request: Request, camera: str):
+async def snapshot(request: Request, camera: str):
     p = _pipeline(request)
+    # Mark demand first: the pipeline skips annotating and encoding while nobody
+    # is watching, so this both asks for a frame and keeps the display path warm
+    # for a client that polls snapshots.
+    p.frames.note_demand(camera)
     jpeg = p.frames.get(camera)
+    if jpeg is None:
+        # Nothing stored: either the camera hasn't produced yet or the display
+        # path was idle. Wait briefly for the next frame instead of returning a
+        # 404 the caller would only have to retry.
+        jpeg = await p.frames.wait_for_frame(camera, timeout=_SNAPSHOT_WAIT_S)
     if jpeg is None:
         raise HTTPException(status_code=404, detail=f"no frame for camera {camera}")
     return Response(content=jpeg, media_type="image/jpeg")

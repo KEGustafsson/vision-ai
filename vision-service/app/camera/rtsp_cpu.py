@@ -9,6 +9,7 @@ capture (throttled) instead of leaving the camera dead until a restart.
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 import time
@@ -18,16 +19,24 @@ import cv2
 
 from .base import Frame, FrameSource, redact_url
 
+_log = logging.getLogger("vision")
+
 # Don't hammer a down camera: wait this long between reconnect attempts.
 _REOPEN_INTERVAL_S = 3.0
 _READ_WAIT_S = 1.0
+# Socket open/read bound, applied through OpenCV's own interrupt callback (see
+# _open_capture) rather than FFmpeg's `timeout` option: the meaning of that
+# option changed across FFmpeg majors (on 4.x it is the *listen* timeout and
+# implies rtsp_flags=listen, which turns the demuxer into a server and the open
+# fails), and the Jetson image links the distro FFmpeg.
+_OPEN_TIMEOUT_MS = 5000
+_READ_TIMEOUT_MS = 5000
 _FFMPEG_LOW_LATENCY_OPTIONS = (
     "rtsp_transport;tcp|"
     "fflags;nobuffer|"
     "flags;low_delay|"
     "max_delay;0|"
-    "reorder_queue_size;0|"
-    "timeout;5000000"
+    "reorder_queue_size;0"
 )
 
 
@@ -46,6 +55,7 @@ class RtspCpuSource(FrameSource):
         self._latest_img = None
         self._latest_seq = 0
         self._last_delivered_seq = 0
+        self._last_error: Optional[str] = None
         cap = self._open_capture()
         if cap is None:
             raise RuntimeError(f"cannot open RTSP stream: {redact_url(url)}")
@@ -57,16 +67,17 @@ class RtspCpuSource(FrameSource):
         self._reader.start()
 
     def _open_capture(self) -> Optional["cv2.VideoCapture"]:
-        cap = cv2.VideoCapture(self._url)
-        # Keep latency low: small internal buffer.
-        for prop, val in ((cv2.CAP_PROP_BUFFERSIZE, 1),
-                          (getattr(cv2, "CAP_PROP_OPEN_TIMEOUT_MSEC", -1), 5000),
-                          (getattr(cv2, "CAP_PROP_READ_TIMEOUT_MSEC", -1), 5000)):
-            if prop != -1:
-                try:
-                    cap.set(prop, val)
-                except Exception:
-                    pass
+        # The timeout properties are open-only: they install FFmpeg's interrupt
+        # callback as the capture is created, so setting them afterwards (as
+        # this used to) is a no-op and OpenCV's 30 s defaults apply instead —
+        # a half-dead camera then blocks the reader for 30 s per attempt.
+        params = [cv2.CAP_PROP_BUFFERSIZE, 1]
+        for name, val in (("CAP_PROP_OPEN_TIMEOUT_MSEC", _OPEN_TIMEOUT_MS),
+                          ("CAP_PROP_READ_TIMEOUT_MSEC", _READ_TIMEOUT_MS)):
+            prop = getattr(cv2, name, None)
+            if prop is not None:
+                params += [prop, val]
+        cap = cv2.VideoCapture(self._url, cv2.CAP_FFMPEG, params)
         if not cap.isOpened():
             cap.release()
             return None
@@ -74,7 +85,8 @@ class RtspCpuSource(FrameSource):
 
     def _reconnect(self) -> None:
         """Throttled re-open after a read failure. Returns immediately if a
-        previous attempt was too recent so we don't spin on a down camera."""
+        previous attempt was too recent so we don't spin on a down camera.
+        Called only from the reader thread, which owns the capture."""
         now = time.monotonic()
         if now - self._last_reopen < _REOPEN_INTERVAL_S:
             return
@@ -88,24 +100,59 @@ class RtspCpuSource(FrameSource):
         self._cap = self._open_capture()  # may be None; retried next interval
 
     def _reader_loop(self) -> None:
-        """Continuously drain FFmpeg so slow inference never sees stale frames."""
-        while not self._closed:
-            if self._cap is None:
-                self._reconnect()
-                time.sleep(0.05)
-                continue
+        """Continuously drain FFmpeg so slow inference never sees stale frames.
 
-            ok, img = self._cap.read()
-            if not ok:
-                self._reconnect()
-                time.sleep(0.05)
-                continue
+        This thread OWNS the capture: it is the only one that calls read(),
+        reconnects, or releases it. cv2.VideoCapture is not thread-safe, so
+        releasing it from close() while this thread sat in read() risked taking
+        the whole process down (both cameras and the API) — and close() runs on
+        every detection-off toggle, not just at shutdown.
+        """
+        try:
+            while not self._closed:
+                cap = self._cap
+                if cap is None:
+                    self._reconnect()
+                    time.sleep(0.05)
+                    continue
 
-            seq = self._next_seq()
+                try:
+                    ok, img = cap.read()
+                except Exception as exc:
+                    # A decode error must not kill this thread: without a reader
+                    # every later read() returns None forever and the camera is
+                    # dead until the container restarts. Log once per distinct
+                    # message, reconnect, carry on.
+                    self._note_error(f"read failed: {exc}")
+                    self._reconnect()
+                    time.sleep(0.05)
+                    continue
+                if not ok:
+                    self._reconnect()
+                    time.sleep(0.05)
+                    continue
+
+                self._last_error = None
+                seq = self._next_seq()
+                with self._frame_ready:
+                    self._latest_img = img
+                    self._latest_seq = seq
+                    self._frame_ready.notify_all()
+        finally:
+            # Release here, on the thread that owns it, once the loop is done.
+            cap, self._cap = self._cap, None
+            if cap is not None:
+                try:
+                    cap.release()
+                except Exception:  # pragma: no cover - best-effort teardown
+                    pass
             with self._frame_ready:
-                self._latest_img = img
-                self._latest_seq = seq
                 self._frame_ready.notify_all()
+
+    def _note_error(self, msg: str) -> None:
+        if msg != self._last_error:
+            self._last_error = msg
+            _log.warning("rtsp %s: %s", redact_url(self._url), msg)
 
     @property
     def width(self) -> int:
@@ -144,8 +191,8 @@ class RtspCpuSource(FrameSource):
         self._closed = True
         with self._frame_ready:
             self._frame_ready.notify_all()
-        if self._cap is not None:
-            self._cap.release()
-            self._cap = None
+        # The reader owns the capture and releases it as it exits (see
+        # _reader_loop); joining is bounded by the read timeout it may be
+        # sitting in, plus a margin.
         if threading.current_thread() is not self._reader:
-            self._reader.join(timeout=1.0)
+            self._reader.join(timeout=_READ_TIMEOUT_MS / 1000.0 + 1.0)
