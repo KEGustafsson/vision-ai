@@ -263,6 +263,7 @@ export function fuse(
     t.aisMmsi = null;
     t.aisCog = null;
     t.aisSog = null;
+    t.aisPosition = null;
 
     const a = assignedContact.get(t.key);
     if (a) {
@@ -270,6 +271,7 @@ export function fuse(
       t.aisMmsi = a.mmsi;
       t.aisCog = a.cog;
       t.aisSog = a.sog;
+      t.aisPosition = a.position;
       assignment.set(t.key, a.mmsi);
       aisCorrelatedCount += 1;
       continue;

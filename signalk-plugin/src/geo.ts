@@ -66,3 +66,39 @@ export function angularDiff(a: number, b: number): number {
   if (d > Math.PI) d = 2 * Math.PI - d;
   return d;
 }
+
+/**
+ * Solar elevation (radians, positive above the horizon) at a position and
+ * instant, by the standard low-precision solar-position formulae. Accurate to
+ * a few hundredths of a degree, which is far finer than any daylight decision
+ * needs.
+ */
+export function solarElevation(pos: LatLon, at: Date): number {
+  const n = at.getTime() / 86400000 + 2440587.5 - 2451545.0; // days since J2000.0
+  const meanLon = deg2rad((280.46 + 0.9856474 * n) % 360);
+  const meanAnom = deg2rad((357.528 + 0.9856003 * n) % 360);
+  // Ecliptic longitude: mean longitude plus the equation of centre.
+  const eclipticLon =
+    meanLon + deg2rad(1.915) * Math.sin(meanAnom) + deg2rad(0.02) * Math.sin(2 * meanAnom);
+  const obliquity = deg2rad(23.439 - 0.0000004 * n);
+  const declination = Math.asin(Math.sin(obliquity) * Math.sin(eclipticLon));
+  const rightAscension = Math.atan2(
+    Math.cos(obliquity) * Math.sin(eclipticLon), Math.cos(eclipticLon));
+  // Greenwich mean sidereal time -> local hour angle.
+  const gmstHours = (18.697374558 + 24.06570982441908 * n) % 24;
+  const hourAngle = deg2rad(gmstHours * 15) + deg2rad(pos.longitude) - rightAscension;
+  const lat = deg2rad(pos.latitude);
+  return Math.asin(
+    Math.sin(lat) * Math.sin(declination) +
+      Math.cos(lat) * Math.cos(declination) * Math.cos(hourAngle)
+  );
+}
+
+// Civil twilight: the sun 6° below the horizon, the point where the unaided eye
+// stops making out a dark hull against the water.
+export const CIVIL_TWILIGHT_RAD = deg2rad(-6);
+
+/** Whether it is dark enough at *pos* to warrant night detection settings. */
+export function isNight(pos: LatLon, at: Date): boolean {
+  return solarElevation(pos, at) < CIVIL_TWILIGHT_RAD;
+}

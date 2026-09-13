@@ -1,6 +1,10 @@
 // Read own-ship navigation state from SignalK. headingTrue/cog are radians and
 // sog is m/s in the SignalK model, so no conversion is needed.
 //
+// Heading comes from `navigation.headingTrue`, or from
+// `navigation.headingMagnetic` + `navigation.magneticVariation` on the many
+// small vessels that carry only a magnetic compass. Never from COG.
+//
 // Reads are freshness-aware: SignalK retains the last value of a path long after
 // the sensor producing it goes quiet, so an unguarded read can hand back a frozen
 // position/heading/SOG/COG as if it were live. A stale own-ship fix would
@@ -10,6 +14,7 @@
 // is older than it (or unparseable) is dropped to null and the result is flagged
 // `stale`, which downstream treats as "unknown", never as "stationary".
 
+import { normalizeRad } from './geo';
 import { ServerApp } from './skapp';
 import { OwnShip, LatLon } from './types';
 
@@ -54,11 +59,33 @@ export function readOwnShip(app: ServerApp, maxAgeS = 0, now: number = Date.now(
   const h = readPath(app, 'navigation.headingTrue', maxAgeMs, now);
   const s = readPath(app, 'navigation.speedOverGround', maxAgeMs, now);
   const c = readPath(app, 'navigation.courseOverGroundTrue', maxAgeMs, now);
+
+  // Many small vessels carry only a fluxgate/NMEA0183 compass and publish
+  // navigation.headingMagnetic. Without a true heading nothing downstream works
+  // at all — no georeferencing, no AIS fusion, no CPA, no position on a
+  // man-overboard — and nothing tells the operator why. Derive it when the
+  // variation is available. NOT from COG: leeway and current make course over
+  // ground the wrong answer for where the cameras are pointing.
+  let headingTrue = num(h.raw);
+  let headingStale = h.stale;
+  if (headingTrue === null) {
+    const hm = readPath(app, 'navigation.headingMagnetic', maxAgeMs, now);
+    const mv = readPath(app, 'navigation.magneticVariation', maxAgeMs, now);
+    const magnetic = num(hm.raw);
+    const variation = num(mv.raw);
+    if (magnetic !== null && variation !== null) {
+      // SignalK carries both in radians, variation positive east: true =
+      // magnetic + variation.
+      headingTrue = normalizeRad(magnetic + variation);
+      headingStale = hm.stale || mv.stale;
+    }
+  }
+
   return {
     position: pos(p.raw),
-    headingTrue: num(h.raw),
+    headingTrue,
     sog: num(s.raw),
     cog: num(c.raw),
-    stale: p.stale || h.stale || s.stale || c.stale,
+    stale: p.stale || headingStale || s.stale || c.stale,
   };
 }

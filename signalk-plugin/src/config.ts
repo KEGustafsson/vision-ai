@@ -138,9 +138,11 @@ export function schema(): object {
         description:
           'Automatically adapts the active camera and detection sensitivity to the situation. ' +
           'By speed: underway (SOG ≥ "Underway SOG threshold") watches the forward camera; ' +
-          'slow/stopped switches to the aft camera for docking. By time of day: at night ' +
-          '(21:00–06:00) the confidence threshold is lowered by 0.1 (floor 0.25) to catch dimmer ' +
-          'targets. When off, the camera stays fixed (no auto-switch) and confidence stays at ' +
+          'slow/stopped switches to the aft camera for docking. By daylight: after dark (the sun ' +
+          'more than 6° below the horizon at your position — so it follows the season and ' +
+          'latitude, not the clock) the confidence threshold is lowered by 0.1 (floor 0.25) to ' +
+          'catch dimmer targets; with no position fix it falls back to 21:00–06:00 server time. ' +
+          'When off, the camera stays fixed (no auto-switch) and confidence stays at ' +
           '"Minimum detection confidence" — pick the camera manually from the captain webapp.',
         default: true,
       },

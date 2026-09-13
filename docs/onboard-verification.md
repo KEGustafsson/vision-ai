@@ -191,13 +191,18 @@ URLs redacted (`***redacted***`); the proxied snapshot is a valid JPEG.
 
 ### 4.1 Own-ship nav present (prerequisite)
 ```bash
-for p in navigation/position navigation/headingTrue navigation/speedOverGround navigation/courseOverGroundTrue; do
+for p in navigation/position navigation/headingTrue navigation/headingMagnetic \
+         navigation/magneticVariation navigation/speedOverGround \
+         navigation/courseOverGroundTrue; do
   echo -n "$p = "; curl -s "$SK/signalk/v1/api/vessels/self/$p" | jq -c '.value'
 done
 ```
-**PASS:** position + heading at minimum. Without heading, the synthetic vessels'
-`navigation.position` will be null (not published) and 4.2–4.4 can't run — fix
-the nav source first.
+**PASS:** position + heading at minimum. Heading may be `headingTrue`, or
+`headingMagnetic` **together with** `magneticVariation` — the plugin derives the
+true heading from that pair when no true heading is published. Magnetic alone is
+not enough (the variation is what makes it true) and COG is never substituted.
+Without a usable heading the synthetic vessels' `navigation.position` will be
+null (not published) and 4.2–4.4 can't run — fix the nav source first.
 
 ### 4.2 True-bearing check **[NEEDS YOU]**
 Pick a target visible in the camera and by eye/compass. Read its synthetic

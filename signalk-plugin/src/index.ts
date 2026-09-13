@@ -16,7 +16,8 @@ import { Publisher } from './publisher';
 import { readOwnShip } from './nav';
 import { registerRoutes, SharedState } from './router';
 import { Plugin, ServerApp } from './skapp';
-import { DetectionEvent, EnrichedTarget } from './types';
+import { DetectionEvent, EnrichedTarget, LatLon } from './types';
+import { isNight } from './geo';
 
 export = function (app: ServerApp): Plugin {
   const pluginId = 'signalk-vision-ai';
@@ -289,8 +290,7 @@ export = function (app: ServerApp): Plugin {
     if (cfg.enableContextControl) {
       const own = readOwnShip(app, cfg.ownNavMaxAgeS);
       const underway = (own.sog ?? 0) >= cfg.underwaySogMs;
-      const hour = new Date().getHours();
-      const night = hour < 6 || hour >= 21;
+      const night = isNightNow(own.position);
       // Underway: watch ahead. Low speed (docking/manoeuvring): watch astern.
       nextCamera = underway ? 'forward' : 'aft';
       nextModeHint = underway ? 'underway' : 'docking';
@@ -316,6 +316,18 @@ export = function (app: ServerApp): Plugin {
     } catch (e) {
       app.debug(`vision-ai: container sync failed: ${e}`);
     }
+  }
+
+  // Night lowers the detection threshold, so it has to mean "dark here", not
+  // "late on the server's clock". A boat computer commonly runs UTC and the
+  // vessel crosses time zones; at Baltic latitudes the hour rule is wrong in
+  // both directions — the sun is still up at 23:00 in June (the threshold drops
+  // while it is broad daylight) and it is dark by 16:00 in December (dim
+  // targets go unhelped). Fall back to the hour only with no position.
+  function isNightNow(position: LatLon | null, at: Date = new Date()): boolean {
+    if (position) return isNight(position, at);
+    const hour = at.getHours();
+    return hour < 6 || hour >= 21;
   }
 
   let lastMismatchSig: string | null = null;

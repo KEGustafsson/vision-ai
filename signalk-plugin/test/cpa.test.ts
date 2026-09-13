@@ -13,7 +13,8 @@ function target(pos: LatLon): EnrichedTarget {
     geometry: { relative_bearing_deg: 0, range_m: 1000, range_method: 'horizon', range_confidence: 0.8 },
     pixel_velocity: { vx: 0, vy: 0 }, first_seen: null, age_frames: 0,
     key: 'forward.1', camera: 'forward', bearingTrue: 0, position: pos,
-    aisCorrelated: false, aisMmsi: null, aisCog: null, aisSog: null, cpa: null, tcpa: null, threatLevel: 'none', lastSeen: 0,
+    aisCorrelated: false, aisMmsi: null, aisCog: null, aisSog: null, aisPosition: null,
+    cpa: null, tcpa: null, sog: null, cog: null, threatLevel: 'none', lastSeen: 0,
   };
 }
 
@@ -51,6 +52,52 @@ describe('CpaEstimator', () => {
     expect(t.tcpa).not.toBeNull();
     expect(t.tcpa!).toBeGreaterThan(0);
     expect(t.cpa!).toBeLessThan(50);
+  });
+
+  it('solves a correlated target from the AIS position, not the monocular one', () => {
+    // Monocular range carries tens of percent of error. Pairing that position
+    // with the precise AIS velocity put a known vessel's CPA well out and made
+    // the threat level flap; once correlated, the contact's own fix is better.
+    const est = new CpaEstimator();
+    const own: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 5, cog: 0, stale: false };
+    const seen = destinationPoint(own.position!, 0, 1000);   // camera says 1000 m
+    const actual = destinationPoint(own.position!, 0, 300);  // AIS says 300 m
+    const t = {
+      ...target(seen),
+      aisCorrelated: true, aisPosition: actual, aisCog: 0, aisSog: 0,
+    };
+
+    est.update([t], own, cfg, 0);
+
+    // Closing at own 5 m/s on a stationary target: 300 m away is 60 s out,
+    // 1000 m would have been 200 s.
+    expect(t.tcpa!).toBeCloseTo(60, 0);
+    expect(t.cpa!).toBeLessThan(5);
+    // The visual estimate is left alone — it is what the camera saw, and what
+    // the synthetic blip publishes.
+    expect(t.position).toBe(seen);
+  });
+
+  it('does not difference an AIS fix against a monocular one when correlation drops', () => {
+    // The two positions can sit tens of metres apart. Differencing across the
+    // change would read that gap as target motion in a single cycle.
+    const est = new CpaEstimator();
+    const own: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 5, cog: 0, stale: false };
+    const seen = destinationPoint(own.position!, 0, 1000);
+    const actual = destinationPoint(own.position!, 0, 300);
+
+    const correlated = {
+      ...target(seen), aisCorrelated: true, aisPosition: actual, aisCog: 0, aisSog: 0,
+    };
+    est.update([correlated], own, cfg, 0);
+
+    // Next cycle the AIS match is gone; only the visual estimate remains.
+    const lost = { ...target(seen) };
+    est.update([lost], own, cfg, 1000);
+
+    expect(lost.tcpa).toBeNull();
+    expect(lost.threatLevel).toBe('none');
+    expect(lost.sog).toBeNull();   // no velocity invented from the source change
   });
 
   it('leaves CPA unresolved when own velocity is unknown (no SOG/COG)', () => {
