@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { NotificationManager } from '../src/notifications';
+import { NotificationManager, degradedFaultKey } from '../src/notifications';
 import { withDefaults } from '../src/config';
 import { Delta, ServerApp } from '../src/skapp';
 import { EnrichedTarget } from '../src/types';
@@ -127,5 +127,34 @@ describe('NotificationManager — container health', () => {
     n.setContainerDown('unreachable');
     n.clearAll();
     expect(app.valueFor('notifications.vision.containerDown')).toBeNull();
+  });
+});
+
+// Messages as the plugin logged them on the boat during a camera dropout test.
+describe('degradedFaultKey', () => {
+  const at = (s: number) => `forward: no frames for ${s}s (camera/RTSP stalled)`;
+
+  it('is the same while one camera simply stays down', () => {
+    // 22 log lines for one 110 s outage came from this counter alone.
+    expect(degradedFaultKey(at(6))).toBe(degradedFaultKey(at(10)));
+    expect(degradedFaultKey(at(6))).toBe(degradedFaultKey(at(110)));
+  });
+
+  it('changes when another camera goes down', () => {
+    const both = `${at(5)}; aft: no frames for 5s (camera/RTSP stalled)`;
+    expect(degradedFaultKey(both)).not.toBe(degradedFaultKey(at(5)));
+  });
+
+  it('changes when the pipeline restarts or the cause changes', () => {
+    const stalled = `${at(21)}; pipeline restarted 1x (Could not read from resource.)`;
+    const restarted = 'forward: no frames for 6s (camera/RTSP stalled); pipeline restarted 2x (all cameras stalled > 20s)';
+    expect(degradedFaultKey(stalled)).not.toBe(degradedFaultKey(restarted));
+    expect(degradedFaultKey('forward: GStreamer error: Could not read from resource.'))
+      .not.toBe(degradedFaultKey(at(6)));
+  });
+
+  it('leaves durations that are not a stall counter alone', () => {
+    expect(degradedFaultKey('pipeline restarted 2x (all cameras stalled > 20s)'))
+      .toBe('pipeline restarted 2x (all cameras stalled > 20s)');
   });
 });

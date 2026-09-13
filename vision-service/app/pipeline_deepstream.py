@@ -70,6 +70,8 @@ Prerequisites
 
 from __future__ import annotations
 
+import logging
+import os
 import tempfile
 import threading
 import time
@@ -132,6 +134,18 @@ _RESTART_BACKOFF_MAX_S = 30.0
 # its whole life. Comfortably longer than the max backoff so a flapping pipeline
 # (which restarts again before the window closes) keeps reading degraded.
 _RESTART_DEGRADED_WINDOW_S = 120.0
+# Longest a teardown may take to reach NULL. Normally about a second, RTSP
+# TEARDOWN included. Beyond this the graph is wedged, and nothing inside the
+# process can unwedge it: observed on an Orin Nano when a rebuild ran short of
+# NVMM, the decoders sat waiting on buffer pools that could never fill, and
+# set_state(NULL) never returned — the supervisor hung with it, so detection
+# stayed down indefinitely while the process, and so the container, stayed up.
+# A fresh process starts cleanly under the same memory pressure (it does not
+# carry the old graph's allocations), so exit and let the container's restart
+# policy provide one.
+_TEARDOWN_TIMEOUT_S = 15.0
+# Exit status for that case (EX_SOFTWARE), distinct from a normal shutdown.
+_WEDGED_EXIT_CODE = 70
 # Element names of the optional NVIDIA OFA (optical flow) branch. Kept in one
 # place so the bus-error handler can recognise an OFA fault and fall back.
 _OF_ELEMENTS = ("ofconv", "ofcaps", "of")
@@ -237,10 +251,14 @@ class _CameraProxy:
     """Stand-in for CameraWorker; exposes .error for /health and /control."""
     name: str
     error: Optional[str] = None
-    # Wall-clock of the last frame this camera produced; the watchdog flags a
-    # wedged RTSP feed as an error after STALL_TIMEOUT_S (one dead camera in a
+    # MONOTONIC time of the last frame this camera produced; the watchdog flags
+    # a wedged RTSP feed as an error after STALL_TIMEOUT_S (one dead camera in a
     # multi-cam batch otherwise goes unnoticed because the pipeline stays alive).
-    last_frame_at: float = field(default_factory=time.time)
+    # Monotonic, not wall-clock: a Jetson has no battery RTC, so chrony/GPS steps
+    # the clock — typically while RTSP is still prerolling. A forward step would
+    # read as "every camera stalled" and rebuild a healthy pipeline; a backward
+    # step would mask a real stall for the length of the step.
+    last_frame_at: float = field(default_factory=time.monotonic)
 
 
 # ── Per-camera mutable inference state (accessed only from GLib probe thread) ──
@@ -303,6 +321,11 @@ class DeepStreamPipeline:
         # GStreamer pipeline + GLib main loop (in daemon thread)
         self._gst = None
         self._loop = None
+        # Bus signal watch and watchdog timer of the CURRENT pipeline, so
+        # _tear_down can remove both instead of leaving one behind per rebuild.
+        self._bus = None
+        self._watchdog_id: Optional[int] = None
+        self._GLib = None
         # Binding modules, cached by start() for the per-frame callbacks.
         self._Gst = None
         self._pyds = None
@@ -310,8 +333,14 @@ class DeepStreamPipeline:
         # backoff after a fatal GStreamer error/EOS (see _supervise).
         self._supervisor: Optional[threading.Thread] = None
         self._stopping = threading.Event()
+        # Process exit for a wedged teardown; a seam so tests can observe it.
+        self._exit = os._exit
         self._restart_count = 0
         self._last_error: Optional[str] = None
+        # Frames whose probe work raised (see _probe_callback); logged with a
+        # traceback on the first and every 100th so a repeating fault is visible
+        # without flooding the vessel's log.
+        self._probe_errors = 0
         # Why the GLib loop was quit deliberately (detection toggle, watchdog
         # stall rebuild) — None when it exited on its own (bus ERROR/EOS).
         # Written by _quit_loop / consumed once by _supervise.
@@ -429,14 +458,24 @@ class DeepStreamPipeline:
             if self._of_failed:
                 flow.fail(self._of_failed)
 
-        self._gst = self._build_pipeline(Gst)
+        # _build_pipeline assigns self._gst as soon as the Pipeline object
+        # exists, so a throw part-way through construction still leaves the
+        # half-built graph reachable for _tear_down.
+        self._build_pipeline(Gst)
 
         bus = self._gst.get_bus()
         bus.add_signal_watch()
         bus.connect("message", self._on_bus_message)
+        self._bus = bus
 
         ret = self._gst.set_state(Gst.State.PLAYING)
         if ret == Gst.StateChangeReturn.FAILURE:
+            # Leave nothing behind in READY/PAUSED: GStreamer refuses to dispose
+            # elements that are not NULL, so a half-started graph keeps its RTSP
+            # sockets, NVDEC instances and NVMM buffer pools for the life of the
+            # process. On a board where bring-up failed for lack of NVMM in the
+            # first place, that makes every following attempt likelier to fail.
+            self._tear_down(Gst)
             raise RuntimeError(
                 "DeepStream pipeline failed to enter PLAYING state. "
                 "Check GStreamer plugin availability and RTSP camera URLs."
@@ -448,7 +487,7 @@ class DeepStreamPipeline:
         # attribute store is atomic under the GIL, so no extra locking. Reset
         # each camera's clock to "now" first so the RTSP preroll grace period
         # starts here.
-        now = time.time()
+        now = time.monotonic()
         for proxy in self.workers.values():
             proxy.last_frame_at = now
             # Clear any error left from a prior fault (the GStreamer error stamped
@@ -456,7 +495,13 @@ class DeepStreamPipeline:
             # the pipeline is healthy again here. Historical detail is kept in
             # self._last_error / /health's pipeline_last_error.
             proxy.error = None
-        GLib.timeout_add_seconds(2, self._watchdog)
+        # Keep the source id: a GLib timer cannot fire while no main loop is
+        # running the default context, so a watchdog from a previous pipeline
+        # survives the gap between loops and then sees a running loop again.
+        # Over a flapping multi-day deployment those accumulate, every one of
+        # them able to quit the loop. Remove ours explicitly on teardown.
+        self._watchdog_id = GLib.timeout_add_seconds(2, self._watchdog)
+        self._GLib = GLib
         # Respect a current disable across rebuilds: if detection was toggled off,
         # a recovered pipeline must come back PAUSED, not silently resume PLAYING.
         if not self.enabled:
@@ -473,13 +518,58 @@ class DeepStreamPipeline:
     def _tear_down(self, Gst) -> None:
         """Set the current pipeline to NULL and drop the loop reference. Safe to
         call repeatedly (used between supervised restarts and on stop)."""
-        if self._gst is not None:
+        if self._watchdog_id is not None:
+            if self._GLib is not None:
+                try:
+                    self._GLib.source_remove(self._watchdog_id)
+                except Exception:  # pragma: no cover - already removed
+                    pass
+            self._watchdog_id = None
+        if self._bus is not None:
+            # Pairs with add_signal_watch() in _bring_up; without it each rebuild
+            # leaks a GSource and a closure holding this pipeline.
             try:
-                self._gst.set_state(Gst.State.NULL)
+                self._bus.remove_signal_watch()
+            except Exception:  # pragma: no cover - bus already disposed
+                pass
+            self._bus = None
+        if self._gst is not None:
+            pipeline, self._gst = self._gst, None
+            self._set_null_or_exit(Gst, pipeline)
+        self._loop = None
+
+    def _set_null_or_exit(self, Gst, pipeline) -> None:
+        """Drive ``pipeline`` to NULL, or give up on the process if it can't.
+
+        The state change runs on a helper thread so the caller can stop waiting:
+        a graph wedged in buffer-pool allocation never finishes going to NULL,
+        and without a bound the supervisor (or stop()) blocks on it for good.
+        Past ``_TEARDOWN_TIMEOUT_S`` the process exits so the container restarts
+        it — an in-process rebuild is not possible once teardown itself hangs.
+        """
+        done = threading.Event()
+
+        def to_null() -> None:
+            try:
+                pipeline.set_state(Gst.State.NULL)
             except Exception:
                 pass
-            self._gst = None
-        self._loop = None
+            finally:
+                done.set()
+
+        threading.Thread(target=to_null, name="ds-teardown", daemon=True).start()
+        if done.wait(timeout=_TEARDOWN_TIMEOUT_S):
+            return
+        self._log.critical(
+            "DeepStream teardown did not reach NULL within %.0fs — the graph is "
+            "wedged (typically decoders stuck waiting for NVMM buffers). Exiting "
+            "so the container restarts with a fresh process.", _TEARDOWN_TIMEOUT_S)
+        for handler in logging.getLogger().handlers:
+            try:
+                handler.flush()
+            except Exception:  # pragma: no cover - best effort before exit
+                pass
+        self._exit(_WEDGED_EXIT_CODE)
 
     def _supervise(self, Gst, GLib) -> None:
         """Run the GLib loop; on a fatal error/EOS, rebuild with backoff.
@@ -504,6 +594,9 @@ class DeepStreamPipeline:
                     self._bring_up(Gst, GLib)
                     backoff = _RESTART_BACKOFF_INITIAL_S
                 except Exception as exc:  # pragma: no cover - hardware dependent
+                    # Same reasoning as the FAILURE branch in _bring_up: whatever
+                    # was built before the throw must go to NULL, or it leaks.
+                    self._tear_down(Gst)
                     self._last_error = str(exc)
                     self._log.error("DeepStream bring-up failed: %s", exc)
                     for proxy in self.workers.values():
@@ -674,7 +767,7 @@ class DeepStreamPipeline:
             # brief PAUSED window if the disable raced a rebuild) — silence is
             # expected, don't flag cameras or self-heal.
             return True
-        now = time.time()
+        now = time.monotonic()
         stalls = {name: now - p.last_frame_at for name, p in self.workers.items()}
         for name, proxy in self.workers.items():
             if stalls[name] > _STALL_TIMEOUT_S:
@@ -692,6 +785,11 @@ class DeepStreamPipeline:
                 "DeepStream watchdog: all cameras stalled > %.0fs — rebuilding pipeline",
                 _STALL_REBUILD_S)
             self._quit_loop(f"all cameras stalled > {int(_STALL_REBUILD_S)}s")
+            # Returning False destroys this timer. Forget its id so _tear_down
+            # doesn't try to remove it again (GLib warns "Source ID ... was not
+            # found"). Only here: the loop is running, so this is the current
+            # pipeline's watchdog, not a stale one.
+            self._watchdog_id = None
             return False
         return True
 
@@ -844,6 +942,13 @@ class DeepStreamPipeline:
     def _build_pipeline(self, Gst):
         """Create, configure, and link all GStreamer/DeepStream elements."""
         pipeline = Gst.Pipeline.new("vision-ai-ds")
+        # Publish it immediately. Construction below can raise (a missing
+        # plugin, a property a build lacks, NVMM pressure), and only a pipeline
+        # reachable through self._gst can be driven to NULL by _tear_down —
+        # GStreamer refuses to dispose elements left in READY/PAUSED, so an
+        # unreachable half-built graph holds its RTSP sockets, decoder
+        # instances and buffer pools for the life of the process.
+        self._gst = pipeline
         cams = self.settings.cameras
         n = len(cams)
         # nvstreammux output = display + geometry resolution (native camera res).
@@ -1162,7 +1267,7 @@ class DeepStreamPipeline:
             self.frames.set(cam_name, jpeg)
             proxy = self.workers.get(cam_name)
             if proxy is not None:
-                proxy.last_frame_at = time.time()
+                proxy.last_frame_at = time.monotonic()
                 if proxy.error and proxy.error.startswith("no frames"):
                     proxy.error = None  # recovered from a stall
         return Gst.FlowReturn.OK
@@ -1170,6 +1275,28 @@ class DeepStreamPipeline:
     # ── Probe callback (GLib thread, every batch buffer) ─────────────────────
 
     def _probe_callback(self, pad, info, user_data):
+        """Guard the per-batch work so a metadata surprise can't stall the graph.
+
+        A GI callback that raises returns a zero-initialised value, and
+        ``0 == Gst.PadProbeReturn.DROP`` — so a single unexpected exception
+        (an out-of-range value a Pydantic validator rejects, an unusual box)
+        would silently drop the whole BATCH: both cameras lose that frame, and
+        nothing reaches the OSD, the encoder or the appsinks. If the trigger
+        repeats, no frames arrive at all, the watchdog declares every camera
+        stalled and rebuilds — into the same exception, forever, while
+        inference itself is perfectly healthy. Losing one frame's detections is
+        bad; losing the video and the pipeline with it is worse.
+        """
+        try:
+            return self._probe_frames(pad, info, user_data)
+        except Exception:
+            self._probe_errors += 1
+            if self._probe_errors % 100 == 1:
+                self._log.exception(
+                    "DeepStream probe error #%d (frame skipped)", self._probe_errors)
+            return 1  # Gst.PadProbeReturn.OK — let the buffer through regardless
+
+    def _probe_frames(self, pad, info, user_data):
         """Extract detections from NvDsObjectMeta and emit DetectionEvents.
 
         Runs on the probe queue's streaming thread (see _build_pipeline) for
@@ -1453,7 +1580,9 @@ class DeepStreamPipeline:
             return cam.horizon_y
         if not self.settings.geometry.auto_horizon:
             return None
-        now = time.time()
+        # Monotonic: a clock step must not freeze the refresh for hours (forward)
+        # or make it run every frame (backward).
+        now = time.monotonic()
         if (state.horizon_y_cached is not None
                 and now - state.last_horizon_t < _HORIZON_REFRESH_S):
             return state.horizon_y_cached

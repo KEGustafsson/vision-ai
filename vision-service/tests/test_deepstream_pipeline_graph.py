@@ -9,11 +9,14 @@ queue sits, what the decoders and the tracker are configured with.
 """
 
 import logging
+import threading
+import time
 from types import SimpleNamespace
 
 import pytest
 
 from app.config import load_settings
+import app.pipeline_deepstream as ds
 from app.pipeline_deepstream import DeepStreamPipeline, _tracker_dims
 
 LOG = logging.getLogger("test-ds-graph")
@@ -276,3 +279,130 @@ def test_each_camera_gets_its_own_osd_and_hw_jpeg_tail():
         assert sink.props["sync"] is False and sink.props["drop"] is True
         assert sink.props["max-buffers"] == 1
         assert [s[0] for s in sink.signals] == ["new-sample"]
+
+
+# ── Fault containment ─────────────────────────────────────────────────────────
+
+
+def test_probe_never_drops_the_batch_when_the_frame_work_raises():
+    """A GI callback that raises returns 0 — which is Gst.PadProbeReturn.DROP,
+    so one unexpected exception would swallow the whole batch (both cameras:
+    no OSD, no JPEG, no event) and, if it repeated, starve the watchdog into
+    rebuilding the pipeline forever. The guard must pass the buffer through."""
+    p = _pipeline()
+
+    def boom(pad, info, user_data):
+        raise ValueError("unexpected metadata")
+
+    p._probe_frames = boom
+    assert p._probe_callback(None, None, None) == 1  # Gst.PadProbeReturn.OK
+    assert p._probe_errors == 1
+    assert p._probe_callback(None, None, None) == 1
+    assert p._probe_errors == 2
+
+
+def test_teardown_removes_the_watchdog_timer_and_the_bus_watch():
+    """Both are re-created on every bring-up. A GLib timer cannot fire while no
+    main loop runs the default context, so a stale watchdog survives the gap
+    between loops and then runs alongside the new one; the bus signal watch
+    leaks a source and a closure holding the pipeline. Over a flapping
+    multi-day deployment they accumulate."""
+    p = _pipeline()
+    removed: list = []
+    watches_removed: list = []
+
+    p._GLib = SimpleNamespace(source_remove=removed.append)
+    p._watchdog_id = 4242
+    p._bus = SimpleNamespace(remove_signal_watch=lambda: watches_removed.append(True))
+    p._gst = SimpleNamespace(set_state=lambda state: None)
+
+    p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
+
+    assert removed == [4242]
+    assert watches_removed == [True]
+    assert p._watchdog_id is None and p._bus is None and p._gst is None
+
+    # Idempotent: a second teardown (stop() after a supervised restart) is a
+    # no-op rather than a double remove.
+    p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
+    assert removed == [4242]
+
+
+def test_a_pipeline_that_fails_to_build_is_still_reachable_for_teardown():
+    """Only a pipeline reachable through self._gst can be driven to NULL, and
+    GStreamer refuses to dispose elements left in READY/PAUSED — so a graph that
+    throws part-way through construction must already be published, or every
+    failed bring-up leaks its sockets, decoders and buffer pools."""
+    p = _pipeline()
+    graph = _Graph()
+    gst = graph.gst()
+    # Fail construction immediately after the Pipeline object exists.
+    boom = RuntimeError("no such element")
+    gst.ElementFactory.make = lambda factory, name: (_ for _ in ()).throw(boom)
+
+    with pytest.raises(RuntimeError):
+        p._build_pipeline(gst)
+    assert p._gst is not None, "half-built pipeline was left unreachable"
+
+    states: list = []
+    p._gst = SimpleNamespace(set_state=states.append)
+    p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
+    assert states == [0] and p._gst is None
+
+
+def test_a_teardown_that_never_reaches_null_exits_the_process(monkeypatch):
+    """Seen on the Orin Nano: a rebuild ran short of NVMM, the decoders waited
+    on buffer pools that could never fill, and set_state(NULL) never returned.
+    The supervisor hung inside teardown, so detection stayed down with the
+    process (and the container) still up. Nothing in-process can recover that,
+    so teardown must stop waiting and exit for the restart policy."""
+    monkeypatch.setattr(ds, "_TEARDOWN_TIMEOUT_S", 0.1)
+    p = _pipeline()
+    exits: list = []
+    p._exit = exits.append
+    release = threading.Event()
+    p._gst = SimpleNamespace(set_state=lambda state: release.wait(10))
+
+    t0 = time.monotonic()
+    try:
+        p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
+    finally:
+        release.set()
+
+    assert exits == [ds._WEDGED_EXIT_CODE]
+    assert time.monotonic() - t0 < 2.0, "teardown waited on the wedged graph"
+    assert p._gst is None
+
+
+def test_a_teardown_that_reaches_null_does_not_exit(monkeypatch):
+    monkeypatch.setattr(ds, "_TEARDOWN_TIMEOUT_S", 5.0)
+    p = _pipeline()
+    exits: list = []
+    p._exit = exits.append
+    states: list = []
+    p._gst = SimpleNamespace(set_state=states.append)
+
+    p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
+
+    assert states == [0] and exits == []
+
+
+def test_the_stall_rebuild_forgets_the_timer_it_is_ending():
+    """Returning False from a GLib timer destroys it. If teardown then removed
+    the same id, GLib logs "Source ID ... was not found" on every stall rebuild
+    — seen on the boat right after the watchdog fired."""
+    p = _pipeline()
+    removed: list = []
+    p._GLib = SimpleNamespace(source_remove=removed.append)
+    p._watchdog_id = 6
+    p._loop = SimpleNamespace(is_running=lambda: True, quit=lambda: None)
+    long_ago = time.monotonic() - ds._STALL_REBUILD_S - 5
+    for proxy in p.workers.values():
+        proxy.last_frame_at = long_ago
+
+    assert p._watchdog() is False
+    assert p._watchdog_id is None
+
+    p._gst = SimpleNamespace(set_state=lambda state: None)
+    p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
+    assert removed == []

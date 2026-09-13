@@ -1,6 +1,9 @@
 import threading
+import time
 
+import cv2
 import numpy as np
+import pytest
 
 from app.camera import rtsp_cpu
 from app.camera.rtsp_cpu import _FFMPEG_LOW_LATENCY_OPTIONS, RtspCpuSource
@@ -91,3 +94,146 @@ def test_read_reports_a_stall_instead_of_reserving_the_old_frame(monkeypatch):
         src._frame_ready.notify_all()
     nxt = src.read()
     assert nxt is not None and nxt.seq == 2
+
+
+def test_capture_params_are_accepted_by_the_installed_opencv(tmp_path):
+    """The FFmpeg backend rejects the WHOLE open-parameter list if any entry
+    goes unused, and then the capture never opens — so an unsupported property
+    here (CAP_PROP_BUFFERSIZE was one) silently kills every CPU-path camera and
+    every reconnect. Prove the list this module builds actually opens a file."""
+    import cv2
+
+    clip = tmp_path / "probe.mp4"
+    writer = cv2.VideoWriter(str(clip), cv2.VideoWriter_fourcc(*"mp4v"), 10, (64, 48))
+    assert writer.isOpened(), "cannot encode a probe clip on this host"
+    for i in range(5):
+        writer.write(np.full((48, 64, 3), i * 20, dtype=np.uint8))
+    writer.release()
+
+    cap = cv2.VideoCapture(str(clip), cv2.CAP_FFMPEG, rtsp_cpu.capture_params())
+    try:
+        assert cap.isOpened(), "OpenCV rejected the capture parameters"
+        assert cap.read()[0]
+    finally:
+        cap.release()
+
+
+def test_capture_params_carry_the_open_and_read_timeouts():
+    # Without these the FFmpeg defaults (30 s each) apply, so one half-dead
+    # camera blocks its reader thread for 30 s per attempt.
+    params = rtsp_cpu.capture_params()
+    for name in ("CAP_PROP_OPEN_TIMEOUT_MSEC", "CAP_PROP_READ_TIMEOUT_MSEC"):
+        prop = getattr(cv2, name, None)
+        if prop is not None:
+            assert prop in params
+            assert params[params.index(prop) + 1] == 5000
+    # CAP_PROP_BUFFERSIZE is not consumed by the FFmpeg backend: including it
+    # makes the open fail outright.
+    assert cv2.CAP_PROP_BUFFERSIZE not in params
+
+
+class _ClosingCapture:
+    """A capture whose read fails just as close() lands — the shutdown race."""
+
+    def __init__(self, source, fail="return"):
+        self._source = source
+        self._fail = fail
+        self.released = False
+
+    def read(self):
+        # close() ran while this read was pending.
+        self._source._closed = True
+        if self._fail == "raise":
+            raise RuntimeError("stream closed under us")
+        return False, None
+
+    def release(self):
+        self.released = True
+
+
+def _closing_source(fail):
+    src = RtspCpuSource.__new__(RtspCpuSource)
+    src._url = "rtsp://camera.example/live"
+    src._closed = False
+    src._lock = threading.Lock()
+    src._frame_ready = threading.Condition(src._lock)
+    src._latest_img = None
+    src._latest_seq = 0
+    src._last_delivered_seq = 0
+    src._last_error = None
+    src._last_reopen = 0.0
+    src._cap = _ClosingCapture(src, fail)
+    return src
+
+
+@pytest.mark.parametrize("fail", ["return", "raise"])
+def test_the_reader_does_not_dial_the_camera_again_while_shutting_down(monkeypatch, fail):
+    """A read already in flight fails as close() takes the capture away.
+    Reconnecting on that failure would open a fresh RTSP connection on the way
+    out, and an open can take longer than close() waits for this thread —
+    delaying every detection-off toggle and every restart."""
+    src = _closing_source(fail)
+    opened = []
+    monkeypatch.setattr(RtspCpuSource, "_open_capture",
+                        lambda self: opened.append(1) or None)
+
+    src._reader_loop()  # returns once _closed is observed
+
+    assert opened == [], "reconnected during shutdown"
+    assert src._cap is None  # released by the loop, which owns it
+
+
+def _reconnectable_source():
+    src = RtspCpuSource.__new__(RtspCpuSource)
+    src._url = "rtsp://camera.example/live"
+    src._closed = False
+    src._lock = threading.Lock()
+    src._frame_ready = threading.Condition(src._lock)
+    src._latest_img = None
+    src._latest_seq = 0
+    src._last_delivered_seq = 0
+    src._last_error = None
+    src._last_reopen = 0.0
+    src._cap = None
+    src._reader = threading.current_thread()
+    return src
+
+
+def test_no_rtsp_open_starts_once_close_has_taken_effect(monkeypatch):
+    """close() sets the flag under the same lock the reconnect decides with, so
+    an open can never START after a close that has already completed."""
+    src = _reconnectable_source()
+    opened = []
+    monkeypatch.setattr(RtspCpuSource, "_open_capture",
+                        lambda self: opened.append(1) or object())
+
+    src.close()          # completes before the reader gets there
+    src._reconnect()
+
+    assert opened == []
+    assert src._cap is None
+
+
+def test_a_capture_opened_as_close_lands_is_released_at_once(monkeypatch):
+    """A close() that lands while the dial is already in flight cannot be
+    stopped — holding the lock across the connect would block shutdown for the
+    whole connect timeout. What must not happen is the capture being KEPT."""
+    src = _reconnectable_source()
+    released = []
+
+    class _Cap:
+        def release(self):
+            released.append(1)
+
+    def open_then_close(self):
+        # close() runs while this open is in progress.
+        threading.Thread(target=self.close).start()
+        time.sleep(0.05)
+        return _Cap()
+
+    monkeypatch.setattr(RtspCpuSource, "_open_capture", open_then_close)
+
+    src._reconnect()
+
+    assert released == [1], "capture opened during shutdown was not released"
+    assert src._cap is None

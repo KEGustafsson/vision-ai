@@ -138,9 +138,11 @@ export function schema(): object {
         description:
           'Automatically adapts the active camera and detection sensitivity to the situation. ' +
           'By speed: underway (SOG ≥ "Underway SOG threshold") watches the forward camera; ' +
-          'slow/stopped switches to the aft camera for docking. By time of day: at night ' +
-          '(21:00–06:00) the confidence threshold is lowered by 0.1 (floor 0.25) to catch dimmer ' +
-          'targets. When off, the camera stays fixed (no auto-switch) and confidence stays at ' +
+          'slow/stopped switches to the aft camera for docking. By daylight: after dark (the sun ' +
+          'more than 6° below the horizon at your position — so it follows the season and ' +
+          'latitude, not the clock) the confidence threshold is lowered by 0.1 (floor 0.25) to ' +
+          'catch dimmer targets; with no position fix it falls back to 21:00–06:00 server time. ' +
+          'When off, the camera stays fixed (no auto-switch) and confidence stays at ' +
           '"Minimum detection confidence" — pick the camera manually from the captain webapp.',
         default: true,
       },
@@ -298,5 +300,15 @@ export function withDefaults(partial: Partial<PluginConfig> | undefined): Plugin
   cfg.notifyHoldS = clampMin(cfg.notifyHoldS, 0, DEFAULT_CONFIG.notifyHoldS);
   cfg.eventMaxAgeS = clampMin(cfg.eventMaxAgeS, 0, DEFAULT_CONFIG.eventMaxAgeS);
   cfg.minConfidence = clampRange(cfg.minConfidence, 0, 1, DEFAULT_CONFIG.minConfidence);
+  // MOB is the most safety-critical path in the plugin and its persistence
+  // counter is an integer frame count: a non-numeric saved value made every
+  // `count >= mobPersistFrames` comparison false — man-overboard would never
+  // fire, with nothing logged — and 0/negative fired on a single frame.
+  cfg.mobPersistFrames = clampMin(
+    Math.round(cfg.mobPersistFrames), 1, DEFAULT_CONFIG.mobPersistFrames);
+  cfg.mobMinConfidence = clampRange(cfg.mobMinConfidence, 0, 1, DEFAULT_CONFIG.mobMinConfidence);
+  cfg.collisionTcpaS = clampMin(cfg.collisionTcpaS, 0, DEFAULT_CONFIG.collisionTcpaS);
+  cfg.collisionAlarmTcpaS = clampMin(
+    cfg.collisionAlarmTcpaS, 0, DEFAULT_CONFIG.collisionAlarmTcpaS);
   return cfg;
 }

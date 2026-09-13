@@ -1,6 +1,16 @@
 // Read own-ship navigation state from SignalK. headingTrue/cog are radians and
 // sog is m/s in the SignalK model, so no conversion is needed.
 //
+// Heading comes from `navigation.headingTrue` and nothing else. Not from
+// `navigation.headingMagnetic` + `navigation.magneticVariation`: a fluxgate
+// compass carries whatever deviation its installation gives it, and nothing in
+// SignalK says how large that is. Measured on Arabella at the dock, the compass
+// plus variation read a steady 33° off the GNSS-compass true heading — every
+// target would have been placed 33° wrong and correlated against the wrong AIS
+// contacts, while looking healthy. And not from COG: leeway and current make
+// course over ground the wrong answer for where the cameras point. With no true
+// heading the result is null, which downstream treats as unknown.
+//
 // Reads are freshness-aware: SignalK retains the last value of a path long after
 // the sensor producing it goes quiet, so an unguarded read can hand back a frozen
 // position/heading/SOG/COG as if it were live. A stale own-ship fix would

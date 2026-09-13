@@ -48,6 +48,7 @@ export function enrichTarget(
     aisMmsi: null,
     aisCog: null,
     aisSog: null,
+    aisPosition: null,
     cpa: null,
     tcpa: null,
     sog: null,

@@ -263,6 +263,7 @@ export function fuse(
     t.aisMmsi = null;
     t.aisCog = null;
     t.aisSog = null;
+    t.aisPosition = null;
 
     const a = assignedContact.get(t.key);
     if (a) {
@@ -270,6 +271,7 @@ export function fuse(
       t.aisMmsi = a.mmsi;
       t.aisCog = a.cog;
       t.aisSog = a.sog;
+      t.aisPosition = a.position;
       assignment.set(t.key, a.mmsi);
       aisCorrelatedCount += 1;
       continue;
@@ -278,6 +280,15 @@ export function fuse(
     const range = t.geometry.range_m;
     if (
       VESSEL_LABELS.has(t.label) &&
+      // "Dark" means we looked for a matching AIS contact and found none. With
+      // no true bearing (own heading missing or stale) no correlation is even
+      // attempted — pairScore and hasNearMissContact both bail out — so every
+      // vessel in range would be declared dark for the length of the heading
+      // dropout. A burst of false dark-target alerts is worse than none: it is
+      // exactly what teaches an operator to ignore the alert. The target is
+      // still tracked, published and drawn; only the unfounded claim is
+      // withheld, and it returns as soon as heading does.
+      t.bearingTrue !== null &&
       range !== null &&
       range <= cfg.darkTargetRangeM &&
       !hasNearMissContact(t, ais, cfg)

@@ -142,8 +142,15 @@ def _severity_colour(t: Target) -> tuple:
     return _GREEN
 
 
-def annotate(image: np.ndarray, event: DetectionEvent) -> np.ndarray:
-    img = image.copy()
+def annotate(image: np.ndarray, event: DetectionEvent, inplace: bool = False) -> np.ndarray:
+    """Draw *event* onto *image* and return the annotated frame.
+
+    A copy is made by default so a caller that still needs the clean frame keeps
+    it. Pass ``inplace=True`` when the frame is the caller's own and is not read
+    again — on the per-camera hot path that copy is a full-frame memcpy (≈3.7 MB
+    at 1280x960) for every frame of every camera.
+    """
+    img = image if inplace else image.copy()
     if event.horizon_y is not None:
         y = int(event.horizon_y)
         cv2.line(img, (0, y), (img.shape[1], y), (200, 200, 200), 1)

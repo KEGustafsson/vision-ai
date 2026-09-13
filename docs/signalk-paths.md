@@ -13,11 +13,14 @@ is published as its own vessel context
 any chartplotter that draws `vessels.*`. The token in the uuid slot is a
 deliberate spec deviation (see `publisher.ts`): readable and deterministic, so
 the same target always maps back to the same context and a fully-retracted
-shell stays identifiable as ours. `<id>` is the event's **`stable_id`** — the
-per-session serial that is never recycled, so a blip's identity can never
-migrate to a different physical vessel (`track_id` is the fallback for events
-from an older container). Off by default to avoid confusion with real AIS
-contacts.
+shell stays identifiable as ours. `<id>` is the event's **`track_id`** — the
+same short number the container burns into the video overlay, so a chart
+contact and its on-screen box always carry the same label (`stable_id` is the
+fallback for events without a track id). `track_id` is recycled, but the
+tracker quarantines a freed number for far longer than a blip is held after its
+last detection, so a retracted blip is gone before its number can return on
+another vessel. Internal fusion and CPA state stay keyed on `stable_id`. Off by
+default to avoid confusion with real AIS contacts.
 
 | Leaf | Units | Description |
 |------|-------|-------------|
@@ -47,7 +50,7 @@ a location. SOG/COG let a chartplotter draw the vector and compute CPA natively;
 |------|-------|-------|
 | `vision.system.activeCamera` | — | Camera prioritised by context control |
 | `vision.system.backend` | — | `tensorrt` / `torch-cpu` / `mock` … |
-| `vision.system.inferenceFps` | Hz | Zones: alarm < 3, warn 3–6, normal ≥ 6 |
+| `vision.system.inferenceFps` | Hz | Plain telemetry — no zones (zone metadata would make SignalK auto-raise a notification on it) |
 | `vision.system.horizonY` | px | Current horizon calibration |
 | `vision.<camera>.targetCount` | — | Tracks currently held per camera |
 

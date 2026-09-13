@@ -93,6 +93,11 @@ export interface EnrichedTarget extends RawTarget {
   aisMmsi: string | null;
   aisCog: number | null; // rad, from a correlated AIS contact
   aisSog: number | null; // m/s, from a correlated AIS contact
+  // The correlated contact's OWN reported position. Far more accurate than the
+  // monocular estimate in `position`, so CPA uses it once correlated (see
+  // cpa.ts). `position` stays the visual estimate: it is what the camera saw,
+  // and it is what the synthetic blip publishes.
+  aisPosition: LatLon | null;
   cpa: number | null; // m
   tcpa: number | null; // s
   sog: number | null; // m/s, target ground speed (estimated from track or AIS)

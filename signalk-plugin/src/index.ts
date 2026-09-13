@@ -11,12 +11,13 @@ import { EventStream } from './eventStream';
 import { PluginConfig, schema, uiSchema, withDefaults } from './config';
 import { collectAisContacts, fuse } from './aisFusion';
 import { enrichTarget } from './enrich';
-import { NotificationManager } from './notifications';
+import { NotificationManager, degradedFaultKey } from './notifications';
 import { Publisher } from './publisher';
 import { readOwnShip } from './nav';
 import { registerRoutes, SharedState } from './router';
 import { Plugin, ServerApp } from './skapp';
-import { DetectionEvent, EnrichedTarget } from './types';
+import { DetectionEvent, EnrichedTarget, LatLon } from './types';
+import { isNight } from './geo';
 
 export = function (app: ServerApp): Plugin {
   const pluginId = 'signalk-vision-ai';
@@ -113,17 +114,29 @@ export = function (app: ServerApp): Plugin {
     // actually captured.
     const evTs = Date.parse(ev.timestamp);
     if (!Number.isFinite(evTs)) return; // belt-and-braces; eventStream filters these
+    const nowMs = Date.now();
     const prevTs = lastEventTsByCamera.get(ev.camera);
-    if (prevTs !== undefined && evTs <= prevTs) return; // out-of-order / replayed
+    // Drop out-of-order / replayed frames — but never order against a
+    // last-accepted time that is itself in the future. The container and
+    // SignalK are separate clocks (often RTC-less, stepped by GPS/chrony after
+    // boot): one future-dated frame would otherwise become a high-water mark
+    // that silently starves every real frame until wall-clock catches up.
+    if (prevTs !== undefined && evTs <= prevTs && prevTs <= nowMs) return;
     lastEventTsByCamera.set(ev.camera, evTs);
 
     lastEventByCamera.set(ev.camera, ev);
     frameCount.set(ev.camera, (frameCount.get(ev.camera) ?? 0) + 1);
-    // Evaluate own-ship freshness against the frame's capture time (evTs), not
-    // delivery time, so georeferencing uses the nav that was current when the
-    // frame was shot and a lagged-but-accepted frame doesn't null otherwise-valid
-    // nav just because delivery was slow.
-    const own = readOwnShip(app, cfg.ownNavMaxAgeS, evTs);
+    // Evaluate own-ship freshness against the frame's capture time, not delivery
+    // time, so georeferencing uses the nav that was current when the frame was
+    // shot and a lagged-but-accepted frame doesn't null otherwise-valid nav just
+    // because delivery was slow. Clamp to now: nav ages are measured on
+    // SignalK's clock, so a container clock running ahead would otherwise make
+    // every current nav value read as older than ownNavMaxAgeS and null the
+    // whole own-ship state — no georeferencing, no fusion, no CPA — silently.
+    // The same clamp keeps a future capture time out of lastSeen, where it
+    // would hold a departed track past its age-out.
+    const seenAt = Math.min(evTs, nowMs);
+    const own = readOwnShip(app, cfg.ownNavMaxAgeS, seenAt);
 
     // `targets` is optional in the wire contract (default empty list); guard so a
     // valid event that omits it can't throw in this per-frame hot path.
@@ -147,12 +160,12 @@ export = function (app: ServerApp): Plugin {
         // accumulate across frames and fire even without a track id. Non-MOB
         // untracked boxes stay excluded from the AIS/CPA path.
         if (!raw.is_person_in_water) continue;
-        const t = enrichTarget(raw, ev.camera, own, cfg, evTs);
+        const t = enrichTarget(raw, ev.camera, own, cfg, seenAt);
         t.key = `${ev.camera}.mob-anon`;
         targets.set(t.key, t);
         continue;
       }
-      const t = enrichTarget(raw, ev.camera, own, cfg, evTs);
+      const t = enrichTarget(raw, ev.camera, own, cfg, seenAt);
       targets.set(t.key, t);
     }
     pruneLabelSelection();
@@ -188,16 +201,25 @@ export = function (app: ServerApp): Plugin {
 
     let darkKeys = new Set<string>();
     let aisCount = 0;
-    if (cfg.enableAisFusion) {
+    // Scanning every vessel in the SignalK model (hundreds in a busy harbour)
+    // costs a haversine + bearing each, so skip it entirely when there is
+    // nothing to correlate — the common case at sea is no visual target at all.
+    if (cfg.enableAisFusion && all.length > 0) {
       const contacts = collectAisContacts(
         app.getPath('vessels'), own, cfg.ownAisMinRangeM, cfg.aisMaxAgeS * 1000, now);
       const res = fuse(all, contacts, cfg, aisAssignment);
       aisAssignment = res.assignment;
-      darkKeys = new Set(res.darkTargetKeys);
+      // Without an own-ship position there are no AIS contacts to compare
+      // against (collectAisContacts returns nothing), so a "no AIS match" result
+      // says nothing about the target. Same reasoning as the bearing gate in
+      // fuse(): don't raise dark-target alerts a lost fix made unfalsifiable.
+      darkKeys = own.position ? new Set(res.darkTargetKeys) : new Set<string>();
       aisCount = res.aisCorrelatedCount;
-    } else {
-      // Drop hysteresis state while fusion is off so a later re-enable starts
-      // clean instead of reusing target→MMSI mappings nothing has maintained.
+    } else if (aisAssignment.size > 0) {
+      // Nothing to correlate — fusion off, or no visual target at all. Drop the
+      // hysteresis state so a later cycle starts from live associations instead
+      // of target→MMSI mappings nothing has maintained (their target keys are
+      // gone in the no-targets case anyway).
       aisAssignment = new Map<string, string>();
     }
 
@@ -247,7 +269,8 @@ export = function (app: ServerApp): Plugin {
   // and a day/night confidence. Re-run on a timer so a restarted container
   // re-learns the settings.
   async function syncContainer(): Promise<void> {
-    if (!client) return;
+    const c = client;
+    if (!c) return;
     // Always carry the master on/off and the object-type selection so a
     // restarted container re-learns both even when context control is off.
     const body: ControlBody = {
@@ -267,8 +290,7 @@ export = function (app: ServerApp): Plugin {
     if (cfg.enableContextControl) {
       const own = readOwnShip(app, cfg.ownNavMaxAgeS);
       const underway = (own.sog ?? 0) >= cfg.underwaySogMs;
-      const hour = new Date().getHours();
-      const night = hour < 6 || hour >= 21;
+      const night = isNightNow(own.position);
       // Underway: watch ahead. Low speed (docking/manoeuvring): watch astern.
       nextCamera = underway ? 'forward' : 'aft';
       nextModeHint = underway ? 'underway' : 'docking';
@@ -282,7 +304,10 @@ export = function (app: ServerApp): Plugin {
         : cfg.minConfidence;
     }
     try {
-      await client.control(body);
+      await c.control(body);
+      // The plugin was stopped (or restarted with a new client) while the
+      // request was in flight: its outcome belongs to the old instance.
+      if (client !== c) return;
       // Only reflect a camera switch locally once the container accepted it.
       if (nextCamera) {
         activeCamera = nextCamera;
@@ -293,23 +318,42 @@ export = function (app: ServerApp): Plugin {
     }
   }
 
+  // Night lowers the detection threshold, so it has to mean "dark here", not
+  // "late on the server's clock". A boat computer commonly runs UTC and the
+  // vessel crosses time zones; at Baltic latitudes the hour rule is wrong in
+  // both directions — the sun is still up at 23:00 in June (the threshold drops
+  // while it is broad daylight) and it is dark by 16:00 in December (dim
+  // targets go unhelped). Fall back to the hour only with no position.
+  function isNightNow(position: LatLon | null, at: Date = new Date()): boolean {
+    if (position) return isNight(position, at);
+    const hour = at.getHours();
+    return hour < 6 || hour >= 21;
+  }
+
   let lastMismatchSig: string | null = null;
   // Transition tracking for the container health notifications so we emit on
   // change only, not every 5s poll cycle.
   let containerDownActive = false;
+  // Degraded is tracked twice: the fault (which cameras, which causes) decides
+  // when to log, the full text decides when to refresh the notification.
   let lastDegradedSig: string | null = null;
+  let lastDegradedDetail: string | null = null;
 
   async function checkHealth(): Promise<void> {
-    if (!client || !notifier) return;
+    const c = client;
+    if (!c || !notifier) return;
     let info: HealthInfo;
     try {
-      info = await client.health();
+      info = await c.health();
     } catch (e) {
+      // Stopped mid-poll: don't re-raise a notification clearAll() just retracted.
+      if (client !== c || !notifier) return;
       // Container unreachable supersedes any status-derived alert: clear a
       // previously-latched degraded/label warning so it can't linger
       // contradicting the containerDown alarm through a sustained outage.
       if (lastDegradedSig !== null) {
         lastDegradedSig = null;
+        lastDegradedDetail = null;
         notifier.clearContainerDegraded();
       }
       if (lastMismatchSig !== null) {
@@ -326,6 +370,7 @@ export = function (app: ServerApp): Plugin {
       }
       return;
     }
+    if (client !== c || !notifier) return;
     if (containerDownActive) {
       containerDownActive = false;
       notifier.clearContainerDown();
@@ -345,15 +390,24 @@ export = function (app: ServerApp): Plugin {
         );
       }
       const detail = parts.length ? parts.join('; ') : 'unspecified';
-      const sig = detail;
+      const msg = `Vision container degraded — ${detail}.`;
+      if (detail !== lastDegradedDetail) {
+        // Keep the operator's notification current, stall age included.
+        lastDegradedDetail = detail;
+        notifier.setContainerDegraded(msg);
+      }
+      // Log only when the fault changes. The stall age is a live counter, so
+      // logging on every text change wrote a line per poll for as long as a
+      // camera stayed down: 22 lines for one 110 s outage on the boat, some
+      // 17,000 a day for a dome that stays dead.
+      const sig = degradedFaultKey(detail);
       if (sig !== lastDegradedSig) {
         lastDegradedSig = sig;
-        const msg = `Vision container degraded — ${detail}.`;
-        notifier.setContainerDegraded(msg);
         app.error(`vision-ai: ${msg}`);
       }
     } else if (lastDegradedSig !== null) {
       lastDegradedSig = null;
+      lastDegradedDetail = null;
       notifier.clearContainerDegraded();
     }
 
@@ -446,16 +500,28 @@ export = function (app: ServerApp): Plugin {
       stream.start();
 
       lastStatsAt = Date.now();
-      processTimer = setInterval(processCycle, cfg.processIntervalMs);
+      // Timer callbacks run outside any caller's try/catch: an unguarded throw
+      // here is an uncaughtException (and an unhandled rejection in the async
+      // pair below), which takes down the whole SignalK server — not just this
+      // plugin. Log and keep the timer running instead.
+      processTimer = setInterval(() => {
+        try {
+          processCycle();
+        } catch (e) {
+          app.error(`vision-ai: process cycle failed: ${e}`);
+        }
+      }, cfg.processIntervalMs);
       // Always sync (the object-type selection must reach the container even
       // when context control is off); push once now, then keep it in sync.
       // The container health check (reachability, degraded status, model
       // labels) runs once on start and then every sync cycle.
-      void syncContainer();
-      void checkHealth();
+      const guard = (p: Promise<void>) =>
+        void p.catch((e) => app.error(`vision-ai: container poll failed: ${e}`));
+      guard(syncContainer());
+      guard(checkHealth());
       syncTimer = setInterval(() => {
-        void syncContainer();
-        void checkHealth();
+        guard(syncContainer());
+        guard(checkHealth());
       }, 5000);
       app.debug(`vision-ai: started, container=${cfg.containerUrl}`);
     },
@@ -468,6 +534,12 @@ export = function (app: ServerApp): Plugin {
       if (notifier) notifier.clearAll();
       if (publisher) publisher.reset();
       if (cpa) cpa.reset();
+      // Abort whatever is still in flight, then drop the instances: a request
+      // that resolves after stop() (see the identity checks in syncContainer /
+      // checkHealth) must not publish, notify, or land a pre-restart /control
+      // body on the container behind the restarted plugin's own push.
+      if (client) client.close();
+      client = publisher = notifier = cpa = null;
       targets.clear();
       aisAssignment = new Map<string, string>();
       lastEventByCamera.clear();
@@ -480,6 +552,7 @@ export = function (app: ServerApp): Plugin {
       lastMismatchSig = null;
       containerDownActive = false;
       lastDegradedSig = null;
+      lastDegradedDetail = null;
       stream = null;
     },
 

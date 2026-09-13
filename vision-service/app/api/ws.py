@@ -40,10 +40,36 @@ async def ws_events(websocket: WebSocket):
                 await websocket.send_json(ev)
 
         queue = pipeline.events.subscribe()
-        while True:
-            ev = await queue.get()
-            if match(ev):
-                await websocket.send_json(ev)
+        # A loop that only ever SENDS never learns that the client went away:
+        # the disconnect is delivered as a receive message (or as a failed
+        # send), so with no events flowing — detection disabled at a dock, or a
+        # ?camera= filter matching nothing — a departed client would sit here
+        # indefinitely, holding one of the max_ws_clients slots. Race the event
+        # queue against the socket instead.
+        receiver = asyncio.ensure_future(websocket.receive())
+        getter = None
+        try:
+            while True:
+                if getter is None:
+                    getter = asyncio.ensure_future(queue.get())
+                done, _ = await asyncio.wait(
+                    {receiver, getter}, return_when=asyncio.FIRST_COMPLETED)
+                if receiver in done:
+                    message = receiver.result()
+                    if message.get("type") == "websocket.disconnect":
+                        break
+                    # Clients aren't expected to send anything; ignore it and
+                    # keep listening for the disconnect.
+                    receiver = asyncio.ensure_future(websocket.receive())
+                if getter in done:
+                    ev = getter.result()
+                    getter = None
+                    if match(ev):
+                        await websocket.send_json(ev)
+        finally:
+            receiver.cancel()
+            if getter is not None:
+                getter.cancel()
     except WebSocketDisconnect:
         pass
     except asyncio.CancelledError:  # pragma: no cover

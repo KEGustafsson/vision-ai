@@ -195,7 +195,10 @@ for p in navigation/position navigation/headingTrue navigation/speedOverGround n
   echo -n "$p = "; curl -s "$SK/signalk/v1/api/vessels/self/$p" | jq -c '.value'
 done
 ```
-**PASS:** position + heading at minimum. Without heading, the synthetic vessels'
+**PASS:** position + `headingTrue` at minimum. Only `navigation.headingTrue` is
+used — a magnetic heading is **not** converted (compass deviation is unknown; on
+Arabella the fluxgate plus variation read 33° off the GNSS true heading) and COG
+is never substituted. Without a true heading the synthetic vessels'
 `navigation.position` will be null (not published) and 4.2–4.4 can't run — fix
 the nav source first.
 

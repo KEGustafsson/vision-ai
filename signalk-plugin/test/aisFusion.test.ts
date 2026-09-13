@@ -104,6 +104,18 @@ describe('aisFusion', () => {
     expect(res.darkTargetKeys).toHaveLength(0);
   });
 
+  it('does not call a target dark when own heading is missing', () => {
+    // No heading => no true bearing => no correlation is even attempted
+    // (pairScore and hasNearMissContact both bail out). Declaring every
+    // in-range vessel "dark" through a heading dropout is a false-alarm burst,
+    // not a finding: the claim is unfalsifiable, so it must not be made.
+    const t = visualTarget(deg2rad(270), 400);
+    t.bearingTrue = null;
+    const res = fuse([t], [], cfg);
+    expect(res.darkTargetKeys).toHaveLength(0);
+    expect(res.targets[0].aisCorrelated).toBe(false); // still tracked and published
+  });
+
   it('assigns one-to-one: two targets cannot share one AIS contact', () => {
     const brg = deg2rad(90);
     const aisPos = destinationPoint(own.position, brg, 600);

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 import time
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
@@ -83,9 +85,63 @@ def recent_events(request: Request, n: int = Query(20, ge=1, le=1000)):
     return _pipeline(request).events.recent(n)
 
 
+# How long a client_generation stays authoritative. The fence only has to cover
+# the seconds around a client restart, so it self-disarms when the client goes
+# quiet: a boat computer without an RTC boots at some arbitrary earlier time and
+# its plugin would then stamp a LOWER generation than the container remembers
+# from before the reboot. Expiring the fence means that client is accepted after
+# one idle window instead of being locked out for the life of the container.
+# The plugin re-pushes every 5 s, so a live client keeps the fence fresh.
+_CONTROL_FENCE_TTL_S = 30.0
+# Serialises the whole of /control — the fence decision AND the writes it
+# guards. FastAPI runs a sync handler in a threadpool, so with the check alone
+# under the lock a superseded request could pass it, be preempted, and then
+# apply its fields after the newer request had already applied its own: exactly
+# the outcome the fence exists to prevent. /control is a low-rate endpoint (the
+# plugin pushes every 5 s) and none of the setters block, so serialising it
+# costs nothing.
+_control_lock = threading.RLock()
+
+
+def _fence_allows(state, generation: Optional[int]) -> bool:
+    """Whether a control request may be applied, updating the fence if so.
+
+    The caller must hold ``_control_lock`` for the fence check and for the
+    writes that follow, or the two can interleave (see the lock's comment).
+
+    Requests without a generation are always applied (an older client that
+    doesn't send one) and never move the fence.
+    """
+    if generation is None:
+        return True
+    now = time.monotonic()
+    seen = getattr(state, "control_generation", None)
+    seen_at = getattr(state, "control_generation_at", 0.0)
+    if seen is not None and now - seen_at <= _CONTROL_FENCE_TTL_S and generation < seen:
+        return False
+    state.control_generation = generation
+    state.control_generation_at = now
+    return True
+
+
 @router.post("/control")
 def control(request: Request, body: ControlRequest):
     p = _pipeline(request)
+    with _control_lock:
+        return _apply_control(p, request.app.state, body)
+
+
+def _apply_control(p, state, body: ControlRequest) -> dict:
+    """Apply a control request. Caller holds ``_control_lock``."""
+    if not _fence_allows(state, body.client_generation):
+        # A request composed by an older client instance, overtaken by the one
+        # currently talking to us. Applying it would silently restore settings
+        # the operator has already changed.
+        raise HTTPException(
+            status_code=409,
+            detail=("stale control request: client_generation "
+                    f"{body.client_generation} is older than the active client"),
+        )
     applied = {}
     if body.confidence is not None:
         p.set_confidence(body.confidence)
@@ -140,10 +196,31 @@ def ptz(request: Request, camera: str, body: PtzRequest):
     return {"ok": True, "action": body.action}
 
 
+# A snapshot waits at most this long for the next annotated frame. Generous
+# against a slow frame (inference + encode at a low target_fps) while still
+# answering promptly when a camera is genuinely dead.
+_SNAPSHOT_WAIT_S = 2.0
+
+
 @router.get("/snapshot/{camera}")
-def snapshot(request: Request, camera: str):
+async def snapshot(request: Request, camera: str):
     p = _pipeline(request)
+    # Reject an unknown camera up front: no worker will ever publish for it, so
+    # otherwise the request waits the full timeout only to 404 anyway, and each
+    # new name left a demand entry behind (the store keys on the name, and only
+    # a real camera's entries are ever replaced).
+    if camera not in p.workers:
+        raise HTTPException(status_code=404, detail=f"unknown camera {camera}")
+    # Mark demand: the pipeline skips annotating and encoding while nobody is
+    # watching, so this both asks for a frame and keeps the display path warm
+    # for a client that polls snapshots.
+    p.frames.note_demand(camera)
     jpeg = p.frames.get(camera)
+    if jpeg is None:
+        # Nothing stored: either the camera hasn't produced yet or the display
+        # path was idle. Wait briefly for the next frame instead of returning a
+        # 404 the caller would only have to retry.
+        jpeg = await p.frames.wait_for_frame(camera, timeout=_SNAPSHOT_WAIT_S)
     if jpeg is None:
         raise HTTPException(status_code=404, detail=f"no frame for camera {camera}")
     return Response(content=jpeg, media_type="image/jpeg")

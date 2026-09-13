@@ -14,6 +14,10 @@ interface Sample {
   n: number; // north metres
   refLat: number;
   refLon: number;
+  // Which position this sample came from. A finite difference across a change
+  // of source would read the difference between a monocular estimate and a GPS
+  // fix — tens of metres in one cycle — as target motion.
+  fromAis: boolean;
 }
 
 function toLocal(ref: LatLon, p: LatLon): { e: number; n: number } {
@@ -56,15 +60,27 @@ export class CpaEstimator {
       // own velocity — leaves the target unresolved instead of preserving a stale
       // cpa/tcpa/threatLevel that would keep a collision alarm up on unsupported data.
       clearCpa(tgt);
-      if (!tgt.position || !own.position) continue;
+      // Once a target is correlated, use the contact's OWN reported position
+      // rather than the monocular estimate. Range from a single camera carries
+      // tens of percent of error, and pairing that with the precise AIS
+      // velocity below put a known vessel's CPA tens of metres out and made the
+      // threat level flap across cycles. `tgt.position` stays the visual
+      // estimate — it is what the camera saw and what the blip publishes.
+      // Truthiness, not `!== null`: a target built before this field existed
+      // (or by an older caller) carries `undefined`, which would select the AIS
+      // branch and then find no position at all.
+      const useAis = tgt.aisCorrelated && !!tgt.aisPosition;
+      const at = useAis ? (tgt.aisPosition as LatLon) : tgt.position;
+      if (!at || !own.position) continue;
       active.add(tgt.key);
-      const cur = toLocal(own.position, tgt.position);
+      const cur = toLocal(own.position, at);
       const sample: Sample = {
         t,
         e: cur.e,
         n: cur.n,
         refLat: own.position.latitude,
         refLon: own.position.longitude,
+        fromAis: useAis,
       };
       const prev = this.history.get(tgt.key);
       this.history.set(tgt.key, sample);
@@ -78,6 +94,8 @@ export class CpaEstimator {
         vtN = tgt.aisSog * Math.cos(tgt.aisCog);
       } else {
         if (!prev) continue; // need a previous fix for finite-difference velocity
+        // Don't difference across a change of position source (see Sample).
+        if (prev.fromAis !== useAis) continue;
         const dt = t - prev.t;
         if (dt < 0.2) continue; // need a meaningful baseline
         // Re-express the previous target position in the current local frame so

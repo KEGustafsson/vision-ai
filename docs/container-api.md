@@ -25,7 +25,7 @@ channel (the same split described in [architecture.md](architecture.md)).
 | `GET /config` | Effective settings (RTSP creds redacted) | `200` settings object | — |
 | `GET /cameras` | Configured camera names | `200` `["forward","aft"]` | — |
 | `GET /events/recent?n=` | Last `n` detection events (`n` 1–1000, default 20) | `200` `DetectionEvent[]` | — |
-| `POST /control` | Change runtime behaviour, no restart | `200` `{ "applied": { … } }` | `404` unknown camera |
+| `POST /control` | Change runtime behaviour, no restart | `200` `{ "applied": { … } }` | `404` unknown camera · `409` superseded client |
 | `GET /ptz` | Names of PTZ-capable cameras | `200` `{ "cameras": [...] }` | — |
 | `POST /ptz/{camera}` | ONVIF pan/tilt/zoom | `200` `{ "ok": true, "action": … }` | `404` no PTZ · `400` bad action · `502` camera unreachable |
 | `GET /snapshot/{camera}` | Latest annotated frame | `200` `image/jpeg` | `404` no frame yet |
@@ -92,12 +92,28 @@ annotated overlay and the event stream always agree.
   "min_target_range_m": 8,        // drop closer detections (person exempt); 0 disables
   "mode_hint": "docking",         // "underway" | "docking" | "anchored"
   "labels": ["person", "vessel"], // canonical labels to surface; [] => all
-  "enabled": true                  // master on/off: false releases cameras, stops inference
+  "enabled": true,                 // master on/off: false releases cameras, stops inference
+  "client_generation": 1757761234  // optional ordering token — see below
 }
 
 // response:
 { "applied": { "active_camera": "aft", "confidence": 0.45 } }
 ```
+
+**`client_generation`** identifies the client instance that composed the
+request; the plugin stamps its own start time. A request whose token is older
+than the one last seen is refused with `409` and **nothing is applied** — the
+plugin is stopped and restarted whenever its settings are saved, and a request
+composed before that restart can otherwise be delivered afterwards, landing
+behind the new instance's push and quietly restoring the settings the operator
+just changed. The field is optional and additive: a client that omits it is
+applied as before, and omitting it never moves the fence.
+
+The fence covers the seconds around a restart, so it expires once the client
+goes quiet (the plugin re-pushes every 5 s, which keeps it fresh). That matters
+on a boat computer with no battery-backed clock: after a reboot its plugin can
+stamp a *lower* token than the container remembers from before, and an
+unexpiring fence would refuse that plugin for the life of the container.
 
 ### `POST /ptz/{camera}`
 
@@ -111,10 +127,23 @@ velocities in `-1..1` (`+pan` = right, `+tilt` = up, `+zoom` = in).
 ### `GET /snapshot/{camera}` · `GET /stream/{camera}.mjpg`
 
 `snapshot` returns the single latest annotated JPEG. `stream` is a
-`multipart/x-mixed-replace; boundary=frame` MJPEG feed that emits only newly
-produced frames (output rate tracks real production, not the poll rate), so a
-slow client can never stall inference. Stream clients are capped
-(`server.max_stream_clients`); over the cap returns `503`.
+`multipart/x-mixed-replace; boundary=frame` MJPEG feed; each frame is forwarded
+as soon as the pipeline produces it (output rate tracks real production, and
+nothing is re-sent), and a slow client can never stall inference.
+Stream clients are capped (`server.max_stream_clients`); over the cap returns
+`503`.
+
+On the **CPU/Jetson backends** (`mock`, `cpu`, `jetson`), annotating and
+JPEG-encoding is done **only while someone is watching** — a live stream client,
+or for a few seconds after a `snapshot` — so a vessel underway with the video
+closed spends that CPU on detection instead. A `snapshot` after an idle period
+therefore waits briefly for the next frame rather than returning a stale one;
+`404` means no frame arrived in that window (camera down, or detection
+disabled). The **`deepstream` backend is not demand-gated**: its overlay
+(`nvdsosd`) and JPEG encode (`nvjpegenc`) are elements inside the GStreamer
+graph and run for every frame regardless of viewers — on that path the work is
+on the GPU/NVJPG block rather than the CPU. Either way, detection, events and
+the WebSocket stream are unaffected by whether anyone is watching the video.
 
 ## WebSocket — `GET /ws/events`
 
