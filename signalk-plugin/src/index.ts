@@ -509,9 +509,11 @@ export = function (app: ServerApp): Plugin {
       if (notifier) notifier.clearAll();
       if (publisher) publisher.reset();
       if (cpa) cpa.reset();
-      // Drop the instances so an in-flight sync/health request that resolves
-      // after stop() (see the identity checks in those functions) can't publish
-      // or notify through a torn-down plugin; start() rebuilds them all.
+      // Abort whatever is still in flight, then drop the instances: a request
+      // that resolves after stop() (see the identity checks in syncContainer /
+      // checkHealth) must not publish, notify, or land a pre-restart /control
+      // body on the container behind the restarted plugin's own push.
+      if (client) client.close();
       client = publisher = notifier = cpa = null;
       targets.clear();
       aisAssignment = new Map<string, string>();

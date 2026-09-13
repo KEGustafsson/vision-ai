@@ -132,3 +132,33 @@ def test_display_path_goes_idle_and_drops_its_frame_when_nobody_watches():
         assert pipeline.frames.get("forward") is None
         # Detection itself never stopped — only the display path idled.
         assert client.get("/events/recent?n=1").json()
+
+
+def test_wait_for_frame_returns_a_frame_stored_before_the_wait_began():
+    """snapshot() looks once, then waits. A frame stored between those two
+    steps sets no event the waiter can see, so without re-reading the store the
+    2 s wait would end in a spurious 404 for a camera that is producing fine."""
+    async def scenario():
+        frames = LatestFrame()
+        frames.bind_loop(asyncio.get_running_loop())
+        # Landing before any waiter exists is exactly the race: no wake-up.
+        frames.set("forward", b"already-here")
+        assert await frames.wait_for_frame("forward", timeout=0.05) == b"already-here"
+        assert frames.wanted("forward") is False  # waiter cleaned up
+
+    run(scenario())
+
+
+def test_snapshot_404s_immediately_for_an_unknown_camera():
+    settings = load_settings("mock")
+    app = create_app(settings)
+    with TestClient(app) as client:
+        started = time.monotonic()
+        r = client.get("/snapshot/nosuch")
+        elapsed = time.monotonic() - started
+        assert r.status_code == 404
+        # Waiting out the snapshot timeout for a camera that can never produce
+        # would be a free way to tie up the event loop.
+        assert elapsed < 1.0
+        # ...and the unknown name left no demand entry behind.
+        assert app.state.pipeline.frames.wanted("nosuch") is False

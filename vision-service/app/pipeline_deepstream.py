@@ -442,7 +442,10 @@ class DeepStreamPipeline:
             if self._of_failed:
                 flow.fail(self._of_failed)
 
-        self._gst = self._build_pipeline(Gst)
+        # _build_pipeline assigns self._gst as soon as the Pipeline object
+        # exists, so a throw part-way through construction still leaves the
+        # half-built graph reachable for _tear_down.
+        self._build_pipeline(Gst)
 
         bus = self._gst.get_bus()
         bus.add_signal_watch()
@@ -888,6 +891,13 @@ class DeepStreamPipeline:
     def _build_pipeline(self, Gst):
         """Create, configure, and link all GStreamer/DeepStream elements."""
         pipeline = Gst.Pipeline.new("vision-ai-ds")
+        # Publish it immediately. Construction below can raise (a missing
+        # plugin, a property a build lacks, NVMM pressure), and only a pipeline
+        # reachable through self._gst can be driven to NULL by _tear_down —
+        # GStreamer refuses to dispose elements left in READY/PAUSED, so an
+        # unreachable half-built graph holds its RTSP sockets, decoder
+        # instances and buffer pools for the life of the process.
+        self._gst = pipeline
         cams = self.settings.cameras
         n = len(cams)
         # nvstreammux output = display + geometry resolution (native camera res).

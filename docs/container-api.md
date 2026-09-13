@@ -117,13 +117,17 @@ nothing is re-sent), and a slow client can never stall inference.
 Stream clients are capped (`server.max_stream_clients`); over the cap returns
 `503`.
 
-Annotating and JPEG-encoding is done **only while someone is watching** — a live
-stream client, or for a few seconds after a `snapshot` — so a vessel underway
-with the video closed spends that CPU on detection instead. A `snapshot` after
-an idle period therefore waits briefly for the next frame rather than returning
-a stale one; `404` means no frame arrived in that window (camera down, or
-detection disabled). Detection, events and the WebSocket stream are unaffected
-by whether anyone is watching the video.
+On the **CPU/Jetson backends** (`mock`, `cpu`, `jetson`), annotating and
+JPEG-encoding is done **only while someone is watching** — a live stream client,
+or for a few seconds after a `snapshot` — so a vessel underway with the video
+closed spends that CPU on detection instead. A `snapshot` after an idle period
+therefore waits briefly for the next frame rather than returning a stale one;
+`404` means no frame arrived in that window (camera down, or detection
+disabled). The **`deepstream` backend is not demand-gated**: its overlay
+(`nvdsosd`) and JPEG encode (`nvjpegenc`) are elements inside the GStreamer
+graph and run for every frame regardless of viewers — on that path the work is
+on the GPU/NVJPG block rather than the CPU. Either way, detection, events and
+the WebSocket stream are unaffected by whether anyone is watching the video.
 
 ## WebSocket — `GET /ws/events`
 

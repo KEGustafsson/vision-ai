@@ -40,6 +40,29 @@ _FFMPEG_LOW_LATENCY_OPTIONS = (
 )
 
 
+def capture_params() -> list:
+    """Open-time parameters for the FFmpeg capture.
+
+    The timeout properties are **open-only**: they install FFmpeg's interrupt
+    callback as the capture is created, so setting them afterwards (as this used
+    to) is a no-op and OpenCV's 30 s defaults apply instead — a half-dead camera
+    then blocks the reader for 30 s per attempt.
+
+    Only properties the FFmpeg backend actually consumes may appear here. It
+    rejects the WHOLE parameter list if any entry goes unused, and the capture
+    then never opens — so ``CAP_PROP_BUFFERSIZE`` (unsupported there, and a
+    no-op for network streams) must not be in it. Low-latency buffering comes
+    from ``_FFMPEG_LOW_LATENCY_OPTIONS`` instead.
+    """
+    params: list = []
+    for name, val in (("CAP_PROP_OPEN_TIMEOUT_MSEC", _OPEN_TIMEOUT_MS),
+                      ("CAP_PROP_READ_TIMEOUT_MSEC", _READ_TIMEOUT_MS)):
+        prop = getattr(cv2, name, None)
+        if prop is not None:
+            params += [prop, val]
+    return params
+
+
 class RtspCpuSource(FrameSource):
     def __init__(self, name: str, url: str):
         super().__init__(name)
@@ -67,17 +90,7 @@ class RtspCpuSource(FrameSource):
         self._reader.start()
 
     def _open_capture(self) -> Optional["cv2.VideoCapture"]:
-        # The timeout properties are open-only: they install FFmpeg's interrupt
-        # callback as the capture is created, so setting them afterwards (as
-        # this used to) is a no-op and OpenCV's 30 s defaults apply instead —
-        # a half-dead camera then blocks the reader for 30 s per attempt.
-        params = [cv2.CAP_PROP_BUFFERSIZE, 1]
-        for name, val in (("CAP_PROP_OPEN_TIMEOUT_MSEC", _OPEN_TIMEOUT_MS),
-                          ("CAP_PROP_READ_TIMEOUT_MSEC", _READ_TIMEOUT_MS)):
-            prop = getattr(cv2, name, None)
-            if prop is not None:
-                params += [prop, val]
-        cap = cv2.VideoCapture(self._url, cv2.CAP_FFMPEG, params)
+        cap = cv2.VideoCapture(self._url, cv2.CAP_FFMPEG, capture_params())
         if not cap.isOpened():
             cap.release()
             return None

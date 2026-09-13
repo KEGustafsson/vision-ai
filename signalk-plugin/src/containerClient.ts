@@ -42,40 +42,74 @@ export interface PtzBody {
 const REQUEST_TIMEOUT_MS = 4000;
 
 export class ContainerClient {
+  // Abort handles for the requests currently in flight, so close() can drop
+  // them all (see close()).
+  private inFlight = new Set<AbortController>();
+  private closed = false;
+
   constructor(private baseUrl: string, private timeoutMs: number = REQUEST_TIMEOUT_MS) {}
 
   private url(path: string): string {
     return `${this.baseUrl.replace(/\/$/, '')}${path}`;
   }
 
-  private fetch(path: string, init: RequestInit = {}): Promise<Response> {
-    return fetch(this.url(path), { ...init, signal: AbortSignal.timeout(this.timeoutMs) });
+  /**
+   * Issue one request and return its parsed JSON body.
+   *
+   * The timeout covers the body too, not just the response headers: a
+   * container that accepts the connection and then stalls mid-body would
+   * otherwise hold the request open indefinitely.
+   */
+  private async requestJson<T>(label: string, path: string, init: RequestInit = {}): Promise<T> {
+    if (this.closed) throw new Error(`${label}: client closed`);
+    const controller = new AbortController();
+    this.inFlight.add(controller);
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    try {
+      const r = await fetch(this.url(path), { ...init, signal: controller.signal });
+      if (!r.ok) throw new Error(`${label} ${r.status}`);
+      return (await r.json()) as T;
+    } finally {
+      clearTimeout(timer);
+      this.inFlight.delete(controller);
+    }
   }
 
-  private post(path: string, body: unknown): Promise<Response> {
-    return this.fetch(path, {
+  private postJson<T>(label: string, path: string, body: unknown): Promise<T> {
+    return this.requestJson<T>(label, path, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify(body),
     });
   }
 
-  async health(): Promise<HealthInfo> {
-    const r = await this.fetch('/health');
-    if (!r.ok) throw new Error(`health ${r.status}`);
-    return (await r.json()) as HealthInfo;
+  /**
+   * Abort everything in flight and refuse further requests.
+   *
+   * Called when the plugin stops. Without it, a `/control` body composed before
+   * the stop can still land on the container after the restarted plugin has
+   * pushed its new settings, leaving the container on the old confidence,
+   * labels or enabled state until the next sync corrects it. Dropping the
+   * request before it is delivered is the client's half of that; a request the
+   * container has already accepted is beyond our reach (see the PR discussion
+   * on fencing `/control` with a generation token).
+   */
+  close(): void {
+    this.closed = true;
+    for (const c of this.inFlight) c.abort();
+    this.inFlight.clear();
   }
 
-  async control(body: ControlBody): Promise<any> {
-    const r = await this.post('/control', body);
-    if (!r.ok) throw new Error(`control ${r.status}`);
-    return r.json();
+  health(): Promise<HealthInfo> {
+    return this.requestJson<HealthInfo>('health', '/health');
   }
 
-  async ptz(camera: string, body: PtzBody): Promise<any> {
-    const r = await this.post(`/ptz/${encodeURIComponent(camera)}`, body);
-    if (!r.ok) throw new Error(`ptz ${r.status}`);
-    return r.json();
+  control(body: ControlBody): Promise<any> {
+    return this.postJson<any>('control', '/control', body);
+  }
+
+  ptz(camera: string, body: PtzBody): Promise<any> {
+    return this.postJson<any>('ptz', `/ptz/${encodeURIComponent(camera)}`, body);
   }
 
   /** URL of the list of PTZ-capable cameras (used by the proxy). */

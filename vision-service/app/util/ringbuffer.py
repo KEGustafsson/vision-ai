@@ -8,6 +8,7 @@ async subscribers (WebSocket clients) when new events arrive.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import threading
 import time
 from collections import deque
@@ -113,17 +114,23 @@ class LatestFrame:
             return time.monotonic() < self._demand_until.get(camera, 0.0)
 
     async def wait_for_frame(self, camera: str, timeout: float) -> Optional[bytes]:
-        """Wait for the next frame for *camera*, or None if none arrives in time.
+        """Wait for a frame for *camera*, or None if none arrives in time.
         Subscribing for the wait also marks demand, so a producer that had gone
         idle starts encoding again."""
+        # Subscribe BEFORE looking, so a frame stored between the look and the
+        # wait sets the event rather than being missed; and read the store again
+        # after the wait, so a frame that landed as the timeout expired is
+        # returned instead of a spurious "no frame".
         ev = self.subscribe(camera)
         try:
-            await asyncio.wait_for(ev.wait(), timeout=timeout)
-        except asyncio.TimeoutError:
-            return None
+            jpeg = self.get(camera)
+            if jpeg is not None:
+                return jpeg
+            with contextlib.suppress(asyncio.TimeoutError):
+                await asyncio.wait_for(ev.wait(), timeout=timeout)
+            return self.get(camera)
         finally:
             self.unsubscribe(camera, ev)
-        return self.get(camera)
 
     def subscribe(self, camera: str) -> "asyncio.Event":
         """Register an :class:`asyncio.Event` set whenever a frame for *camera*

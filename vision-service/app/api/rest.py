@@ -149,8 +149,14 @@ _SNAPSHOT_WAIT_S = 2.0
 @router.get("/snapshot/{camera}")
 async def snapshot(request: Request, camera: str):
     p = _pipeline(request)
-    # Mark demand first: the pipeline skips annotating and encoding while nobody
-    # is watching, so this both asks for a frame and keeps the display path warm
+    # Reject an unknown camera up front: no worker will ever publish for it, so
+    # otherwise the request waits the full timeout only to 404 anyway, and each
+    # new name left a demand entry behind (the store keys on the name, and only
+    # a real camera's entries are ever replaced).
+    if camera not in p.workers:
+        raise HTTPException(status_code=404, detail=f"unknown camera {camera}")
+    # Mark demand: the pipeline skips annotating and encoding while nobody is
+    # watching, so this both asks for a frame and keeps the display path warm
     # for a client that polls snapshots.
     p.frames.note_demand(camera)
     jpeg = p.frames.get(camera)

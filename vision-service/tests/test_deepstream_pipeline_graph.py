@@ -323,3 +323,25 @@ def test_teardown_removes_the_watchdog_timer_and_the_bus_watch():
     # no-op rather than a double remove.
     p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
     assert removed == [4242]
+
+
+def test_a_pipeline_that_fails_to_build_is_still_reachable_for_teardown():
+    """Only a pipeline reachable through self._gst can be driven to NULL, and
+    GStreamer refuses to dispose elements left in READY/PAUSED — so a graph that
+    throws part-way through construction must already be published, or every
+    failed bring-up leaks its sockets, decoders and buffer pools."""
+    p = _pipeline()
+    graph = _Graph()
+    gst = graph.gst()
+    # Fail construction immediately after the Pipeline object exists.
+    boom = RuntimeError("no such element")
+    gst.ElementFactory.make = lambda factory, name: (_ for _ in ()).throw(boom)
+
+    with pytest.raises(RuntimeError):
+        p._build_pipeline(gst)
+    assert p._gst is not None, "half-built pipeline was left unreachable"
+
+    states: list = []
+    p._gst = SimpleNamespace(set_state=states.append)
+    p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
+    assert states == [0] and p._gst is None
