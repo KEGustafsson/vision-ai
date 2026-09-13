@@ -27,6 +27,14 @@ const isHoldable = (path: string): boolean =>
   path.startsWith('notifications.vision.collision.') ||
   path.startsWith('notifications.vision.darkTarget.');
 
+// The container reports a camera stall's age as a live counter ("forward: no
+// frames for 26s"), so the degraded detail changes on every health poll while the
+// fault itself does not. This is the part that identifies the fault — which
+// cameras, which causes, how many restarts — for deciding when to log.
+export function degradedFaultKey(detail: string): string {
+  return detail.replace(/\bno frames for \d+s\b/g, 'no frames');
+}
+
 export class NotificationManager {
   private active = new Set<string>();
   private mobCounters = new Map<string, number>();

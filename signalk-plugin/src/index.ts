@@ -11,7 +11,7 @@ import { EventStream } from './eventStream';
 import { PluginConfig, schema, uiSchema, withDefaults } from './config';
 import { collectAisContacts, fuse } from './aisFusion';
 import { enrichTarget } from './enrich';
-import { NotificationManager } from './notifications';
+import { NotificationManager, degradedFaultKey } from './notifications';
 import { Publisher } from './publisher';
 import { readOwnShip } from './nav';
 import { registerRoutes, SharedState } from './router';
@@ -334,7 +334,10 @@ export = function (app: ServerApp): Plugin {
   // Transition tracking for the container health notifications so we emit on
   // change only, not every 5s poll cycle.
   let containerDownActive = false;
+  // Degraded is tracked twice: the fault (which cameras, which causes) decides
+  // when to log, the full text decides when to refresh the notification.
   let lastDegradedSig: string | null = null;
+  let lastDegradedDetail: string | null = null;
 
   async function checkHealth(): Promise<void> {
     const c = client;
@@ -350,6 +353,7 @@ export = function (app: ServerApp): Plugin {
       // contradicting the containerDown alarm through a sustained outage.
       if (lastDegradedSig !== null) {
         lastDegradedSig = null;
+        lastDegradedDetail = null;
         notifier.clearContainerDegraded();
       }
       if (lastMismatchSig !== null) {
@@ -386,15 +390,24 @@ export = function (app: ServerApp): Plugin {
         );
       }
       const detail = parts.length ? parts.join('; ') : 'unspecified';
-      const sig = detail;
+      const msg = `Vision container degraded — ${detail}.`;
+      if (detail !== lastDegradedDetail) {
+        // Keep the operator's notification current, stall age included.
+        lastDegradedDetail = detail;
+        notifier.setContainerDegraded(msg);
+      }
+      // Log only when the fault changes. The stall age is a live counter, so
+      // logging on every text change wrote a line per poll for as long as a
+      // camera stayed down: 22 lines for one 110 s outage on the boat, some
+      // 17,000 a day for a dome that stays dead.
+      const sig = degradedFaultKey(detail);
       if (sig !== lastDegradedSig) {
         lastDegradedSig = sig;
-        const msg = `Vision container degraded — ${detail}.`;
-        notifier.setContainerDegraded(msg);
         app.error(`vision-ai: ${msg}`);
       }
     } else if (lastDegradedSig !== null) {
       lastDegradedSig = null;
+      lastDegradedDetail = null;
       notifier.clearContainerDegraded();
     }
 
@@ -539,6 +552,7 @@ export = function (app: ServerApp): Plugin {
       lastMismatchSig = null;
       containerDownActive = false;
       lastDegradedSig = null;
+      lastDegradedDetail = null;
       stream = null;
     },
 
