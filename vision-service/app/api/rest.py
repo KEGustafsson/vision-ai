@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import threading
 import time
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
@@ -83,9 +85,48 @@ def recent_events(request: Request, n: int = Query(20, ge=1, le=1000)):
     return _pipeline(request).events.recent(n)
 
 
+# How long a client_generation stays authoritative. The fence only has to cover
+# the seconds around a client restart, so it self-disarms when the client goes
+# quiet: a boat computer without an RTC boots at some arbitrary earlier time and
+# its plugin would then stamp a LOWER generation than the container remembers
+# from before the reboot. Expiring the fence means that client is accepted after
+# one idle window instead of being locked out for the life of the container.
+# The plugin re-pushes every 5 s, so a live client keeps the fence fresh.
+_CONTROL_FENCE_TTL_S = 30.0
+_fence_lock = threading.Lock()
+
+
+def _fence_allows(state, generation: Optional[int]) -> bool:
+    """Whether a control request may be applied, updating the fence if so.
+
+    Requests without a generation are always applied (an older client that
+    doesn't send one) and never move the fence.
+    """
+    if generation is None:
+        return True
+    now = time.monotonic()
+    with _fence_lock:
+        seen = getattr(state, "control_generation", None)
+        seen_at = getattr(state, "control_generation_at", 0.0)
+        if seen is not None and now - seen_at <= _CONTROL_FENCE_TTL_S and generation < seen:
+            return False
+        state.control_generation = generation
+        state.control_generation_at = now
+        return True
+
+
 @router.post("/control")
 def control(request: Request, body: ControlRequest):
     p = _pipeline(request)
+    if not _fence_allows(request.app.state, body.client_generation):
+        # A request composed by an older client instance, overtaken by the one
+        # currently talking to us. Applying it would silently restore settings
+        # the operator has already changed.
+        raise HTTPException(
+            status_code=409,
+            detail=("stale control request: client_generation "
+                    f"{body.client_generation} is older than the active client"),
+        )
     applied = {}
     if body.confidence is not None:
         p.set_confidence(body.confidence)

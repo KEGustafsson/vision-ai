@@ -25,7 +25,7 @@ channel (the same split described in [architecture.md](architecture.md)).
 | `GET /config` | Effective settings (RTSP creds redacted) | `200` settings object | — |
 | `GET /cameras` | Configured camera names | `200` `["forward","aft"]` | — |
 | `GET /events/recent?n=` | Last `n` detection events (`n` 1–1000, default 20) | `200` `DetectionEvent[]` | — |
-| `POST /control` | Change runtime behaviour, no restart | `200` `{ "applied": { … } }` | `404` unknown camera |
+| `POST /control` | Change runtime behaviour, no restart | `200` `{ "applied": { … } }` | `404` unknown camera · `409` superseded client |
 | `GET /ptz` | Names of PTZ-capable cameras | `200` `{ "cameras": [...] }` | — |
 | `POST /ptz/{camera}` | ONVIF pan/tilt/zoom | `200` `{ "ok": true, "action": … }` | `404` no PTZ · `400` bad action · `502` camera unreachable |
 | `GET /snapshot/{camera}` | Latest annotated frame | `200` `image/jpeg` | `404` no frame yet |
@@ -92,12 +92,28 @@ annotated overlay and the event stream always agree.
   "min_target_range_m": 8,        // drop closer detections (person exempt); 0 disables
   "mode_hint": "docking",         // "underway" | "docking" | "anchored"
   "labels": ["person", "vessel"], // canonical labels to surface; [] => all
-  "enabled": true                  // master on/off: false releases cameras, stops inference
+  "enabled": true,                 // master on/off: false releases cameras, stops inference
+  "client_generation": 1757761234  // optional ordering token — see below
 }
 
 // response:
 { "applied": { "active_camera": "aft", "confidence": 0.45 } }
 ```
+
+**`client_generation`** identifies the client instance that composed the
+request; the plugin stamps its own start time. A request whose token is older
+than the one last seen is refused with `409` and **nothing is applied** — the
+plugin is stopped and restarted whenever its settings are saved, and a request
+composed before that restart can otherwise be delivered afterwards, landing
+behind the new instance's push and quietly restoring the settings the operator
+just changed. The field is optional and additive: a client that omits it is
+applied as before, and omitting it never moves the fence.
+
+The fence covers the seconds around a restart, so it expires once the client
+goes quiet (the plugin re-pushes every 5 s, which keeps it fresh). That matters
+on a boat computer with no battery-backed clock: after a reboot its plugin can
+stamp a *lower* token than the container remembers from before, and an
+unexpiring fence would refuse that plugin for the life of the container.
 
 ### `POST /ptz/{camera}`
 

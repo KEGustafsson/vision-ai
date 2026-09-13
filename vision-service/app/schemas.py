@@ -156,6 +156,14 @@ class ControlRequest(BaseModel):
     # Master on/off: when False the camera workers release their capture devices
     # and stop reading/inferring entirely (no frames, no events) until re-enabled.
     enabled: Optional[bool] = None
+    # Ordering token identifying the client instance that composed this request
+    # (the SignalK plugin stamps its start time). A request from an OLDER
+    # instance than the one last heard from is refused rather than applied: on
+    # a plugin restart a request composed before the restart can otherwise
+    # land after the new instance has pushed its settings and quietly restore
+    # the old ones. Optional and additive — a client that omits it is applied
+    # as before, and omitting it never moves the fence.
+    client_generation: Optional[int] = Field(None, ge=0)
 
 
 class PtzRequest(BaseModel):

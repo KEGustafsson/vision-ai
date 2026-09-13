@@ -57,6 +57,46 @@ describe('ContainerClient', () => {
     await expect(client.health()).rejects.toThrow(/health 503/);
   });
 
+  it('does not wait on an error response whose body never ends', async () => {
+    // fetch resolves on headers; undici holds the connection until the body is
+    // consumed or cancelled, so an unfinished error body would leak one
+    // connection per poll.
+    const url = await serve((_req, res) => {
+      res.writeHead(503, { 'content-type': 'application/json' });
+      res.write('{"detail":');
+    });
+    const client = new ContainerClient(url, 10000); // far longer than this should take
+    const started = Date.now();
+    await expect(client.health()).rejects.toThrow(/health 503/);
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('stamps every control with this instance\'s ordering token', async () => {
+    const bodies: any[] = [];
+    const url = await serve((req, res) => {
+      let data = '';
+      req.on('data', (c) => (data += c));
+      req.on('end', () => {
+        bodies.push(JSON.parse(data));
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end('{"applied":{}}');
+      });
+    });
+    const client = new ContainerClient(url, 1000, 4242);
+    await client.control({ enabled: true });
+    await client.control({ enabled: false });
+    // The container refuses a body from a superseded plugin instance by this
+    // token, so every control must carry it — not just the first.
+    expect(bodies.map((b) => b.client_generation)).toEqual([4242, 4242]);
+    expect(bodies[0].enabled).toBe(true);
+  });
+
+  it('gives each plugin instance a token that rises across restarts', () => {
+    const first = new ContainerClient('http://127.0.0.1:1');
+    const second = new ContainerClient('http://127.0.0.1:1');
+    expect((second as any).generation).toBeGreaterThanOrEqual((first as any).generation);
+  });
+
   it('close() aborts an in-flight request and refuses new ones', async () => {
     let delivered = 0;
     const url = await serve((_req, res) => {
