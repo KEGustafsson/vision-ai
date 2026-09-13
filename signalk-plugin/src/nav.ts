@@ -1,9 +1,15 @@
 // Read own-ship navigation state from SignalK. headingTrue/cog are radians and
 // sog is m/s in the SignalK model, so no conversion is needed.
 //
-// Heading comes from `navigation.headingTrue`, or from
-// `navigation.headingMagnetic` + `navigation.magneticVariation` on the many
-// small vessels that carry only a magnetic compass. Never from COG.
+// Heading comes from `navigation.headingTrue` and nothing else. Not from
+// `navigation.headingMagnetic` + `navigation.magneticVariation`: a fluxgate
+// compass carries whatever deviation its installation gives it, and nothing in
+// SignalK says how large that is. Measured on Arabella at the dock, the compass
+// plus variation read a steady 33° off the GNSS-compass true heading — every
+// target would have been placed 33° wrong and correlated against the wrong AIS
+// contacts, while looking healthy. And not from COG: leeway and current make
+// course over ground the wrong answer for where the cameras point. With no true
+// heading the result is null, which downstream treats as unknown.
 //
 // Reads are freshness-aware: SignalK retains the last value of a path long after
 // the sensor producing it goes quiet, so an unguarded read can hand back a frozen
@@ -14,7 +20,6 @@
 // is older than it (or unparseable) is dropped to null and the result is flagged
 // `stale`, which downstream treats as "unknown", never as "stationary".
 
-import { normalizeRad } from './geo';
 import { ServerApp } from './skapp';
 import { OwnShip, LatLon } from './types';
 
@@ -59,41 +64,11 @@ export function readOwnShip(app: ServerApp, maxAgeS = 0, now: number = Date.now(
   const h = readPath(app, 'navigation.headingTrue', maxAgeMs, now);
   const s = readPath(app, 'navigation.speedOverGround', maxAgeMs, now);
   const c = readPath(app, 'navigation.courseOverGroundTrue', maxAgeMs, now);
-
-  // Many small vessels carry only a fluxgate/NMEA0183 compass and publish
-  // navigation.headingMagnetic. Without a true heading nothing downstream works
-  // at all — no georeferencing, no AIS fusion, no CPA, no position on a
-  // man-overboard — and nothing tells the operator why. Derive it when the
-  // variation is available. NOT from COG: leeway and current make course over
-  // ground the wrong answer for where the cameras are pointing.
-  let headingTrue = num(h.raw);
-  let headingStale = h.stale;
-  if (headingTrue === null) {
-    const hm = readPath(app, 'navigation.headingMagnetic', maxAgeMs, now);
-    const mv = readPath(app, 'navigation.magneticVariation', maxAgeMs, now);
-    const magnetic = num(hm.raw);
-    const variation = num(mv.raw);
-    if (magnetic !== null && variation !== null) {
-      // SignalK carries both in radians, variation positive east: true =
-      // magnetic + variation. Both reads are fresh to get here (readPath drops
-      // an aged-out value to null), so the heading now in use is fresh even if
-      // the true-heading path we fell back from had itself aged out.
-      headingTrue = normalizeRad(magnetic + variation);
-      headingStale = false;
-    } else {
-      // Nothing usable. If either fallback path was dropped for age, that has
-      // to be carried: heading is unknown *because* a source went stale, and
-      // reporting stale=false here would claim nothing had aged out — the one
-      // thing OwnShip.stale exists to say.
-      headingStale = headingStale || hm.stale || mv.stale;
-    }
-  }
-
   return {
     position: pos(p.raw),
-    headingTrue,
+    headingTrue: num(h.raw),
     sog: num(s.raw),
     cog: num(c.raw),
-    stale: p.stale || headingStale || s.stale || c.stale,
+    stale: p.stale || h.stale || s.stale || c.stale,
   };
 }

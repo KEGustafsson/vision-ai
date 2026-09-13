@@ -37,9 +37,10 @@ relative_bearing_deg = (HFOV / 2) * (2 * px / W - 1)
 
 Positive = starboard (right of centre), negative = port. The camera's mounting
 offset (`bearing_offset_deg`: forward = 0, aft = 180) is added so the value is
-relative to the bow. The plugin then adds own heading to get true bearing —
-`navigation.headingTrue`, or `navigation.headingMagnetic` +
-`navigation.magneticVariation` when that is all the vessel publishes.
+relative to the bow. The plugin then adds own `navigation.headingTrue` to get
+true bearing. Only the true heading is used: never magnetic heading plus
+variation (a compass's installation deviation is unknown to SignalK — on Arabella
+it measured 33°) and never COG. With no true heading there is no true bearing.
 
 Implemented in `app/geometry/bearing.py`; verified in `tests/test_geometry.py`.
 
