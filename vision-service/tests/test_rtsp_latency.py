@@ -2,6 +2,7 @@ import threading
 
 import cv2
 import numpy as np
+import pytest
 
 from app.camera import rtsp_cpu
 from app.camera.rtsp_cpu import _FFMPEG_LOW_LATENCY_OPTIONS, RtspCpuSource
@@ -128,3 +129,54 @@ def test_capture_params_carry_the_open_and_read_timeouts():
     # CAP_PROP_BUFFERSIZE is not consumed by the FFmpeg backend: including it
     # makes the open fail outright.
     assert cv2.CAP_PROP_BUFFERSIZE not in params
+
+
+class _ClosingCapture:
+    """A capture whose read fails just as close() lands — the shutdown race."""
+
+    def __init__(self, source, fail="return"):
+        self._source = source
+        self._fail = fail
+        self.released = False
+
+    def read(self):
+        # close() ran while this read was pending.
+        self._source._closed = True
+        if self._fail == "raise":
+            raise RuntimeError("stream closed under us")
+        return False, None
+
+    def release(self):
+        self.released = True
+
+
+def _closing_source(fail):
+    src = RtspCpuSource.__new__(RtspCpuSource)
+    src._url = "rtsp://camera.example/live"
+    src._closed = False
+    src._lock = threading.Lock()
+    src._frame_ready = threading.Condition(src._lock)
+    src._latest_img = None
+    src._latest_seq = 0
+    src._last_delivered_seq = 0
+    src._last_error = None
+    src._last_reopen = 0.0
+    src._cap = _ClosingCapture(src, fail)
+    return src
+
+
+@pytest.mark.parametrize("fail", ["return", "raise"])
+def test_the_reader_does_not_dial_the_camera_again_while_shutting_down(monkeypatch, fail):
+    """A read already in flight fails as close() takes the capture away.
+    Reconnecting on that failure would open a fresh RTSP connection on the way
+    out, and an open can take longer than close() waits for this thread —
+    delaying every detection-off toggle and every restart."""
+    src = _closing_source(fail)
+    opened = []
+    monkeypatch.setattr(RtspCpuSource, "_open_capture",
+                        lambda self: opened.append(1) or None)
+
+    src._reader_loop()  # returns once _closed is observed
+
+    assert opened == [], "reconnected during shutdown"
+    assert src._cap is None  # released by the loop, which owns it

@@ -110,6 +110,10 @@ class RtspCpuSource(FrameSource):
             except Exception:
                 pass
             self._cap = None
+        if self._closed:
+            # close() landed while we were releasing: don't dial the camera
+            # again on the way out (see _reader_loop).
+            return
         self._cap = self._open_capture()  # may be None; retried next interval
 
     def _reader_loop(self) -> None:
@@ -120,6 +124,12 @@ class RtspCpuSource(FrameSource):
         releasing it from close() while this thread sat in read() risked taking
         the whole process down (both cameras and the API) — and close() runs on
         every detection-off toggle, not just at shutdown.
+
+        Recovery is skipped once close() has been called. A read that was
+        already pending fails as the capture goes away, and reconnecting on
+        that failure would dial the camera again on the way out — an open costs
+        up to the connect timeout, which is longer than close() waits for this
+        thread to finish.
         """
         try:
             while not self._closed:
@@ -136,11 +146,15 @@ class RtspCpuSource(FrameSource):
                     # every later read() returns None forever and the camera is
                     # dead until the container restarts. Log once per distinct
                     # message, reconnect, carry on.
+                    if self._closed:
+                        break
                     self._note_error(f"read failed: {exc}")
                     self._reconnect()
                     time.sleep(0.05)
                     continue
                 if not ok:
+                    if self._closed:
+                        break
                     self._reconnect()
                     time.sleep(0.05)
                     continue
