@@ -105,4 +105,60 @@ describe('readOwnShip heading', () => {
     expect(own.headingTrue).toBeNull();
     expect(own.stale).toBe(true);
   });
+
+  // The previous test has every path aged out, so `stale` would come back true
+  // from the position alone. These two age out ONLY the fallback path, with
+  // everything else fresh, so nothing but the heading can raise the flag.
+  it('flags stale when only the magnetic heading has aged out', () => {
+    const own = readOwnShip(mixedAge({ 'navigation.headingMagnetic': 'old' }), 5);
+    expect(own.headingTrue).toBeNull();
+    // "Heading unknown because a source went stale" must never read as
+    // "nothing was dropped for age" — that is the whole contract of the flag.
+    expect(own.stale).toBe(true);
+    // ...and the values that are fresh are still delivered.
+    expect(own.position).not.toBeNull();
+    expect(own.sog).toBeCloseTo(3, 6);
+  });
+
+  it('flags stale when only the variation has aged out', () => {
+    const own = readOwnShip(mixedAge({ 'navigation.magneticVariation': 'old' }), 5);
+    expect(own.headingTrue).toBeNull();
+    expect(own.stale).toBe(true);
+  });
+
+  it('stays fresh when both fallback paths are current', () => {
+    // The same stub with nothing aged out: the flag must not be sticky.
+    const own = readOwnShip(mixedAge({}), 5);
+    expect(rad2deg(own.headingTrue as number)).toBeCloseTo(88, 6);
+    expect(own.stale).toBe(false);
+  });
 });
+
+/**
+ * A stub where each path carries its own timestamp, so a single source can be
+ * aged out while the rest stay current. `navigation.headingTrue` is absent
+ * throughout, which is the case that matters: with no true heading the read of
+ * it reports `stale: false`, and a fallback path that is dropped for age has to
+ * raise the flag itself.
+ */
+function mixedAge(aged: Record<string, 'old'>): ServerApp {
+  const old = new Date(Date.now() - 60_000).toISOString();
+  const fresh = new Date().toISOString();
+  const values: Record<string, unknown> = {
+    'navigation.position': position,
+    'navigation.speedOverGround': 3,
+    'navigation.courseOverGroundTrue': deg2rad(120),
+    'navigation.headingMagnetic': deg2rad(80),
+    'navigation.magneticVariation': deg2rad(8),
+  };
+  return {
+    getSelfPath: (path: string) =>
+      path in values
+        ? { value: values[path], timestamp: aged[path] === 'old' ? old : fresh }
+        : undefined,
+    getPath: () => undefined,
+    handleMessage: () => undefined,
+    debug: () => undefined,
+    error: () => undefined,
+  } as unknown as ServerApp;
+}

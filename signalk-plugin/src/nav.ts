@@ -75,9 +75,17 @@ export function readOwnShip(app: ServerApp, maxAgeS = 0, now: number = Date.now(
     const variation = num(mv.raw);
     if (magnetic !== null && variation !== null) {
       // SignalK carries both in radians, variation positive east: true =
-      // magnetic + variation.
+      // magnetic + variation. Both reads are fresh to get here (readPath drops
+      // an aged-out value to null), so the heading now in use is fresh even if
+      // the true-heading path we fell back from had itself aged out.
       headingTrue = normalizeRad(magnetic + variation);
-      headingStale = hm.stale || mv.stale;
+      headingStale = false;
+    } else {
+      // Nothing usable. If either fallback path was dropped for age, that has
+      // to be carried: heading is unknown *because* a source went stale, and
+      // reporting stale=false here would claim nothing had aged out — the one
+      // thing OwnShip.stale exists to say.
+      headingStale = headingStale || hm.stale || mv.stale;
     }
   }
 
