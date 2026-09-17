@@ -115,6 +115,21 @@ _STALL_TIMEOUT_S = 5.0  # mirror pipeline.py: flag a camera with no frames this 
 # connections. Comfortably above the RTSP preroll time so a slow start can't
 # trigger a rebuild storm.
 _STALL_REBUILD_S = 20.0
+# Same self-heal for a SUBSET of the cameras. rtspsrc never re-establishes a
+# session it has lost, and a dead source posts nothing on the bus, so a dome
+# that misses the rebuild above (still booting, its switch/DHCP server not back
+# yet) stays dark for the life of the container while the others keep streaming
+# — observed after a modem/switch reboot: one rebuild, then "no frames for 649s"
+# climbing forever. Longer than the all-stalled threshold: a camera that is
+# merely slow to re-preroll gets time to come back on its own first.
+_SINGLE_STALL_REBUILD_S = 60.0
+# Rebuilding for one dead camera costs the healthy ones a few seconds of
+# detection and re-allocates every NVMM pool, so a dome that stays dead
+# (unplugged, failed PSU) must not churn the pipeline forever: each attempt that
+# does not bring it back doubles the wait, up to the cap. Delivery from every
+# camera resets the spacing to the initial value (see _watchdog).
+_SINGLE_STALL_COOLDOWN_S = 120.0
+_SINGLE_STALL_COOLDOWN_MAX_S = 900.0
 # Zero-copy keeps pixels in NVMM, so auto-horizon (which needs host pixels) is
 # refreshed by mapping the RGBA surface at most this often per camera — rare
 # enough that the per-frame path stays copy-free, frequent enough to track a
@@ -259,6 +274,11 @@ class _CameraProxy:
     # read as "every camera stalled" and rebuild a healthy pipeline; a backward
     # step would mask a real stall for the length of the step.
     last_frame_at: float = field(default_factory=time.monotonic)
+    # Has this camera produced a frame since the current pipeline was built?
+    # _bring_up resets last_frame_at to "now" for everyone, so the stall clock
+    # alone cannot tell "delivering again" from "freshly rebuilt and still
+    # silent" — and the watchdog must not read the latter as a recovery.
+    delivered: bool = False
 
 
 # ── Per-camera mutable inference state (accessed only from GLib probe thread) ──
@@ -354,6 +374,11 @@ class DeepStreamPipeline:
         # restart as "degraded" only while it is recent (actively recovering)
         # rather than latching on the cumulative count for the container's life.
         self._last_restart_ts: Optional[float] = None
+        # Single-camera stall rebuilds (see _watchdog): when the last one fired
+        # and how long to wait before the next. Kept on the pipeline, not on the
+        # watchdog timer, so the escalation survives the rebuild it triggers.
+        self._last_single_stall_rebuild: Optional[float] = None
+        self._single_stall_cooldown: float = _SINGLE_STALL_COOLDOWN_S
 
         # Holds generated nvdewarper config files; cleaned up on stop().
         self._dewarp_tmp: Optional[tempfile.TemporaryDirectory] = None
@@ -490,6 +515,7 @@ class DeepStreamPipeline:
         now = time.monotonic()
         for proxy in self.workers.values():
             proxy.last_frame_at = now
+            proxy.delivered = False
             # Clear any error left from a prior fault (the GStreamer error stamped
             # on every camera by _on_bus_message, or a stale "no frames" flag);
             # the pipeline is healthy again here. Historical detail is kept in
@@ -775,11 +801,18 @@ class DeepStreamPipeline:
                 if not proxy.error or proxy.error.startswith("no frames"):
                     proxy.error = (f"no frames for {int(stalls[name])}s "
                                    "(camera/RTSP stalled)")
+        # Every camera delivering again, each having produced a frame under THIS
+        # pipeline: the feed is genuinely healthy, so the single-camera rebuild
+        # below starts from its initial spacing next time rather than inheriting
+        # an escalation from an outage the boat has long since driven out of.
+        if (all(s <= _STALL_TIMEOUT_S for s in stalls.values())
+                and all(p.delivered for p in self.workers.values())):
+            self._last_single_stall_rebuild = None
+            self._single_stall_cooldown = _SINGLE_STALL_COOLDOWN_S
         # Self-heal: EVERY camera silent at once is a pipeline-level fault the
         # bus never reported (stale RTSP sessions, stuck muxer) — the supervisor
         # would otherwise wait forever. Quit the loop so it rebuilds with fresh
-        # RTSP connections. A single stalled camera stays flagged only:
-        # rebuilding both streams won't revive a dead dome.
+        # RTSP connections.
         if self.workers and all(s > _STALL_REBUILD_S for s in stalls.values()):
             self._log.error(
                 "DeepStream watchdog: all cameras stalled > %.0fs — rebuilding pipeline",
@@ -790,6 +823,27 @@ class DeepStreamPipeline:
             # found"). Only here: the loop is running, so this is the current
             # pipeline's watchdog, not a stale one.
             self._watchdog_id = None
+            return False
+
+        # Same fault, one camera at a time: the bus stays quiet, the other
+        # cameras keep the pipeline alive, and nothing inside rtspsrc ever
+        # retries the session it lost, so a rebuild is the only way back. Held
+        # off by the escalating cooldown so a permanently dead dome interrupts
+        # the working ones at a decreasing rate instead of every minute forever.
+        stalled = sorted(n for n, s in stalls.items() if s > _SINGLE_STALL_REBUILD_S)
+        last = self._last_single_stall_rebuild
+        if stalled and (last is None or now - last >= self._single_stall_cooldown):
+            self._last_single_stall_rebuild = now
+            self._single_stall_cooldown = min(
+                self._single_stall_cooldown * 2, _SINGLE_STALL_COOLDOWN_MAX_S)
+            self._log.error(
+                "DeepStream watchdog: %s stalled > %.0fs — rebuilding pipeline "
+                "(if it stays dark, next attempt in %.0fs)",
+                ", ".join(stalled), _SINGLE_STALL_REBUILD_S,
+                self._single_stall_cooldown)
+            self._quit_loop(
+                f"{', '.join(stalled)} stalled > {int(_SINGLE_STALL_REBUILD_S)}s")
+            self._watchdog_id = None  # see the all-stalled branch above
             return False
         return True
 
@@ -1268,6 +1322,7 @@ class DeepStreamPipeline:
             proxy = self.workers.get(cam_name)
             if proxy is not None:
                 proxy.last_frame_at = time.monotonic()
+                proxy.delivered = True
                 if proxy.error and proxy.error.startswith("no frames"):
                     proxy.error = None  # recovered from a stall
         return Gst.FlowReturn.OK

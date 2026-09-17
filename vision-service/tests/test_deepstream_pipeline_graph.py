@@ -406,3 +406,94 @@ def test_the_stall_rebuild_forgets_the_timer_it_is_ending():
     p._gst = SimpleNamespace(set_state=lambda state: None)
     p._tear_down(SimpleNamespace(State=SimpleNamespace(NULL=0)))
     assert removed == []
+
+
+def _watchdog_ready(p, monkeypatch=None):
+    """A pipeline with a running loop and a live watchdog timer."""
+    p._GLib = SimpleNamespace(source_remove=lambda _id: None)
+    p._watchdog_id = 7
+    p._loop = SimpleNamespace(is_running=lambda: True, quit=lambda: None)
+    for proxy in p.workers.values():
+        proxy.last_frame_at = time.monotonic()
+        proxy.delivered = True
+    return p
+
+
+def test_one_stalled_camera_rebuilds_the_pipeline():
+    """A dome that misses the all-stalled rebuild (its switch still booting)
+    posts nothing on the bus and rtspsrc never retries, so without a rebuild for
+    the single stall it stays dark for the life of the container — seen on the
+    boat as "aft: no frames for 649s" with the restart count stuck at 1."""
+    p = _watchdog_ready(_pipeline())
+    names = sorted(p.workers)
+    assert len(names) > 1, "needs a multi-camera config to stall just one"
+    p.workers[names[0]].last_frame_at = time.monotonic() - ds._SINGLE_STALL_REBUILD_S - 1
+
+    assert p._watchdog() is False          # timer destroyed → supervisor rebuilds
+    assert p._watchdog_id is None
+    assert names[0] in p._exit_reason and "stalled" in p._exit_reason
+
+
+def test_a_camera_stalled_below_the_single_threshold_is_only_flagged():
+    """Between STALL_TIMEOUT_S and SINGLE_STALL_REBUILD_S the camera is reported
+    in /health but the healthy ones keep running: a slow re-preroll must not
+    cost the other domes their detection."""
+    p = _watchdog_ready(_pipeline())
+    name = sorted(p.workers)[0]
+    p.workers[name].last_frame_at = time.monotonic() - ds._STALL_TIMEOUT_S - 1
+
+    assert p._watchdog() is True
+    assert p.workers[name].error.startswith("no frames")
+    assert p._exit_reason is None
+
+
+def test_a_dome_that_stays_dead_backs_off_instead_of_churning():
+    """Every rebuild costs the working cameras detection and re-allocates NVMM.
+    An unplugged dome would otherwise trigger one every minute, forever."""
+    p = _watchdog_ready(_pipeline())
+    name = sorted(p.workers)[0]
+    dead = time.monotonic() - ds._SINGLE_STALL_REBUILD_S - 1
+    p.workers[name].last_frame_at = dead
+
+    assert p._watchdog() is False
+    first_wait = p._single_stall_cooldown
+    assert first_wait > ds._SINGLE_STALL_COOLDOWN_S
+
+    # Rebuilt, still dark: the next attempt waits out the cooldown.
+    p = _watchdog_ready(p)
+    p._exit_reason = None
+    p.workers[name].last_frame_at = dead
+    p.workers[name].delivered = False
+    assert p._watchdog() is True, "rebuilt again inside the cooldown"
+    assert p._exit_reason is None
+
+    p._last_single_stall_rebuild = time.monotonic() - first_wait - 1
+    assert p._watchdog() is False
+    assert p._single_stall_cooldown == min(first_wait * 2,
+                                           ds._SINGLE_STALL_COOLDOWN_MAX_S)
+
+
+def test_a_recovered_camera_resets_the_backoff():
+    p = _watchdog_ready(_pipeline())
+    p._single_stall_cooldown = ds._SINGLE_STALL_COOLDOWN_MAX_S
+    p._last_single_stall_rebuild = time.monotonic()
+
+    assert p._watchdog() is True
+    assert p._single_stall_cooldown == ds._SINGLE_STALL_COOLDOWN_S
+    assert p._last_single_stall_rebuild is None
+
+
+def test_a_freshly_rebuilt_pipeline_is_not_mistaken_for_a_recovery():
+    """_bring_up resets every stall clock to "now", so a camera that has not
+    delivered a single frame yet looks healthy for the first poll. Resetting the
+    backoff there would let a dead dome rebuild every minute again."""
+    p = _watchdog_ready(_pipeline())
+    p._single_stall_cooldown = ds._SINGLE_STALL_COOLDOWN_MAX_S
+    started = time.monotonic()
+    p._last_single_stall_rebuild = started
+    for proxy in p.workers.values():
+        proxy.delivered = False
+
+    assert p._watchdog() is True
+    assert p._single_stall_cooldown == ds._SINGLE_STALL_COOLDOWN_MAX_S
+    assert p._last_single_stall_rebuild == started
