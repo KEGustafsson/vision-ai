@@ -23,6 +23,13 @@ class CameraConfig(BaseModel):
     height_m: float = 2.5             # camera height above waterline
     horizon_y: Optional[float] = None  # pixel row of horizon; None => auto/uncalibrated
     bearing_offset_deg: float = 0.0   # mounting offset from bow (forward=0, aft=180)
+    # Boat attitude (SignalK navigation.attitude, degrees) at the moment
+    # `horizon_y` was measured — read it from GET /health `attitude` while
+    # calibrating. IMU horizon compensation shifts/tilts the horizon by the
+    # attitude CHANGE from this reference, which also absorbs the IMU's own
+    # mounting misalignment. See docs/geometry.md.
+    horizon_ref_pitch_deg: float = 0.0  # +ve = bow up
+    horizon_ref_roll_deg: float = 0.0   # +ve = list to starboard
     # ONVIF PTZ control (Hikvision zoom domes). When ptz is true the web UI
     # shows a control pad. Host/credentials default to those embedded in `url`
     # (rtsp://user:pass@host) so they're configured once; override here only if
@@ -61,6 +68,12 @@ class CameraConfig(BaseModel):
 
 class GeometryConfig(BaseModel):
     auto_horizon: bool = False
+    # IMU horizon compensation: the SignalK plugin forwards the boat's attitude
+    # (POST /attitude) when its attitude compensation is enabled. A sample older
+    # than this is ignored and the horizon falls back to the uncompensated
+    # calibration, so a plugin or IMU that goes quiet can't freeze a stale tilt
+    # into every range. 0 disables compensation in the container entirely.
+    attitude_max_age_s: float = 2.0
     # Known real-world widths (metres) per canonical label, for known-size ranging.
     known_widths_m: Dict[str, float] = Field(
         default_factory=lambda: {"person": 0.5, "buoy": 0.8, "vessel": 4.0}

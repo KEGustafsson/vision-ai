@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 import time
 from typing import Optional
@@ -9,7 +10,14 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 
 from ..detector.classmap import MODEL_LABELS
-from ..schemas import Backend, ControlRequest, HealthResponse, PtzRequest
+from ..schemas import (
+    AttitudeRequest,
+    AttitudeStatus,
+    Backend,
+    ControlRequest,
+    HealthResponse,
+    PtzRequest,
+)
 
 router = APIRouter()
 
@@ -62,7 +70,33 @@ def health(request: Request) -> HealthResponse:
         pipeline_restarts=restarts,
         pipeline_last_error=last_error,
         optical_flow=optical_flow,
+        attitude=_attitude_status(p),
     )
+
+
+def _attitude_status(p) -> Optional[AttitudeStatus]:
+    st = p.attitude.status()
+    if st is None:
+        return None
+    pitch, roll, age = st
+    max_age = p.settings.geometry.attitude_max_age_s
+    return AttitudeStatus(
+        pitch_deg=math.degrees(pitch),
+        roll_deg=math.degrees(roll),
+        age_s=age,
+        active=max_age > 0 and age <= max_age,
+    )
+
+
+@router.post("/attitude")
+def attitude(request: Request, body: AttitudeRequest):
+    """Latest boat attitude from the SignalK plugin, for horizon compensation.
+
+    Not behind the /control generation fence: it is a measurement, not a
+    setting, so the newest sample simply wins and an old one ages out
+    (geometry.attitude_max_age_s)."""
+    _pipeline(request).attitude.set(body.pitch_rad, body.roll_rad)
+    return {"ok": True}
 
 
 @router.get("/config")

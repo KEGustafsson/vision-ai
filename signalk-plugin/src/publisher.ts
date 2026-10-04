@@ -120,6 +120,7 @@ export class Publisher {
     backend?: string;
     inferenceFps?: number;
     horizonY?: number | null;
+    attitudeCompensated?: boolean;
     perCameraCounts?: Record<string, number>;
   }): void {
     const values: Array<{ path: string; value: unknown }> = [];
@@ -128,6 +129,9 @@ export class Publisher {
     if (stats.mode !== undefined) values.push({ path: 'vision.system.mode', value: stats.mode });
     if (stats.backend !== undefined) values.push({ path: 'vision.system.backend', value: stats.backend });
     if (stats.horizonY !== undefined) values.push({ path: 'vision.system.horizonY', value: stats.horizonY });
+    if (stats.attitudeCompensated !== undefined) {
+      values.push({ path: 'vision.system.attitudeCompensated', value: stats.attitudeCompensated });
+    }
     if (stats.inferenceFps !== undefined) {
       const path = 'vision.system.inferenceFps';
       values.push({ path, value: stats.inferenceFps });

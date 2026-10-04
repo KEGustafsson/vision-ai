@@ -275,7 +275,20 @@
         }
       ],
       "default": null,
+      "description": "Horizon row in pixels at the frame centre column (x = w/2). IMU-compensated for the boat's pitch/roll when attitude_compensated is true.",
       "title": "Horizon Y"
+    },
+    "horizon_slope": {
+      "default": 0.0,
+      "description": "Horizon tilt in pixel rows per column through (w/2, horizon_y); +ve = lower on the right of the image. Non-zero only with IMU attitude compensation (heel).",
+      "title": "Horizon Slope",
+      "type": "number"
+    },
+    "attitude_compensated": {
+      "default": false,
+      "description": "True when a fresh boat attitude (SignalK navigation.attitude, forwarded by the plugin) was applied to horizon_y/horizon_slope and hence to every range.",
+      "title": "Attitude Compensated",
+      "type": "boolean"
     },
     "inference": {
       "$ref": "#/$defs/Inference"

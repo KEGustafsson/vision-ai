@@ -121,3 +121,14 @@ class Undistorter:
     def horizon_y(self, y: float, width: int) -> float:
         """Map the horizon row (sampled at frame centre) to a display row."""
         return float(self.points([(width / 2.0, y)])[0, 1])
+
+    def horizon_line(self, y: float, slope: float, width: int) -> tuple:
+        """Map the horizon (row ``y`` at frame centre, ``slope`` rows/column) to
+        display coords; returns (row at the display centre column, slope), taken
+        from two points either side of the centre (the correction is near-linear
+        that close to the principal point)."""
+        cx = width / 2.0
+        dx = width / 4.0
+        (xl, yl), (xr, yr) = self.points([(cx - dx, y - slope * dx), (cx + dx, y + slope * dx)])
+        disp_slope = (yr - yl) / (xr - xl) if xr != xl else 0.0
+        return float(yl + disp_slope * (cx - xl)), float(disp_slope)

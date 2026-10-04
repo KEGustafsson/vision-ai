@@ -26,6 +26,7 @@ channel (the same split described in [architecture.md](architecture.md)).
 | `GET /cameras` | Configured camera names | `200` `["forward","aft"]` | — |
 | `GET /events/recent?n=` | Last `n` detection events (`n` 1–1000, default 20) | `200` `DetectionEvent[]` | — |
 | `POST /control` | Change runtime behaviour, no restart | `200` `{ "applied": { … } }` | `404` unknown camera · `409` superseded client |
+| `POST /attitude` | Boat pitch/roll for IMU horizon compensation | `200` `{ "ok": true }` | `422` out of range (±π/2 rad) |
 | `GET /ptz` | Names of PTZ-capable cameras | `200` `{ "cameras": [...] }` | — |
 | `POST /ptz/{camera}` | ONVIF pan/tilt/zoom | `200` `{ "ok": true, "action": … }` | `404` no PTZ · `400` bad action · `502` camera unreachable |
 | `GET /snapshot/{camera}` | Latest annotated frame | `200` `image/jpeg` | `404` no frame yet |
@@ -53,6 +54,12 @@ restarting, else `"ok"`.
   "model_labels": ["buoy", "person", "vessel"],  // labels this model can produce
   "pipeline_restarts": 0,          // DeepStream auto-restart count (0 on other backends)
   "pipeline_last_error": null,
+  "attitude": {                    // last POST /attitude; null when none received
+    "pitch_deg": 1.8,              // +ve bow up   — copy into horizon_ref_pitch_deg
+    "roll_deg": -0.6,              // +ve list to starboard — horizon_ref_roll_deg
+    "age_s": 0.12,
+    "active": true                 // fresh enough to be applied (geometry.attitude_max_age_s)
+  },
   "optical_flow": {                // NVIDIA OFA per camera (DeepStream); {} on other backends
     "forward": {
       "enabled": true,
@@ -114,6 +121,24 @@ goes quiet (the plugin re-pushes every 5 s, which keeps it fresh). That matters
 on a boat computer with no battery-backed clock: after a reboot its plugin can
 stamp a *lower* token than the container remembers from before, and an
 unexpiring fence would refuse that plugin for the life of the container.
+
+### `POST /attitude`
+
+The boat's attitude for IMU horizon compensation, pushed by the plugin (when its
+`enableAttitudeCompensation` is on) at ~5 Hz from SignalK `navigation.attitude`,
+already low-pass filtered. SignalK units and signs: radians, pitch +ve = bow up,
+roll +ve = list to starboard.
+
+```jsonc
+{ "pitch_rad": 0.031, "roll_rad": -0.105 }
+```
+
+The container applies the latest sample to every camera's horizon until it is
+older than `geometry.attitude_max_age_s` (default 2 s, measured on the
+container's own clock from receipt), then falls back to the uncompensated
+horizon. It is a measurement, not a setting, so it is not behind the
+`client_generation` fence: the newest sample wins. See
+[geometry.md](geometry.md#imu-horizon-compensation).
 
 ### `POST /ptz/{camera}`
 

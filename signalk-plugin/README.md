@@ -40,6 +40,8 @@ audible alarm. Highlights:
 | `darkTargetRangeM` | 800 | Alert range for non-AIS vessels |
 | `collisionTcpaS` / `collisionAlarmTcpaS` / `collisionCpaM` | 600 / 180 / 100 | CPA/TCPA warn / alarm / CPA thresholds |
 | `mobMinConfidence` / `mobPersistFrames` | 0.5 / 3 | MOB sensitivity |
+| `enableAttitudeCompensation` | **off** | Forward `navigation.attitude` (pitch/roll) to the container to move/tilt each camera's horizon with trim and heel — see [geometry.md](../docs/geometry.md#imu-horizon-compensation). Enable after the on-board sign check |
+| `attitudeSmoothingS` / `attitudeMaxAgeS` / `attitudeIntervalMs` | 5 / 2 / 200 | Low-pass time constant (0 = raw, follows waves) / ignore older attitude / push cadence |
 
 Freshness guards (`ownNavMaxAgeS`, `aisMaxAgeS`, `eventMaxAgeS`) expire stale
 own-ship, AIS, and detection data so it is never fused as current; see

@@ -13,7 +13,8 @@ import { collectAisContacts, fuse } from './aisFusion';
 import { enrichTarget } from './enrich';
 import { NotificationManager, degradedFaultKey } from './notifications';
 import { Publisher } from './publisher';
-import { readOwnShip } from './nav';
+import { readAttitude, readOwnShip } from './nav';
+import { AttitudeSmoother } from './attitude';
 import { registerRoutes, SharedState } from './router';
 import { Plugin, ServerApp } from './skapp';
 import { DetectionEvent, EnrichedTarget, LatLon } from './types';
@@ -30,6 +31,14 @@ export = function (app: ServerApp): Plugin {
   let cpa: CpaEstimator | null = null;
   let processTimer: NodeJS.Timeout | null = null;
   let syncTimer: NodeJS.Timeout | null = null;
+  let attitudeTimer: NodeJS.Timeout | null = null;
+  let attitudeSmoother: AttitudeSmoother | null = null;
+  // One attitude push in flight at a time: at 5 Hz against a container that is
+  // down, each request would otherwise wait out the 4 s client timeout and
+  // twenty would pile up.
+  let attitudeInFlight = false;
+  // Availability transitions, so a missing/stale IMU is logged once, not per push.
+  let attitudeAvailable: boolean | null = null;
 
   const targets = new Map<string, EnrichedTarget>();
   // Last cycle's AIS association (target key -> mmsi). Persisted across process
@@ -254,6 +263,9 @@ export = function (app: ServerApp): Plugin {
       backend: sample?.inference.backend,
       inferenceFps: fps,
       horizonY: sample?.horizon_y ?? null,
+      // Only with the feature on: without an IMU the published tree stays as it was.
+      attitudeCompensated:
+        cfg.enableAttitudeCompensation && sample ? sample.attitude_compensated === true : undefined,
       perCameraCounts,
     });
     if (app.setPluginStatus) {
@@ -261,6 +273,37 @@ export = function (app: ServerApp): Plugin {
         `${targets.size} targets, ${fps.toFixed(1)} fps, active=${activeCamera}`
       );
     }
+  }
+
+  // IMU horizon compensation: read navigation.attitude, low-pass it, and push it
+  // to the container, which moves/tilts each camera's horizon with it. When the
+  // attitude is missing or stale nothing is sent and the container falls back to
+  // the uncompensated horizon once its copy ages out (geometry.attitude_max_age_s).
+  function pushAttitude(): void {
+    const c = client;
+    const smoother = attitudeSmoother;
+    if (!c || !smoother) return;
+    const now = Date.now();
+    const att = smoother.update(readAttitude(app, cfg.attitudeMaxAgeS, now), now);
+    const available = att !== null;
+    if (available !== attitudeAvailable) {
+      if (!available) {
+        app.error(
+          'vision-ai: navigation.attitude (pitch/roll) missing or stale — ' +
+            'camera horizons are not compensated for trim/heel'
+        );
+      } else if (attitudeAvailable === false) {
+        app.debug('vision-ai: navigation.attitude available again — horizon compensation resumed');
+      }
+      attitudeAvailable = available;
+    }
+    if (!att || attitudeInFlight) return;
+    attitudeInFlight = true;
+    c.attitude({ pitch_rad: att.pitch, roll_rad: att.roll })
+      .catch((e) => app.debug(`vision-ai: attitude push failed: ${e}`))
+      .finally(() => {
+        attitudeInFlight = false;
+      });
   }
 
   // Push runtime settings to the container. Always syncs the operator's
@@ -523,13 +566,27 @@ export = function (app: ServerApp): Plugin {
         guard(syncContainer());
         guard(checkHealth());
       }, 5000);
+      if (cfg.enableAttitudeCompensation) {
+        attitudeSmoother = new AttitudeSmoother(cfg.attitudeSmoothingS);
+        attitudeTimer = setInterval(() => {
+          try {
+            pushAttitude();
+          } catch (e) {
+            app.error(`vision-ai: attitude push failed: ${e}`);
+          }
+        }, cfg.attitudeIntervalMs);
+      }
       app.debug(`vision-ai: started, container=${cfg.containerUrl}`);
     },
 
     stop() {
       if (processTimer) clearInterval(processTimer);
       if (syncTimer) clearInterval(syncTimer);
-      processTimer = syncTimer = null;
+      if (attitudeTimer) clearInterval(attitudeTimer);
+      processTimer = syncTimer = attitudeTimer = null;
+      attitudeSmoother = null;
+      attitudeInFlight = false;
+      attitudeAvailable = null;
       if (stream) stream.stop();
       if (notifier) notifier.clearAll();
       if (publisher) publisher.reset();

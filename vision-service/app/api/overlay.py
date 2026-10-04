@@ -152,8 +152,12 @@ def annotate(image: np.ndarray, event: DetectionEvent, inplace: bool = False) ->
     """
     img = image if inplace else image.copy()
     if event.horizon_y is not None:
-        y = int(event.horizon_y)
-        cv2.line(img, (0, y), (img.shape[1], y), (200, 200, 200), 1)
+        # Tilted by heel when IMU attitude compensation is active; level (as
+        # always) without it.
+        w = img.shape[1]
+        half = event.horizon_slope * w / 2.0
+        cv2.line(img, (0, int(event.horizon_y - half)), (w, int(event.horizon_y + half)),
+                 (200, 200, 200), 1)
 
     # Rects already placed this frame, so adjacent targets' labels fan out
     # instead of one plate stacking over another (see _draw_label).

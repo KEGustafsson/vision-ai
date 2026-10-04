@@ -23,7 +23,9 @@ that schema, so the two sides cannot silently drift.
   "timestamp": "2026-05-29T12:00:00.123Z",
   "frame_seq": 48213,
   "frame_size": { "w": 1280, "h": 720 },  // processed-frame px (bbox/horizon_y space)
-  "horizon_y": 324,                    // px row of the horizon; null if uncalibrated
+  "horizon_y": 324,                    // px row of the horizon at x = w/2; null if uncalibrated
+  "horizon_slope": 0.0,                // rows per column (+ve = lower on the right); heel
+  "attitude_compensated": false,       // true => IMU pitch/roll applied to the horizon
   "inference": { "backend": "mock", "latency_ms": 4.2 },  // see backend values below
   "calibration_status": "ok",          // ok | uncalibrated | auto
   "targets": [
@@ -58,6 +60,15 @@ that schema, so the two sides cannot silently drift.
   expressed in — the processed frame, not necessarily the raw sensor. For the
   `deepstream` backend this is `nvstreammux`'s output (`detector.mux_width` ×
   `mux_height`), and inference runs at `imgsz` independently of it.
+- **`horizon_y` / `horizon_slope` / `attitude_compensated`** — the horizon is a
+  line: row `horizon_y` at the centre column, tilting by `horizon_slope` pixel
+  rows per column. Without IMU compensation it is the calibrated (or
+  auto-detected) row and the slope is `0`. With it (the plugin forwards SignalK
+  `navigation.attitude`, see [geometry.md](geometry.md#imu-horizon-compensation))
+  the row follows trim/squat and the slope follows heel, and every
+  `horizon`-method range was measured against that line at the target's own
+  column. Both new fields are additive and optional for consumers: an older
+  container omits them, an older plugin ignores them.
 - **`relative_bearing_deg`** already includes the camera's mounting offset
   (forward = 0°, aft = 180°), so the plugin only adds own heading.
 - **`range_method`** lets the plugin treat `horizon` ranges (more reliable) and
