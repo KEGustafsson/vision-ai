@@ -497,3 +497,118 @@ def test_a_freshly_rebuilt_pipeline_is_not_mistaken_for_a_recovery():
     assert p._watchdog() is True
     assert p._single_stall_cooldown == ds._SINGLE_STALL_COOLDOWN_MAX_S
     assert p._last_single_stall_rebuild == started
+
+
+# ── Supervised rebuilds: backoff hold-down and giving up ──────────────────────
+
+
+class _Stopper:
+    """threading.Event stand-in for _supervise's _stopping.
+
+    Records every backoff wait the supervisor makes (the whole point of these
+    tests) and can end the loop after a fixed number of them.
+    """
+
+    def __init__(self, stop_after=99):
+        self.waits: list = []
+        self._stop_after = stop_after
+        self._set = False
+
+    def is_set(self) -> bool:
+        return self._set
+
+    def set(self) -> None:
+        self._set = True
+
+    def wait(self, timeout=None) -> bool:
+        self.waits.append(timeout)
+        if len(self.waits) >= self._stop_after:
+            self._set = True
+        return self._set
+
+
+def _supervised(monkeypatch, run, stop_after=99, holddown=0.05):
+    """Run _supervise with a faked GLib loop whose run() is ``run``.
+
+    _bring_up/_tear_down are stubbed out (the graph itself is covered above);
+    what is under test is only the restart policy around them.
+    """
+    monkeypatch.setattr(ds, "_RESTART_HOLDDOWN_S", holddown)
+    p = _pipeline()
+    p._stopping = _Stopper(stop_after)
+    p._loop = SimpleNamespace(run=lambda: run(p))
+    p._bring_up = lambda Gst, GLib: None
+    p._tear_down = lambda Gst: None
+    exits: list = []
+    p._exit = exits.append
+    p._supervise(SimpleNamespace(), SimpleNamespace())
+    return p, p._stopping.waits, exits
+
+
+def test_a_pipeline_that_only_reaches_playing_does_not_reset_the_backoff(monkeypatch):
+    """Observed 2026-09-18: an nvtracker OOM killed each rebuild about a second
+    after PLAYING, and because bring-up had "succeeded" the backoff reset every
+    time — four rebuilds, all logged "rebuilding in 2s", re-allocating a
+    two-camera graph every ~3s exactly when the board had no memory to spare.
+    Recovery has to mean staying up, not reaching PLAYING."""
+    _, waits, _ = _supervised(monkeypatch, lambda p: None)
+
+    assert waits == [ds._RESTART_BACKOFF_INITIAL_S, ds._RESTART_BACKOFF_INITIAL_S * 2]
+
+
+def test_rebuilds_that_keep_dying_young_exit_for_a_fresh_process(monkeypatch):
+    """A graph that aborts or leaks holds the GPU/NVMM memory the next rebuild
+    needs, so retrying in-process is the one move that cannot work. Measured:
+    11 OOMs in 20 in-process rebuilds, while a fresh process comes up cleanly
+    under the same pressure."""
+    _, waits, exits = _supervised(monkeypatch, lambda p: None)
+
+    assert exits == [ds._UNRECOVERABLE_EXIT_CODE]
+    assert len(waits) == ds._RESTART_MAX_SHORT_LIVED - 1, "gave up on the wrong attempt"
+
+
+def test_a_rebuild_that_stays_up_earns_a_fast_retry_again(monkeypatch):
+    """The escalation must not latch for the life of the container: once a
+    pipeline has actually run, the next fault is a new one and deserves the
+    same quick first retry the first fault got."""
+
+    def long_run(p):
+        time.sleep(0.08)
+
+    _, waits, exits = _supervised(monkeypatch, long_run, stop_after=3)
+
+    assert waits == [ds._RESTART_BACKOFF_INITIAL_S] * 3
+    assert exits == []
+
+
+def test_watchdog_stall_rebuilds_never_bounce_the_container(monkeypatch):
+    """Both domes off the network rebuild every _STALL_REBUILD_S — far inside
+    the hold-down. Counting those would exit the process every third one and
+    take the whole service down for the length of an outage it exists to ride
+    out; only a pipeline the bus killed counts."""
+
+    def stalled(p):
+        p._exit_reason = f"all cameras stalled > {int(ds._STALL_REBUILD_S)}s"
+
+    _, waits, exits = _supervised(monkeypatch, stalled, stop_after=6)
+
+    assert exits == []
+    assert len(waits) == 6, "a stall rebuild was miscounted as a fatal fault"
+    assert waits[-1] == ds._RESTART_BACKOFF_MAX_S, "stall rebuilds must still back off"
+
+
+def test_a_detection_toggle_is_not_a_fault(monkeypatch):
+    """The /control off/on teardown must not count towards giving up."""
+
+    toggles = []
+
+    def toggled(p):
+        toggles.append(1)
+        p._exit_reason = "detection disabled" if len(toggles) % 2 else "detection re-enabled"
+        if len(toggles) > 2 * ds._RESTART_MAX_SHORT_LIVED:
+            p._stopping.set()
+
+    p, waits, exits = _supervised(monkeypatch, toggled)
+
+    assert exits == [], "a /control toggle was counted as a fault"
+    assert waits == [] and p._restart_count == 0
