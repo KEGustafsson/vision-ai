@@ -138,9 +138,11 @@ _HORIZON_REFRESH_S = 1.0
 _GST_CLOCK_TIME_NONE = 0xFFFF_FFFF_FFFF_FFFF  # GStreamer "invalid timestamp" sentinel
 # Auto-restart after a fatal GStreamer error/EOS: a transient RTSP/decoder glitch
 # must not take detection down until a manual container restart. The supervisor
-# rebuilds the pipeline with exponential backoff and keeps trying indefinitely
-# (a safety system should keep attempting to recover); the restart count and last
-# error are surfaced in /health so a flapping feed is visible.
+# rebuilds the pipeline with exponential backoff and keeps trying (a safety
+# system should keep attempting to recover) — in-process while that can work,
+# and via a process exit for the restart policy when it cannot (see
+# _RESTART_MAX_SHORT_LIVED); the restart count and last error are surfaced in
+# /health so a flapping feed is visible.
 _RESTART_BACKOFF_INITIAL_S = 2.0
 _RESTART_BACKOFF_MAX_S = 30.0
 # Window after a rebuild during which /health still reports "degraded". Once a
@@ -161,6 +163,26 @@ _RESTART_DEGRADED_WINDOW_S = 120.0
 _TEARDOWN_TIMEOUT_S = 15.0
 # Exit status for that case (EX_SOFTWARE), distinct from a normal shutdown.
 _WEDGED_EXIT_CODE = 70
+# How long a rebuilt pipeline must keep running before the fault that ends it
+# counts as a NEW, isolated one rather than the same unresolved trouble. Without
+# this the backoff resets on any pipeline that merely reaches PLAYING — and the
+# failure mode below does reach PLAYING, dying about a second later on its first
+# buffer. Observed 2026-09-18: four rebuilds all logged "rebuilding in 2s" and
+# re-allocated a two-camera graph every ~3s at exactly the moment the board had
+# no memory to give.
+_RESTART_HOLDDOWN_S = 60.0
+# Consecutive rebuilds that reach PLAYING and then die inside the hold-down
+# before the supervisor gives up on this process. The trigger is a graph that
+# aborts or leaks its GPU/NVMM allocations (a CUDA fault during teardown, an
+# nvtracker OOM): what the next rebuild is short of is precisely what the failed
+# ones are still holding, so no in-process attempt can win — measured here as
+# 11 OOMs in 20 in-process rebuilds, against a fresh process that comes up
+# cleanly under the same pressure. A bring-up that never reaches PLAYING is
+# deliberately NOT counted: that is a missing plugin or a bad camera URL, which
+# a container restart does not fix, so it keeps retrying in-process forever.
+_RESTART_MAX_SHORT_LIVED = 3
+# Exit status for that case (EX_OSERR — the board, not the code, ran out).
+_UNRECOVERABLE_EXIT_CODE = 71
 # Element names of the optional NVIDIA OFA (optical flow) branch. Kept in one
 # place so the bus-error handler can recognise an OFA fault and fall back.
 _OF_ELEMENTS = ("ofconv", "ofcaps", "of")
@@ -586,16 +608,27 @@ class DeepStreamPipeline:
         threading.Thread(target=to_null, name="ds-teardown", daemon=True).start()
         if done.wait(timeout=_TEARDOWN_TIMEOUT_S):
             return
-        self._log.critical(
+        self._exit_process(
+            _WEDGED_EXIT_CODE,
             "DeepStream teardown did not reach NULL within %.0fs — the graph is "
             "wedged (typically decoders stuck waiting for NVMM buffers). Exiting "
             "so the container restarts with a fresh process.", _TEARDOWN_TIMEOUT_S)
+
+    def _exit_process(self, code: int, msg: str, *args) -> None:
+        """Log why, flush the log, and end the process.
+
+        The container's restart policy then provides the fresh process that the
+        in-process paths could not. Flushing first matters: os._exit skips
+        atexit and buffered handlers, and the reason for the restart is the one
+        line that explains an otherwise silent container bounce in the log.
+        """
+        self._log.critical(msg, *args)
         for handler in logging.getLogger().handlers:
             try:
                 handler.flush()
             except Exception:  # pragma: no cover - best effort before exit
                 pass
-        self._exit(_WEDGED_EXIT_CODE)
+        self._exit(code)
 
     def _supervise(self, Gst, GLib) -> None:
         """Run the GLib loop; on a fatal error/EOS, rebuild with backoff.
@@ -603,10 +636,18 @@ class DeepStreamPipeline:
         start() has already brought up the first pipeline, so the first iteration
         runs that loop. When it exits (a bus ERROR/EOS quits it via
         _on_bus_message), we tear down and — unless stop() was called — rebuild
-        and try again, never giving up so a transient RTSP/decoder fault can't
-        leave detection permanently offline.
+        and try again, so a transient RTSP/decoder fault can't leave detection
+        permanently offline.
+
+        The backoff escalates until a rebuild actually stays up for
+        _RESTART_HOLDDOWN_S, not merely until one reaches PLAYING, and after
+        _RESTART_MAX_SHORT_LIVED rebuilds that die inside that window the
+        process exits for the container's restart policy — rebuilding in-process
+        is the one thing that cannot fix a graph whose own leaked GPU memory is
+        what the next attempt is short of.
         """
         backoff = _RESTART_BACKOFF_INITIAL_S
+        short_lived = 0
         first = True
         while not self._stopping.is_set():
             if not first:
@@ -617,8 +658,10 @@ class DeepStreamPipeline:
                 if self._stopping.is_set():
                     break
                 try:
+                    # Deliberately no backoff reset here: reaching PLAYING is not
+                    # yet recovery (see _RESTART_HOLDDOWN_S). It is reset below,
+                    # once the pipeline has actually stayed up.
                     self._bring_up(Gst, GLib)
-                    backoff = _RESTART_BACKOFF_INITIAL_S
                 except Exception as exc:  # pragma: no cover - hardware dependent
                     # Same reasoning as the FAILURE branch in _bring_up: whatever
                     # was built before the throw must go to NULL, or it leaks.
@@ -633,6 +676,7 @@ class DeepStreamPipeline:
                     continue
             first = False
 
+            playing_since = time.monotonic()
             loop = self._loop
             if loop is not None:
                 try:
@@ -641,6 +685,7 @@ class DeepStreamPipeline:
                     self._last_error = str(exc)
                     self._log.error("DeepStream loop error: %s", exc)
 
+            lived = time.monotonic() - playing_since
             reason = self._exit_reason
             self._exit_reason = None
             self._tear_down(Gst)
@@ -660,9 +705,32 @@ class DeepStreamPipeline:
                 self._last_error = reason
             self._restart_count += 1
             self._last_restart_ts = time.monotonic()
+            if lived >= _RESTART_HOLDDOWN_S:
+                # It ran. Whatever ended it is a new fault, not the previous one
+                # still unresolved, so meet it with a fast first retry again.
+                backoff = _RESTART_BACKOFF_INITIAL_S
+                short_lived = 0
+            elif reason is None:
+                # Counted only for a pipeline the bus killed. A watchdog rebuild
+                # (reason set) is deliberate and routinely short-lived: both
+                # domes off the network rebuild every _STALL_REBUILD_S, and
+                # bouncing the container every third one would take the service
+                # down for the length of a camera outage it is meant to ride out.
+                short_lived += 1
+                if short_lived >= _RESTART_MAX_SHORT_LIVED:
+                    self._exit_process(
+                        _UNRECOVERABLE_EXIT_CODE,
+                        "DeepStream pipeline died %d times in a row within %.0fs "
+                        "of reaching PLAYING (last error: %s). The failed graphs "
+                        "still hold the GPU/NVMM memory the next rebuild needs, "
+                        "so no in-process rebuild can win. Exiting so the "
+                        "container restarts with a fresh process.",
+                        short_lived, _RESTART_HOLDDOWN_S, self._last_error)
+                    return
             self._log.error(
-                "DeepStream pipeline exited (restart #%d, last_error=%s); "
-                "rebuilding in %.0fs", self._restart_count, self._last_error, backoff)
+                "DeepStream pipeline exited after %.0fs (restart #%d, "
+                "last_error=%s); rebuilding in %.0fs",
+                lived, self._restart_count, self._last_error, backoff)
             if self._stopping.wait(timeout=backoff):
                 break
             backoff = min(backoff * 2, _RESTART_BACKOFF_MAX_S)

@@ -210,7 +210,16 @@ allocation can OOM (`failed to activate bufferpool`); restart them after.
 - **Auto-recovery:** a fatal GStreamer error or EOS (e.g. a transient RTSP/decoder
   glitch) no longer takes detection down until a manual container restart. A
   supervisor rebuilds the pipeline with exponential backoff (2 s → 30 s) and keeps
-  retrying. `GET /health` reports `pipeline_restarts` and `pipeline_last_error` so
+  retrying. The backoff only resets once a rebuild has *stayed up* for 60 s —
+  reaching `PLAYING` is not recovery, since the failure below reaches it and then
+  dies on its first buffer. Three rebuilds in a row that die inside that window
+  end the process with exit 71 so the restart policy supplies a fresh one: when a
+  graph aborts or leaks its GPU/NVMM allocations (a CUDA fault during teardown,
+  an `nvtracker` OOM), what the next rebuild is short of is exactly what the
+  failed ones still hold, and only a new process drops them. Watchdog stall
+  rebuilds are excluded from that count — both domes off the network rebuild
+  every 20 s, and bouncing the container through an outage it exists to ride out
+  would be the wrong cure. `GET /health` reports `pipeline_restarts` and `pipeline_last_error` so
   a flapping feed is visible; `status` goes `degraded` while a restart is recent
   (the pipeline is actively recovering), not for the container's whole life once
   a single restart has happened — the cumulative count stays in
