@@ -56,7 +56,11 @@ export interface DetectionEvent {
   timestamp: string;
   frame_seq: number;
   frame_size: { w: number; h: number };
-  horizon_y: number | null;
+  horizon_y: number | null; // horizon row at the frame centre column
+  // Horizon tilt (rows per column) and whether IMU attitude was applied to it.
+  // Optional: older containers omit both.
+  horizon_slope?: number;
+  attitude_compensated?: boolean;
   inference: { backend: Backend; latency_ms: number };
   calibration_status: CalibrationStatus;
   targets: RawTarget[];
@@ -69,6 +73,12 @@ export type ThreatLevel = 'none' | 'low' | 'medium' | 'high';
 export interface LatLon {
   latitude: number;
   longitude: number;
+}
+
+// Boat attitude (SignalK navigation.attitude), radians.
+export interface Attitude {
+  pitch: number; // +ve bow up
+  roll: number; // +ve list to starboard
 }
 
 export interface OwnShip {

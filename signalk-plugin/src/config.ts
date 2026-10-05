@@ -39,6 +39,12 @@ export interface PluginConfig {
   blipHoldS: number; // keep drawing a synthetic AIS blip this long after last detection
   eventMaxAgeS: number; // reject detection events whose timestamp is older than this (replay/buffer guard); 0 => off
   processIntervalMs: number; // cadence of the fusion/CPA/notify/publish cycle
+  // IMU horizon compensation: forward navigation.attitude (pitch/roll) to the
+  // container so it shifts/tilts the calibrated horizon with trim and heel.
+  enableAttitudeCompensation: boolean;
+  attitudeSmoothingS: number; // low-pass time constant; 0 => raw (follows waves, latency-sensitive)
+  attitudeMaxAgeS: number; // ignore navigation.attitude older than this; 0 => no age check
+  attitudeIntervalMs: number; // cadence of the attitude push to the container
 }
 
 export const DEFAULT_CONFIG: PluginConfig = {
@@ -73,6 +79,13 @@ export const DEFAULT_CONFIG: PluginConfig = {
   blipHoldS: 15,
   eventMaxAgeS: 10,
   processIntervalMs: 1000,
+  // Off until the install's signs and calibration reference are verified on the
+  // overlay (docs/geometry.md): a wrong-signed IMU would double the error it is
+  // meant to remove.
+  enableAttitudeCompensation: false,
+  attitudeSmoothingS: 5,
+  attitudeMaxAgeS: 2,
+  attitudeIntervalMs: 200,
 };
 
 export function schema(): object {
@@ -236,6 +249,34 @@ export function schema(): object {
         minimum: 0,
       },
       processIntervalMs: { type: 'number', title: 'Processing cadence (ms)', default: 1000, minimum: 200 },
+      enableAttitudeCompensation: {
+        type: 'boolean',
+        title: 'IMU horizon compensation',
+        description: 'Forward the boat’s attitude (navigation.attitude roll/pitch, e.g. NMEA 2000 PGN 127257 from a heading/attitude sensor) to the vision container, which moves and tilts each camera’s calibrated horizon with trim, squat and heel. Without it, range is only right at the attitude the horizon was calibrated at. Enable only after recording the attitude at calibration in the container config (horizon_ref_pitch_deg / horizon_ref_roll_deg) and checking on the video overlay that the horizon line follows the real horizon when the boat heels and trims — a reversed sign doubles the error instead of removing it. If attitude goes missing or stale the container falls back to the uncompensated horizon.',
+        default: false,
+      },
+      attitudeSmoothingS: {
+        type: 'number',
+        title: 'Attitude smoothing time constant (s)',
+        description: 'Low-pass filter on pitch/roll before they reach the container. The default follows slow changes — moored vs underway trim, squat, planing, heel on a tack — while ignoring wave motion, which the network and camera latency would otherwise compensate out of phase. 0 sends the raw attitude (follows waves; only worthwhile on a low-latency, high-rate IMU).',
+        default: 5,
+        minimum: 0,
+      },
+      attitudeMaxAgeS: {
+        type: 'number',
+        title: 'Attitude max age (s)',
+        description: 'Ignore navigation.attitude older than this (SignalK keeps the last value after the sensor goes quiet), so a frozen heel/trim is never applied. Set 0 to disable the age check.',
+        default: 2,
+        minimum: 0,
+      },
+      attitudeIntervalMs: {
+        type: 'number',
+        title: 'Attitude push cadence (ms)',
+        description: 'How often the smoothed attitude is sent to the container. The container drops attitude it has not heard for 2 s, so this is capped at 1000 ms.',
+        default: 200,
+        minimum: 100,
+        maximum: 1000,
+      },
     },
   };
 }
@@ -291,6 +332,12 @@ export function withDefaults(partial: Partial<PluginConfig> | undefined): Plugin
   // saved setting can't busy-loop the process or feed nonsense into the math.
   cfg.containerUrl = validContainerUrl(cfg.containerUrl);
   cfg.processIntervalMs = clampMin(cfg.processIntervalMs, 200, DEFAULT_CONFIG.processIntervalMs);
+  // The container ages attitude out after 2 s (geometry.attitude_max_age_s), so
+  // a slower push would flicker compensation on and off between samples.
+  cfg.attitudeIntervalMs = clampRange(
+    cfg.attitudeIntervalMs, 100, 1000, DEFAULT_CONFIG.attitudeIntervalMs);
+  cfg.attitudeSmoothingS = clampMin(cfg.attitudeSmoothingS, 0, DEFAULT_CONFIG.attitudeSmoothingS);
+  cfg.attitudeMaxAgeS = clampMin(cfg.attitudeMaxAgeS, 0, DEFAULT_CONFIG.attitudeMaxAgeS);
   cfg.trackTimeoutS = clampMin(cfg.trackTimeoutS, 0.1, DEFAULT_CONFIG.trackTimeoutS);
   cfg.blipHoldS = clampMin(cfg.blipHoldS, 1, DEFAULT_CONFIG.blipHoldS);
   cfg.collisionCpaM = clampMin(cfg.collisionCpaM, 0, DEFAULT_CONFIG.collisionCpaM);

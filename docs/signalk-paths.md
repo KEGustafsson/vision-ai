@@ -51,7 +51,8 @@ a location. SOG/COG let a chartplotter draw the vector and compute CPA natively;
 | `vision.system.activeCamera` | — | Camera prioritised by context control |
 | `vision.system.backend` | — | `tensorrt` / `torch-cpu` / `mock` … |
 | `vision.system.inferenceFps` | Hz | Plain telemetry — no zones (zone metadata would make SignalK auto-raise a notification on it) |
-| `vision.system.horizonY` | px | Current horizon calibration |
+| `vision.system.horizonY` | px | Current horizon row at the frame centre (IMU-compensated when active) |
+| `vision.system.attitudeCompensated` | — | `true` while the container applies IMU attitude to the horizon. Published only when `enableAttitudeCompensation` is on |
 | `vision.<camera>.targetCount` | — | Tracks currently held per camera |
 
 ## Notifications — standard paths (alarm on any MFD)

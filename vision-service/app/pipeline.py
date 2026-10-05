@@ -15,12 +15,18 @@ from datetime import datetime, timezone
 from .api.jpeg import make_jpeg_encoder
 from .api.overlay import annotate
 from .api.undistort import Undistorter
+from .attitude import AttitudeStore
 from .camera import create_source
 from .config import CameraConfig, Settings
 from .detector import create_detector
-from .detector.classmap import is_person_in_water
 from .detector.stabilizer import cap_targets_sticky, make_stabilizer
-from .geometry import detect_horizon_y, estimate_bearing, estimate_range
+from .geometry import (
+    detect_horizon_y,
+    estimate_bearing,
+    estimate_range,
+    person_in_water,
+    resolve_horizon,
+)
 from .schemas import (
     Backend,
     BBox,
@@ -84,9 +90,12 @@ STALL_REOPEN_S = 15.0
 
 class CameraWorker(threading.Thread):
     def __init__(self, cam: CameraConfig, settings: Settings,
-                 events: EventBuffer, frames: LatestFrame, logger, detector):
+                 events: EventBuffer, frames: LatestFrame, logger, detector,
+                 attitude: AttitudeStore | None = None):
         super().__init__(daemon=True, name=f"cam-{cam.name}")
         self._cam = cam
+        # Shared boat attitude for IMU horizon compensation (None => never).
+        self._attitude = attitude
         self._settings = settings
         self._events = events
         self._frames = frames
@@ -336,7 +345,11 @@ class CameraWorker(threading.Thread):
         disp = u.image(image)
         ev = event.model_copy(deep=True)
         if ev.horizon_y is not None:
-            ev.horizon_y = u.horizon_y(ev.horizon_y, w)
+            if ev.attitude_compensated:
+                ev.horizon_y, ev.horizon_slope = u.horizon_line(
+                    ev.horizon_y, ev.horizon_slope, w)
+            else:
+                ev.horizon_y = u.horizon_y(ev.horizon_y, w)
         for t in ev.targets:
             bx, by, bw, bh = u.bbox(t.bbox.x, t.bbox.y, t.bbox.w, t.bbox.h)
             t.bbox.x, t.bbox.y, t.bbox.w, t.bbox.h = bx, by, bw, bh
@@ -351,10 +364,15 @@ class CameraWorker(threading.Thread):
 
     def _build_event(self, frame, tracks, backend: Backend, latency_ms: float) -> DetectionEvent:
         h, w = frame.image.shape[:2]
-        horizon_y = self._resolve_horizon(frame)
+        base_horizon_y = self._resolve_horizon(frame)
         calib = (CalibrationStatus.ok if self._cam.horizon_y is not None
-                 else CalibrationStatus.auto if horizon_y is not None
+                 else CalibrationStatus.auto if base_horizon_y is not None
                  else CalibrationStatus.uncalibrated)
+        attitude = (self._attitude.get(self._settings.geometry.attitude_max_age_s)
+                    if self._attitude is not None else None)
+        horizon, compensated = resolve_horizon(self._cam, base_horizon_y, w, h, attitude)
+        horizon_y = horizon.y_center if horizon is not None else None
+        horizon_slope = horizon.slope if horizon is not None else 0.0
 
         targets = []
         max_area_frac = self._settings.detector.max_area_frac
@@ -380,7 +398,7 @@ class CameraWorker(threading.Thread):
                 continue
             brg = estimate_bearing(tr, self._cam, w)
             rng, method, rconf = estimate_range(
-                tr, self._cam, self._settings.geometry, w, h, horizon_y)
+                tr, self._cam, self._settings.geometry, w, h, horizon_y, horizon_slope)
             # Minimum-range gate (own-hull / very-near clutter), applied EARLY so
             # neither the event nor the overlay shows a too-close object. person is
             # exempt (MOB must be seen up close); unknown range is kept. The value
@@ -389,7 +407,7 @@ class CameraWorker(threading.Thread):
                     and rng is not None and 0 < rng < self.min_target_range_m):
                 continue
             # Use the waterline (bbox bottom) consistently with range estimation.
-            piw = is_person_in_water(tr.label, tr.y + tr.h, horizon_y)
+            piw = person_in_water(tr, horizon, base_horizon_y)
             targets.append(Target(
                 track_id=tr.track_id,
                 stable_id=tr.stable_id,
@@ -423,6 +441,8 @@ class CameraWorker(threading.Thread):
             frame_seq=frame.seq,
             frame_size=FrameSize(w=w, h=h),
             horizon_y=horizon_y,
+            horizon_slope=horizon_slope,
+            attitude_compensated=compensated,
             inference=Inference(backend=backend, latency_ms=latency_ms),
             calibration_status=calib,
             targets=targets,
@@ -441,6 +461,9 @@ class Pipeline:
         self.active_camera: str = settings.cameras[0].name if settings.cameras else "forward"
         self.mode_hint: str | None = None
         self.enabled: bool = True
+        # Boat attitude pushed by the SignalK plugin (POST /attitude), read per
+        # frame for IMU horizon compensation.
+        self.attitude = AttitudeStore()
 
     def start(self) -> None:
         # One detector for all cameras: a single model load / CUDA context. Two
@@ -453,7 +476,8 @@ class Pipeline:
             self._log.error("detector init failed: %s", exc)
         self.detector = detector
         for cam in self.settings.cameras:
-            w = CameraWorker(cam, self.settings, self.events, self.frames, self._log, detector)
+            w = CameraWorker(cam, self.settings, self.events, self.frames, self._log, detector,
+                             attitude=self.attitude)
             self.workers[cam.name] = w
             w.start()
             self._log.info("started camera worker: %s", cam.name)

@@ -21,7 +21,7 @@
 // `stale`, which downstream treats as "unknown", never as "stationary".
 
 import { ServerApp } from './skapp';
-import { OwnShip, LatLon } from './types';
+import { Attitude, OwnShip, LatLon } from './types';
 
 function num(v: any): number | null {
   return typeof v === 'number' && isFinite(v) ? v : null;
@@ -71,4 +71,24 @@ export function readOwnShip(app: ServerApp, maxAgeS = 0, now: number = Date.now(
     cog: num(c.raw),
     stale: p.stale || h.stale || s.stale || c.stale,
   };
+}
+
+/**
+ * Boat attitude from `navigation.attitude` (SignalK: an object of radians —
+ * roll +ve = list to starboard, pitch +ve = bow up, yaw). NMEA 2000 PGN 127257
+ * maps here via n2k-signalk; a field the sensor doesn't send arrives as null.
+ *
+ * Returns null — never a guessed level boat — when pitch or roll is missing,
+ * non-finite, outside +/-90° (a source publishing degrees as radians), or older
+ * than `maxAgeS` (SignalK keeps the last value after the IMU goes quiet).
+ */
+export function readAttitude(app: ServerApp, maxAgeS = 0, now: number = Date.now()): Attitude | null {
+  const r = readPath(app, 'navigation.attitude', maxAgeS > 0 ? maxAgeS * 1000 : 0, now);
+  const v = r.raw;
+  if (r.stale || !v || typeof v !== 'object') return null;
+  const pitch = num(v.pitch);
+  const roll = num(v.roll);
+  if (pitch === null || roll === null) return null;
+  if (Math.abs(pitch) > Math.PI / 2 || Math.abs(roll) > Math.PI / 2) return null;
+  return { pitch, roll };
 }

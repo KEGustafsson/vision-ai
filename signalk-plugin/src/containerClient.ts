@@ -29,6 +29,13 @@ export interface ControlBody {
   enabled?: boolean; // master on/off: pause/resume detection in the container
 }
 
+// Boat attitude for the container's horizon compensation (POST /attitude).
+// SignalK units and signs: radians, pitch +ve bow up, roll +ve list to starboard.
+export interface AttitudeBody {
+  pitch_rad: number;
+  roll_rad: number;
+}
+
 export interface PtzBody {
   action?: 'move' | 'stop' | 'home';
   pan?: number;
@@ -135,6 +142,11 @@ export class ContainerClient {
       ...body,
       client_generation: this.generation,
     });
+  }
+
+  /** Push the (smoothed) boat attitude; the container ages it out by itself. */
+  attitude(body: AttitudeBody): Promise<any> {
+    return this.postJson<any>('attitude', '/attitude', body);
   }
 
   ptz(camera: string, body: PtzBody): Promise<any> {

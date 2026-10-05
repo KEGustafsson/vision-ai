@@ -57,6 +57,15 @@ describe('DetectionEvent wire contract', () => {
     expect(ok).toBe(true);
   });
 
+  it('accepts the IMU horizon-compensation fields, and events without them', () => {
+    const ev = baseEvent();
+    ev.horizon_slope = -0.27;
+    ev.attitude_compensated = true;
+    expect(validate(ev)).toBe(true);
+    ev.horizon_slope = 'tilted';
+    expect(validate(ev)).toBe(false);
+  });
+
   it('accepts an event that omits the optional targets array', () => {
     const ev = baseEvent();
     delete ev.targets;

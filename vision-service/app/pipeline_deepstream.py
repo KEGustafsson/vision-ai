@@ -81,16 +81,22 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 from .api.osd import draw_event
+from .attitude import AttitudeStore
 from .config import CameraConfig, Settings
 from .detector.base import RawTrack
 from .detector.classmap import (
     MODEL_PGIE_CONFIG,
-    is_person_in_water,
     label_for_model,
 )
 from .detector.stabilizer import TrackStabilizer, cap_targets_sticky, make_stabilizer
 from .detector.tracker import VelocityTracker, reid_options
-from .geometry import detect_horizon_y, estimate_bearing, estimate_range
+from .geometry import (
+    detect_horizon_y,
+    estimate_bearing,
+    estimate_range,
+    person_in_water,
+    resolve_horizon,
+)
 from .motion import CameraFlowState, estimate_global_motion
 from .pipeline import _drop_contained_targets  # shared geometry filter, same package
 from .schemas import (
@@ -352,6 +358,9 @@ class DeepStreamPipeline:
         self.active_camera: str = settings.cameras[0].name if settings.cameras else "forward"
         self.mode_hint: Optional[str] = None
         self.enabled: bool = True
+        # Boat attitude pushed by the SignalK plugin (POST /attitude), read per
+        # frame for IMU horizon compensation.
+        self.attitude = AttitudeStore()
 
         # Per-camera inference state — written only during start(), read only
         # from the GLib probe callback thread after that.
@@ -1755,6 +1764,12 @@ class DeepStreamPipeline:
             else CalibrationStatus.auto if horizon_y is not None
             else CalibrationStatus.uncalibrated
         )
+        # IMU horizon compensation (pure arithmetic, no pixels touched).
+        base_horizon_y = horizon_y
+        attitude = self.attitude.get(self.settings.geometry.attitude_max_age_s)
+        horizon, compensated = resolve_horizon(cam, base_horizon_y, W, H, attitude)
+        horizon_y = horizon.y_center if horizon is not None else None
+        horizon_slope = horizon.slope if horizon is not None else 0.0
 
         frame_area = float(W * H) or 1.0
         max_area = self.settings.detector.max_area_frac
@@ -1776,7 +1791,7 @@ class DeepStreamPipeline:
 
             brg = estimate_bearing(tr, cam, W)
             rng, method, rconf = estimate_range(
-                tr, cam, self.settings.geometry, W, H, horizon_y)
+                tr, cam, self.settings.geometry, W, H, horizon_y, horizon_slope)
 
             # Minimum-range gate (own-hull / very-near clutter), applied EARLY so
             # neither the event nor the overlay shows a too-close object. person is
@@ -1786,7 +1801,7 @@ class DeepStreamPipeline:
                     and rng is not None and 0 < rng < state.min_target_range_m):
                 continue
 
-            piw = is_person_in_water(tr.label, tr.y + tr.h, horizon_y)
+            piw = person_in_water(tr, horizon, base_horizon_y)
             targets.append(Target(
                 track_id=tr.track_id,
                 stable_id=tr.stable_id,
@@ -1818,6 +1833,8 @@ class DeepStreamPipeline:
             frame_seq=frame_num,
             frame_size=FrameSize(w=W, h=H),
             horizon_y=horizon_y,
+            horizon_slope=horizon_slope,
+            attitude_compensated=compensated,
             inference=Inference(backend=Backend.deepstream, latency_ms=latency_ms),
             calibration_status=calib,
             targets=targets,

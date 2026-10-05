@@ -185,8 +185,10 @@ def draw_event(pyds, batch_meta, frame_meta, event: DetectionEvent) -> None:
     width = event.frame_size.w
 
     if event.horizon_y is not None:
-        y = int(event.horizon_y)
-        mw.line(0, y, width, y, _HORIZON, width=1)
+        # Tilted by heel when IMU attitude compensation is active.
+        half = event.horizon_slope * width / 2.0
+        mw.line(0, int(event.horizon_y - half), width, int(event.horizon_y + half),
+                _HORIZON, width=1)
 
     # Rects already placed this frame, so adjacent targets' label blocks fan
     # out instead of one plate stacking over another (see _MetaWriter.text_block).

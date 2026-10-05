@@ -130,7 +130,24 @@ class DetectionEvent(BaseModel):
     timestamp: str  # ISO-8601 UTC
     frame_seq: int
     frame_size: FrameSize
-    horizon_y: Optional[float] = None
+    horizon_y: Optional[float] = Field(
+        None,
+        description="Horizon row in pixels at the frame centre column (x = w/2). "
+                    "IMU-compensated for the boat's pitch/roll when "
+                    "attitude_compensated is true.",
+    )
+    horizon_slope: float = Field(
+        0.0,
+        description="Horizon tilt in pixel rows per column through "
+                    "(w/2, horizon_y); +ve = lower on the right of the image. "
+                    "Non-zero only with IMU attitude compensation (heel).",
+    )
+    attitude_compensated: bool = Field(
+        False,
+        description="True when a fresh boat attitude (SignalK "
+                    "navigation.attitude, forwarded by the plugin) was applied "
+                    "to horizon_y/horizon_slope and hence to every range.",
+    )
     inference: Inference
     calibration_status: CalibrationStatus = CalibrationStatus.uncalibrated
     targets: List[Target] = Field(default_factory=list)
@@ -164,6 +181,29 @@ class ControlRequest(BaseModel):
     # the old ones. Optional and additive — a client that omits it is applied
     # as before, and omitting it never moves the fence.
     client_generation: Optional[int] = Field(None, ge=0)
+
+
+class AttitudeRequest(BaseModel):
+    """POST /attitude — boat attitude for IMU horizon compensation.
+
+    SignalK ``navigation.attitude`` units and signs, forwarded by the plugin:
+    radians, pitch +ve = bow up, roll +ve = list to starboard. Bounded to
+    +/-90 deg so a source publishing degrees (or garbage) is refused rather than
+    applied as a wild tilt.
+    """
+
+    pitch_rad: float = Field(..., ge=-1.5707963267948966, le=1.5707963267948966)
+    roll_rad: float = Field(..., ge=-1.5707963267948966, le=1.5707963267948966)
+
+
+class AttitudeStatus(BaseModel):
+    """Last attitude received (degrees, for calibration readout) and its age."""
+
+    pitch_deg: float
+    roll_deg: float
+    age_s: float
+    # Whether it is fresh enough to be applied (geometry.attitude_max_age_s).
+    active: bool
 
 
 class PtzRequest(BaseModel):
@@ -228,3 +268,7 @@ class HealthResponse(BaseModel):
     # entry per camera — state "disabled" when detector.optical_flow is off.
     # Empty on every other backend (they have no OFA path at all).
     optical_flow: Dict[str, OpticalFlowStatus] = Field(default_factory=dict)
+    # Last boat attitude forwarded by the plugin for horizon compensation; null
+    # when none has been received. Read pitch/roll here while calibrating
+    # horizon_y and enter them as the camera's horizon_ref_*_deg.
+    attitude: Optional[AttitudeStatus] = None
