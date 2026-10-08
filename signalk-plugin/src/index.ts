@@ -14,7 +14,7 @@ import { enrichTarget } from './enrich';
 import { NotificationManager, degradedFaultKey } from './notifications';
 import { Publisher } from './publisher';
 import { readAttitude, readOwnShip } from './nav';
-import { AttitudeSmoother } from './attitude';
+import { AttitudeSmoother, AttitudeWatch } from './attitude';
 import { registerRoutes, SharedState } from './router';
 import { Plugin, ServerApp } from './skapp';
 import { DetectionEvent, EnrichedTarget, LatLon } from './types';
@@ -37,8 +37,9 @@ export = function (app: ServerApp): Plugin {
   // down, each request would otherwise wait out the 4 s client timeout and
   // twenty would pile up.
   let attitudeInFlight = false;
-  // Availability transitions, so a missing/stale IMU is logged once, not per push.
-  let attitudeAvailable: boolean | null = null;
+  // Availability transitions, so a missing/stale IMU is logged once, not per
+  // push — and not at all while SignalK is still coming up after a restart.
+  let attitudeWatch: AttitudeWatch | null = null;
 
   const targets = new Map<string, EnrichedTarget>();
   // Last cycle's AIS association (target key -> mmsi). Persisted across process
@@ -282,20 +283,33 @@ export = function (app: ServerApp): Plugin {
   function pushAttitude(): void {
     const c = client;
     const smoother = attitudeSmoother;
-    if (!c || !smoother) return;
+    const watch = attitudeWatch;
+    if (!c || !smoother || !watch) return;
     const now = Date.now();
     const att = smoother.update(readAttitude(app, cfg.attitudeMaxAgeS, now), now);
-    const available = att !== null;
-    if (available !== attitudeAvailable) {
-      if (!available) {
+    const navFlowing = () => {
+      const own = readOwnShip(app, cfg.ownNavMaxAgeS, now);
+      return own.position !== null || own.headingTrue !== null;
+    };
+    switch (watch.update(att !== null, navFlowing, now)) {
+      case 'arrived':
+        app.debug('vision-ai: navigation.attitude received — horizon compensation active');
+        break;
+      case 'never-arrived':
+        app.error(
+          'vision-ai: no navigation.attitude (pitch/roll) received since start — ' +
+            'camera horizons are not compensated for trim/heel'
+        );
+        break;
+      case 'lost':
         app.error(
           'vision-ai: navigation.attitude (pitch/roll) missing or stale — ' +
             'camera horizons are not compensated for trim/heel'
         );
-      } else if (attitudeAvailable === false) {
+        break;
+      case 'resumed':
         app.debug('vision-ai: navigation.attitude available again — horizon compensation resumed');
-      }
-      attitudeAvailable = available;
+        break;
     }
     if (!att || attitudeInFlight) return;
     attitudeInFlight = true;
@@ -568,6 +582,7 @@ export = function (app: ServerApp): Plugin {
       }, 5000);
       if (cfg.enableAttitudeCompensation) {
         attitudeSmoother = new AttitudeSmoother(cfg.attitudeSmoothingS);
+        attitudeWatch = new AttitudeWatch(Date.now());
         attitudeTimer = setInterval(() => {
           try {
             pushAttitude();
@@ -586,7 +601,7 @@ export = function (app: ServerApp): Plugin {
       processTimer = syncTimer = attitudeTimer = null;
       attitudeSmoother = null;
       attitudeInFlight = false;
-      attitudeAvailable = null;
+      attitudeWatch = null;
       if (stream) stream.stop();
       if (notifier) notifier.clearAll();
       if (publisher) publisher.reset();
