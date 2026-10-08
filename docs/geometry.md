@@ -197,6 +197,11 @@ check it on the overlay in a seaway before relying on it.
   `geometry.attitude_max_age_s` — 2 s each), out-of-range or geometrically
   degenerate attitude → the container uses the plain calibrated row, exactly as
   without the feature; `attitude_compensated` reads `false`.
+- The plugin logs a lost attitude once, immediately. Right after a (re)start it
+  stays quiet while SignalK comes up: an attitude that never arrives is
+  reported only once own-ship position/heading has been flowing for 15 s
+  without it (or 2 min after start if no navigation data arrives at all), so a
+  healthy IMU that is simply slower to appear than the plugin is not flagged.
 - **Man-overboard is never suppressed by compensation:** a person counts as in
   the water if their waterline is below *either* the compensated line or the
   plain calibrated row, so compensation can add MOB candidates (where heel

@@ -2,7 +2,7 @@
 // low-pass filtering it before it is pushed to the container.
 
 import { describe, it, expect } from 'vitest';
-import { AttitudeSmoother } from '../src/attitude';
+import { AttitudeSmoother, AttitudeWatch } from '../src/attitude';
 import { withDefaults } from '../src/config';
 import { readAttitude } from '../src/nav';
 import { ServerApp } from '../src/skapp';
@@ -100,5 +100,56 @@ describe('attitude config', () => {
     expect(withDefaults({ attitudeIntervalMs: 10 }).attitudeIntervalMs).toBe(200);
     expect(withDefaults({ attitudeIntervalMs: 500 }).attitudeIntervalMs).toBe(500);
     expect(withDefaults({ attitudeSmoothingS: -1 }).attitudeSmoothingS).toBe(5);
+  });
+});
+
+describe('AttitudeWatch', () => {
+  const T0 = 1_000_000;
+  const navUp = () => true;
+  const navDown = () => false;
+
+  it('stays quiet while SignalK is still coming up after a restart', () => {
+    const w = new AttitudeWatch(T0, 15_000, 120_000);
+    // No nav, no attitude yet: bus still cold, nothing to report.
+    for (let t = T0; t < T0 + 60_000; t += 200) expect(w.update(false, navDown, t)).toBeNull();
+    // Nav starts flowing; attitude follows a few seconds later.
+    expect(w.update(false, navUp, T0 + 60_000)).toBeNull();
+    expect(w.update(false, navUp, T0 + 65_000)).toBeNull();
+    expect(w.update(true, navUp, T0 + 66_000)).toBe('arrived');
+    expect(w.update(true, navUp, T0 + 66_200)).toBeNull();
+  });
+
+  it('reports a missing IMU once own-ship nav has flowed for the settle time', () => {
+    const w = new AttitudeWatch(T0, 15_000, 120_000);
+    expect(w.update(false, navUp, T0 + 1_000)).toBeNull();
+    expect(w.update(false, navUp, T0 + 15_999)).toBeNull();
+    expect(w.update(false, navUp, T0 + 16_000)).toBe('never-arrived');
+    // Once, not per tick.
+    expect(w.update(false, navUp, T0 + 16_200)).toBeNull();
+    expect(w.update(true, navUp, T0 + 30_000)).toBe('resumed');
+  });
+
+  it('still reports after the boot cap if the bus never comes up', () => {
+    const w = new AttitudeWatch(T0, 15_000, 120_000);
+    expect(w.update(false, navDown, T0 + 119_999)).toBeNull();
+    expect(w.update(false, navDown, T0 + 120_000)).toBe('never-arrived');
+  });
+
+  it('reports a loss at once after attitude has been seen, and the recovery', () => {
+    const w = new AttitudeWatch(T0, 15_000, 120_000);
+    expect(w.update(true, navUp, T0)).toBe('arrived');
+    expect(w.update(false, navUp, T0 + 200)).toBe('lost');
+    expect(w.update(false, navUp, T0 + 400)).toBeNull();
+    expect(w.update(true, navUp, T0 + 600)).toBe('resumed');
+  });
+
+  it('only probes own-ship nav while warming up', () => {
+    const w = new AttitudeWatch(T0);
+    let probes = 0;
+    const probe = () => (probes++, true);
+    w.update(false, probe, T0);
+    w.update(true, probe, T0 + 200);
+    w.update(false, probe, T0 + 400);
+    expect(probes).toBe(1);
   });
 });
