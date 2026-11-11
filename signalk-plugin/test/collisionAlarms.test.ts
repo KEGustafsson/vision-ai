@@ -353,6 +353,17 @@ describe('NotificationManager — dark targets', () => {
     expect(cpa.message).not.toContain('no AIS');
   });
 
+  it('clears a standing dark-target alert at once when its boat matches AIS', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg); // hold 10 s
+    const t = boat(3, { threatLevel: 'none' });
+    n.evaluate([t], new Set([t.key]), 1_000, coordination());
+    expect(app.raised(DARK).size).toBe(1);
+    // Its only dark track matches an AIS vessel: no track of the boat is dark
+    // any more, and the alert goes without waiting for its hold.
+    n.evaluate([{ ...t, aisMmsi: '230000001', aisCorrelated: true }], new Set(), 2_000, coordination());
+    expect(app.raised(DARK).size).toBe(0);
+  });
+
   it('does not call a boat dark that fusion links to an AIS vessel', () => {
     const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
     const t = boat(3, { threatLevel: 'none' });

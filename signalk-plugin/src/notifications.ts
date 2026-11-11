@@ -428,16 +428,19 @@ export class NotificationManager {
     release: Set<string>
   ): void {
     for (const boat of boats) {
-      const dark = boat.targets.filter((t) => darkKeys.has(t.key));
-      if (dark.length === 0) continue;
       const path = `${DARK_PREFIX}${boat.token}`;
       // A boat some track of which is an AIS vessel is not dark, whatever one
-      // linked track's own AIS correlation says.
+      // linked track's own AIS correlation says, and a boat under a collision
+      // alarm needs no second alert. Either way a standing dark-target alert
+      // goes at once, before the check below that skips boats with no dark
+      // track: a boat whose only dark track just matched AIS has none.
       if (boat.hasAis || underCollisionAlarm.has(boat.key)) {
         release.add(path);
         this.releaseHeld(DARK_PREFIX, boat, release);
         continue;
       }
+      const dark = boat.targets.filter((t) => darkKeys.has(t.key));
+      if (dark.length === 0) continue;
       // The nearest sighting speaks for the boat.
       const t = dark.reduce((a, b) =>
         (a.geometry.range_m ?? Infinity) <= (b.geometry.range_m ?? Infinity) ? a : b);
