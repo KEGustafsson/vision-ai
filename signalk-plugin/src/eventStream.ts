@@ -31,6 +31,13 @@ const PONG_TIMEOUT_MS = 10000;
 export interface KeepaliveOptions {
   pingIntervalMs?: number;
   pongTimeoutMs?: number;
+  /**
+   * Called each time a connection opens, before any event on it is
+   * delivered. A container restart always drops the connection, and the new
+   * session's events only arrive on the next one, so this is where the plugin
+   * forgets the previous session's tracks.
+   */
+  onConnected?: () => void;
 }
 
 export class EventStream {
@@ -47,6 +54,7 @@ export class EventStream {
   private staleActive = false;
   private readonly pingIntervalMs: number;
   private readonly pongTimeoutMs: number;
+  private readonly onConnected?: () => void;
 
   constructor(
     private wsUrl: string,
@@ -66,6 +74,7 @@ export class EventStream {
   ) {
     this.pingIntervalMs = keepalive.pingIntervalMs ?? PING_INTERVAL_MS;
     this.pongTimeoutMs = keepalive.pongTimeoutMs ?? PONG_TIMEOUT_MS;
+    this.onConnected = keepalive.onConnected;
     this.loadSchema();
   }
 
@@ -179,6 +188,11 @@ export class EventStream {
       this.backoff = 1000;
       this.log.debug('vision-ai: event stream connected');
       this.startKeepalive(ws);
+      try {
+        this.onConnected?.();
+      } catch (e) {
+        this.log.error(`vision-ai: event stream connect handler failed: ${e}`);
+      }
     });
     ws.on('pong', () => this.markAlive());
 

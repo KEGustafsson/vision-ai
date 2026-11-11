@@ -286,6 +286,19 @@ describe('NotificationManager — dark targets', () => {
     expect(app.raised('notifications.').size).toBe(0);
   });
 
+  it('clears a dark-target alert at once when a new link names a boat another plugin alarms', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', withDefaults({ notifyCollision: false, notifyHoldS: 10 }));
+    const t = boat(3, { threatLevel: 'none' });
+    n.evaluate([t], new Set([t.key]), 1_000, coordination());
+    expect([...app.raised(DARK).keys()]).toEqual([`${DARK}visionai-forward-3`]);
+    // Fusion now links the track to a radar target that another plugin alarms:
+    // the boat's name changes, and the alert under its old name must go too.
+    const links = { [ctxOf(t)]: 'targets.radar:nav1-17' };
+    n.evaluate([t], new Set([t.key]), 2_000,
+      coordination({ links, othersAlarmed: new Set(['targets.radar:nav1-17']) }));
+    expect(app.raised('notifications.').size).toBe(0);
+  });
+
   it('keeps the dark-target alert when Collision Alerts runs but raises nothing', () => {
     const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
     const t = boat(3);

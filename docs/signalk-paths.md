@@ -35,10 +35,12 @@ for an AIS vessel.
   sensors. Camera names are written one-to-one into the id (any character
   outside `[a-zA-Z0-9]` as its hex code between underscores, so `bow cam` is
   `bow_20_cam`), so two cameras never share a context.
-- **Container restarts.** `stable_id` is unique within one container session.
-  When the container's `/health` uptime shows it restarted, every target of
-  the old session is withdrawn (null position) and its CPA and AIS history
-  dropped, so a new boat that receives a reused serial starts as a new target.
+- **Container restarts.** `stable_id` is unique within one container session,
+  and a restart always drops the event-stream connection. So whenever the
+  connection (re)opens, before its first event, every target of the previous
+  connection is withdrawn (null position) and its CPA and AIS history dropped:
+  a new boat that receives a reused serial starts as a new target, never as an
+  old one. A reconnect within one session only restarts its tracks.
 - **One source per camera** (`vision-ai-<camera>`). Target Fusion never merges
   two targets from one sensor and identifies the sensor by `$source`; with one
   label for both cameras a boat seen by both would stay two rings.

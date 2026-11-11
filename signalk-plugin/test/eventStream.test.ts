@@ -98,6 +98,24 @@ describe('EventStream', () => {
     expect(connections).toBeGreaterThanOrEqual(2);
   });
 
+  it('reports each new connection before delivering any event on it', async () => {
+    const { wss, url } = await serve();
+    const seen: string[] = [];
+    let connections = 0;
+    wss.on('connection', (sock) => {
+      connections++;
+      sock.send(JSON.stringify({ ...sampleEvent(), frame_seq: connections }));
+      // The first connection drops, as a restarting container's does.
+      if (connections === 1) setTimeout(() => sock.terminate(), 20);
+    });
+    const stream = new EventStream(url, (ev) => seen.push(`event ${ev.frame_seq}`), log, undefined,
+      () => 0, undefined, { pingIntervalMs: 0, onConnected: () => seen.push('connected') });
+    streams.push(stream);
+    stream.start();
+    await until(() => seen.length >= 4, 4000);
+    expect(seen.slice(0, 4)).toEqual(['connected', 'event 1', 'connected', 'event 2']);
+  });
+
   it('stop() cancels a pending reconnect', async () => {
     const { wss, url } = await serve();
     let connections = 0;

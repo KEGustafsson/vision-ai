@@ -5,7 +5,7 @@
 // notifications, and publishes the vision.* tree. Also serves a captain webapp
 // and proxies the annotated video stream (see router.ts).
 
-import { ContainerClient, ContainerSessionWatch, ControlBody, HealthInfo } from './containerClient';
+import { ContainerClient, ControlBody, HealthInfo } from './containerClient';
 import { CpaEstimator } from './cpa';
 import { EventStream } from './eventStream';
 import { PluginConfig, schema, uiSchema, withDefaults } from './config';
@@ -34,8 +34,6 @@ export = function (app: ServerApp): Plugin {
   // Collision Alerts' announcement: while it evaluates sensor targets, the
   // boats it can see alarm through it alone.
   const collisionAlerts = new CollisionAlertsWatch();
-  // Container restarts, after which track serials start over.
-  const containerSession = new ContainerSessionWatch();
   let processTimer: NodeJS.Timeout | null = null;
   let syncTimer: NodeJS.Timeout | null = null;
   let attitudeTimer: NodeJS.Timeout | null = null;
@@ -425,14 +423,20 @@ export = function (app: ServerApp): Plugin {
   let lastDegradedDetail: string | null = null;
 
   /**
-   * Drop everything the previous container session tracked. Its targets are
-   * withdrawn from the chart (track lost) and their CPA and AIS history
-   * forgotten, so a new boat that receives a reused serial starts as a new
-   * target. Withdrawing first is what makes reusing the id safe: consumers
-   * treat a context whose position went null as finished.
+   * Drop everything tracked over the previous event-stream connection. Track
+   * serials (`stable_id`) are unique within one container session only, and a
+   * container restart always drops the connection, so every new connection may
+   * be a new session whose serials start over. Its targets are withdrawn from
+   * the chart (track lost) and their CPA and AIS history forgotten before the
+   * first event on the new connection, so a new boat that receives a reused
+   * serial starts as a new target. Withdrawing first is what makes reusing the
+   * id safe: consumers treat a context whose position went null as finished.
+   * A reconnect within one session costs only a fresh start for its tracks.
    */
-  function forgetContainerSession(): void {
-    app.debug('vision-ai: vision container restarted — dropping the previous session\'s targets');
+  function forgetPreviousConnection(): void {
+    if (targets.size > 0) {
+      app.debug('vision-ai: event stream (re)connected — dropping the previous connection\'s targets');
+    }
     targets.clear();
     aisAssignment = new Map<string, string>();
     lastEventTsByCamera.clear();
@@ -477,7 +481,6 @@ export = function (app: ServerApp): Plugin {
       notifier.clearContainerDown();
       app.debug('vision-ai: container reachable again');
     }
-    if (containerSession.update(info.uptime_s, Date.now())) forgetContainerSession();
 
     // Degraded: container is up but reporting a camera stall or pipeline
     // restart (app/api/rest.py sets status="degraded"). Surface the detail.
@@ -598,7 +601,8 @@ export = function (app: ServerApp): Plugin {
           } else {
             notifier.clearStaleEvents();
           }
-        }
+        },
+        { onConnected: forgetPreviousConnection }
       );
       stream.start();
 
@@ -650,7 +654,6 @@ export = function (app: ServerApp): Plugin {
       attitudeWatch = null;
       if (stream) stream.stop();
       collisionAlerts.stop();
-      containerSession.reset();
       if (notifier) notifier.clearAll();
       if (publisher) publisher.reset();
       if (cpa) cpa.reset();

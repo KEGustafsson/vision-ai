@@ -311,6 +311,15 @@ export class NotificationManager {
     }
   }
 
+  /** Release every path of a kind raised for any of the boat's tracks under
+   * an earlier grouping, whose name (token) may differ from the current one. */
+  private releaseHeld(prefix: string, boat: Boat, release: Set<string>): void {
+    const keys = new Set(boat.targets.map((t) => t.key));
+    for (const [held, members] of this.members) {
+      if (held.startsWith(prefix) && [...members].some((k) => keys.has(k))) release.add(held);
+    }
+  }
+
   /** Refresh the hold for currently-wanted holdable paths, then re-add any
    * held path whose hold hasn't expired so it isn't cleared yet (anti-flap).
    * A released path drops its hold. */
@@ -420,6 +429,7 @@ export class NotificationManager {
       const path = `${DARK_PREFIX}${boat.token}`;
       if (underCollisionAlarm.has(boat.key)) {
         release.add(path);
+        this.releaseHeld(DARK_PREFIX, boat, release);
         continue;
       }
       // The nearest sighting speaks for the boat.
@@ -457,13 +467,7 @@ export class NotificationManager {
         (coord.collisionAlertsRunning && boat.seenByCollisionAlerts);
       if (covered) {
         release.add(path);
-        // A path raised under an earlier grouping of these tracks goes too.
-        const keys = new Set(boat.targets.map((t) => t.key));
-        for (const [held, members] of this.members) {
-          if (held.startsWith(COLLISION_PREFIX) && [...members].some((k) => keys.has(k))) {
-            release.add(held);
-          }
-        }
+        this.releaseHeld(COLLISION_PREFIX, boat, release);
         continue;
       }
       const risky = boat.targets.filter((t) => t.threatLevel === 'medium' || t.threatLevel === 'high');
