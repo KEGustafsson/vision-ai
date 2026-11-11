@@ -56,7 +56,6 @@ function coordination(partial: Partial<AlarmCoordination> & { links?: Record<str
   return {
     publishedContext: (t) => ctxOf(t),
     sameAs: (context) => links[context] ?? null,
-    collisionAlertsRunning: false,
     othersAlarmed: new Set(),
     ...rest,
   };
@@ -151,29 +150,17 @@ describe('NotificationManager — collision alarms', () => {
     expect(app.raised(CPA).size).toBe(0);
   });
 
-  it('hands a standing alarm over to Collision Alerts without a gap or a double', () => {
+  it('hands its alarm over the moment another producer alarms the boat, and takes it back', () => {
     const n = new NotificationManager(app, 'signalk-vision-ai', cfg); // hold 10 s
     const t = boat(3);
     n.evaluate([t], new Set([t.key]), 1_000, coordination());
     expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai-forward-3`]);
-    // Collision Alerts announces itself but has not evaluated the boat yet:
-    // ours stays up, and no dark-target alert appears beside it.
-    n.evaluate([t], new Set([t.key]), 2_000, coordination({ collisionAlertsRunning: true }));
-    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai-forward-3`]);
-    expect(app.raised(DARK).size).toBe(0);
-    // Its alarm appears: ours goes in the same cycle.
-    n.evaluate([t], new Set([t.key]), 3_000,
-      coordination({ collisionAlertsRunning: true, othersAlarmed: new Set([ctxOf(t)]) }));
+    // Collision Alerts raises its alarm: ours goes in the same evaluation.
+    n.evaluate([t], new Set([t.key]), 2_000, coordination({ othersAlarmed: new Set([ctxOf(t)]) }));
     expect(app.raised('notifications.').size).toBe(0);
-  });
-
-  it('lets a standing alarm lapse after its hold if Collision Alerts never alarms the boat', () => {
-    const n = new NotificationManager(app, 'signalk-vision-ai', cfg); // hold 10 s
-    n.evaluate([boat(3)], new Set(), 1_000, coordination());
-    n.evaluate([boat(3)], new Set(), 5_000, coordination({ collisionAlertsRunning: true }));
-    expect(app.raised(CPA).size).toBe(1);
-    n.evaluate([boat(3)], new Set(), 12_000, coordination({ collisionAlertsRunning: true }));
-    expect(app.raised(CPA).size).toBe(0);
+    // Its alarm clears while the boat still threatens: ours comes back.
+    n.evaluate([t], new Set([t.key]), 3_000, coordination());
+    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai-forward-3`]);
   });
 
   it('alarms once for tracks matched to the same AIS vessel, named by the vessel', () => {
@@ -196,22 +183,60 @@ describe('NotificationManager — collision alarms', () => {
     expect(path).not.toBe(`${CPA}camera:visionai-forward-3`);
   });
 
-  it('leaves a boat Collision Alerts can see to Collision Alerts', () => {
+  it('keeps alarming a risky boat no other producer alarms, whatever plugins run', () => {
     const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
-    // Published on the chart: Collision Alerts evaluates the camera target.
-    n.evaluate([boat(3)], new Set(), 1_000, coordination({ collisionAlertsRunning: true }));
-    // Matched to AIS: Collision Alerts evaluates the vessel.
-    n.evaluate([boat(4, { aisMmsi: '1' })], new Set(), 2_000,
-      coordination({ collisionAlertsRunning: true, publishedContext: () => null }));
-    expect(app.raised(CPA).size).toBe(0);
+    // Another producer alarms a different boat only: this one stays ours.
+    n.evaluate([boat(3)], new Set(), 1_000,
+      coordination({ othersAlarmed: new Set(['vessels.urn:mrn:imo:mmsi:999999999']) }));
+    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai-forward-3`]);
   });
 
-  it('keeps the alarm for a boat Collision Alerts cannot see', () => {
+  it('gives boats whose contexts differ only in punctuation alarms of their own', () => {
     const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
-    // Not published and no AIS match: nothing else knows this boat exists.
-    n.evaluate([boat(3)], new Set(), 1_000,
-      coordination({ collisionAlertsRunning: true, publishedContext: () => null }));
+    const a = boat(3);
+    const b = boat(4);
+    const links = { [ctxOf(a)]: 'targets.radar:a:b', [ctxOf(b)]: 'targets.radar:a_b' };
+    n.evaluate([a, b], new Set(), 1_000, coordination({ links }));
+    expect(app.raised(CPA).size).toBe(2);
+  });
+
+  it('lets a fusion link to an AIS vessel override its own position match', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
+    // Fusion says this track is vessel B; our position match said vessel A.
+    const t = boat(3, { aisMmsi: '230000001', aisCorrelated: true });
+    const links = { [ctxOf(t)]: 'vessels.urn:mrn:imo:mmsi:230000002' };
+    // Another producer alarms vessel A: that must not silence the alarm for B.
+    n.evaluate([t], new Set(), 1_000,
+      coordination({ links, othersAlarmed: new Set(['vessels.urn:mrn:imo:mmsi:230000001']) }));
+    const raised = app.raised(CPA);
+    expect([...raised.keys()]).toEqual([`${CPA}visionai-mmsi-230000002`]);
+    expect(raised.get(`${CPA}visionai-mmsi-230000002`).data.targetRef)
+      .toBe('vessels.urn:mrn:imo:mmsi:230000002');
+  });
+
+  it('does not merge a track linked to one vessel with a track matched to another', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
+    const linked = boat(3, { aisMmsi: '230000001' });
+    const matched = boat(4, { camera: 'aft', key: 'aft.4', aisMmsi: '230000001' });
+    const links = { [ctxOf(linked)]: 'vessels.urn:mrn:imo:mmsi:230000002' };
+    n.evaluate([linked, matched], new Set(), 1_000, coordination({ links }));
+    expect([...app.raised(CPA).keys()].sort()).toEqual(
+      [`${CPA}visionai-mmsi-230000001`, `${CPA}visionai-mmsi-230000002`]);
+  });
+
+  it('releases an alarm at once when its boat is renamed, whichever track qualifies', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg); // hold 10 s
+    const bow = boat(3);
+    const stern = boat(9, { camera: 'aft', key: 'aft.9', threatLevel: 'none' });
+    const links = { [ctxOf(stern)]: ctxOf(bow) };
+    n.evaluate([bow, stern], new Set(), 1_000, coordination({ links }));
     expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai-forward-3`]);
+    // A link to an AIS vessel renames the boat, and now the stern track is
+    // the one that threatens.
+    const links2 = { ...links, [ctxOf(bow)]: 'vessels.urn:mrn:imo:mmsi:230000001' };
+    n.evaluate([{ ...bow, threatLevel: 'none' }, { ...stern, threatLevel: 'high' }], new Set(), 2_000,
+      coordination({ links: links2 }));
+    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai-mmsi-230000001`]);
   });
 
   it('stands down at once, without its hold, when another plugin alarms the boat', () => {
@@ -316,11 +341,23 @@ describe('NotificationManager — dark targets', () => {
     expect(app.raised('notifications.').size).toBe(0);
   });
 
-  it('keeps the dark-target alert when Collision Alerts runs but raises nothing', () => {
+  it('does not call a boat dark when one of its tracks is an AIS vessel', () => {
     const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
-    const t = boat(3);
-    n.evaluate([t], new Set([t.key]), 1_000, coordination({ collisionAlertsRunning: true }));
-    expect(app.raised(CPA).size).toBe(0);
-    expect([...app.raised(DARK).keys()]).toEqual([`${DARK}visionai-forward-3`]);
+    // The bow track matched AIS; the linked stern track, on its own, did not.
+    const bow = boat(3, { aisMmsi: '230000001', threatLevel: 'none' });
+    const stern = boat(9, { camera: 'aft', key: 'aft.9', threatLevel: 'high' });
+    const links = { [ctxOf(stern)]: ctxOf(bow) };
+    n.evaluate([bow, stern], new Set([stern.key]), 1_000, coordination({ links }));
+    expect(app.raised(DARK).size).toBe(0);
+    const [cpa] = [...app.raised(CPA).values()];
+    expect(cpa.message).not.toContain('no AIS');
+  });
+
+  it('does not call a boat dark that fusion links to an AIS vessel', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
+    const t = boat(3, { threatLevel: 'none' });
+    const links = { [ctxOf(t)]: 'vessels.urn:mrn:imo:mmsi:230000001' };
+    n.evaluate([t], new Set([t.key]), 1_000, coordination({ links }));
+    expect(app.raised(DARK).size).toBe(0);
   });
 });

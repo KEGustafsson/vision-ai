@@ -20,13 +20,6 @@ export interface ServerApp {
   error(msg: string | Error): void;
   setPluginStatus?(msg: string): void;
   setPluginError?(msg: string): void;
-  // PropertyValues: the server's channel for plugins to announce themselves to
-  // each other (Collision Alerts announces `collisionAlerts`). Optional: older
-  // servers lack it, and then this plugin keeps every alarm of its own.
-  onPropertyValues?(
-    name: string,
-    cb: (history: Array<{ value?: unknown } | undefined>) => void
-  ): () => void;
   // Delta subscriptions, as a client's. Optional: without it, other
   // producers' alarms are only noticed on the next process cycle.
   subscriptionmanager?: {

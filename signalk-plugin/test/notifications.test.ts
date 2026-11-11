@@ -80,6 +80,27 @@ describe('NotificationManager — MOB persistence', () => {
   });
 });
 
+describe('NotificationManager — forgetTracks', () => {
+  it('restarts MOB persistence counts but keeps a raised MOB alarm', () => {
+    const app = new FakeApp();
+    const n = new NotificationManager(app, 'signalk-vision-ai', withDefaults({ enableMob: true, mobPersistFrames: 3 }));
+    // Two sightings counted on one connection...
+    n.evaluate([mobTarget(1_000)], new Set(), 1_100);
+    n.evaluate([mobTarget(2_000)], new Set(), 2_100);
+    n.forgetTracks();
+    // ...do not count towards a sighting on the next one.
+    n.evaluate([mobTarget(3_000)], new Set(), 3_100);
+    expect(app.valueFor('notifications.mob')).toBeUndefined();
+    // A raised alarm is not withdrawn by it.
+    n.evaluate([mobTarget(4_000)], new Set(), 4_100);
+    n.evaluate([mobTarget(5_000)], new Set(), 5_100);
+    expect(app.valueFor('notifications.mob').state).toBe('emergency');
+    n.forgetTracks();
+    n.evaluate([], new Set(), 6_000);
+    expect(app.valueFor('notifications.mob').state).toBe('emergency');
+  });
+});
+
 describe('NotificationManager — container health', () => {
   let app: FakeApp;
   const cfg = withDefaults({});

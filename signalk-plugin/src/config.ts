@@ -111,7 +111,7 @@ export function schema(): object {
       enableVisualRadar: {
         type: 'boolean',
         title: 'Publish targets to the chart (camera sensor targets)',
-        description: 'Publishes each georeferenced target as a Signal K sensor target, targets.camera:visionai-<camera>-<id>, named VIS-<camera>-<overlay number>, with navigation.position and (when "Compute: collision" is on) SOG/COG. Chartplotters that show sensor targets (Freeboard-SK 3.5 and later) draw them as camera targets, not as AIS vessels. With the Target Fusion plugin installed, a boat the cameras and AIS both see is drawn once, as its AIS vessel, and Collision Alerts alarms on these targets itself. Data only — never raises a notification. Off by default.',
+        description: 'Publishes each georeferenced target as a Signal K sensor target, targets.camera:visionai-<camera>-<session>-<stable_id>, named VIS-<camera>-<overlay number>, with navigation.position and (when "Compute: collision" is on) SOG/COG. Chartplotters that show sensor targets (Freeboard-SK 3.5 and later) draw them as camera targets, not as AIS vessels. With the Target Fusion plugin installed, a boat the cameras and AIS both see is drawn once, as its AIS vessel, and Collision Alerts alarms on these targets itself. Data only — never raises a notification. Off by default.',
         default: false,
       },
       enableCollision: {
@@ -136,7 +136,7 @@ export function schema(): object {
       notifyCollision: {
         type: 'boolean',
         title: 'Notify: collision risk',
-        description: 'Raises one notifications.navigation.closestApproach.visionai-<boat> alarm per boat (state: warn, then alarm; visual+sound) for risky approaches, which chartplotters draw on the chart. Never two alarms for one boat: tracks of the same boat (both cameras, or a camera and its AIS match) raise one, and a boat the Collision Alerts plugin can see, or that another plugin already alarms, raises none here. Needs "Compute: collision" on.',
+        description: 'Raises one notifications.navigation.closestApproach.visionai-<boat> alarm per boat (state: warn, then alarm; visual+sound) for risky approaches, which chartplotters draw on the chart. Never two alarms for one boat: tracks of the same boat (both cameras, or a camera and its AIS match) raise one, and a boat another plugin (e.g. Collision Alerts) already alarms raises none here, until that alarm clears. Needs "Compute: collision" on.',
         default: true,
       },
       notifyDarkTarget: {

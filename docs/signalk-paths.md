@@ -142,20 +142,20 @@ A boat alarms **once**, whichever plugins and sensors see it:
 1. **Tracks of one boat raise one alarm.** Tracks that share any context — the
    target one is published as, the target or vessel a Target Fusion link
    (`sameAs`) names, the AIS vessel this plugin matched — are one boat,
-   followed transitively; it alarms with its most urgent track. The same
-   grouping gives one dark-target alert per boat.
-2. **Collision Alerts takes the boats it can see.** While the Collision Alerts
-   plugin runs it announces the `collisionAlerts` PropertyValue
-   `{ evaluatesTargets: true }`. It then evaluates every AIS vessel and every
-   sensor target, so this plugin leaves to it every boat that is published as a
-   target or matched to AIS, as the MaYaRa radar plugin does. A boat known only
-   to this plugin (not published, no AIS match) keeps its alarm here. Collision
-   Alerts applies its own limits (its *Alert sensitivity*), not
-   `collisionCpaM` / `collisionTcpaS`.
-3. **An alarm already raised elsewhere wins.** A `closestApproach` alarm that
-   another producer raised (SK Derived Data, MaYaRa, Collision Alerts) and that
-   names the same boat — by its AIS vessel, its camera target or the target it
-   is linked to — makes this plugin clear its own at once.
+   followed transitively; it alarms with its most urgent track. A fusion link
+   to an AIS vessel overrides this plugin's own position match to a different
+   one. The same grouping gives one dark-target alert per boat, and none for a
+   boat any track of which is an AIS vessel.
+2. **An alarm raised elsewhere wins.** A `closestApproach` alarm that another
+   producer raised (Collision Alerts, MaYaRa, SK Derived Data) and that names
+   the same boat — by its AIS vessel, its camera target or the target it is
+   linked to — makes this plugin clear its own at once, and take the boat back
+   the moment that alarm clears while the boat still threatens.
+3. **Only a real alarm counts.** Collision Alerts merely running does not make
+   this plugin stand down: it applies its own limits (its *Alert
+   sensitivity*), and a boat this plugin finds risky by `collisionCpaM` /
+   `collisionTcpaS` keeps this plugin's alarm until another producer's alarm
+   actually covers it.
 4. **A collision alarm replaces the dark-target alert** for the same boat; its
    message says `(no AIS)` instead. That holds for another producer's alarm
    too, even with this plugin's own collision alarms off.
@@ -163,15 +163,12 @@ A boat alarms **once**, whichever plugins and sensors see it:
 Each hand-over clears this plugin's alarm at once, skipping its anti-flap
 hold, including an alarm still held for a boat that has stopped threatening.
 Hand-overs happen as they occur, not on the next process cycle: the plugin
-subscribes to closest-approach notifications and to the `collisionAlerts`
-announcement, and re-checks its alarms the moment another producer raises or
-clears one, or Collision Alerts starts or stops. When Collision Alerts starts,
-an alarm this plugin already raised stays up (within its anti-flap hold) until
-Collision Alerts' own alarm for the boat appears, so the boat is never left
-without one. Measured against signalk-server 2.37 with Collision Alerts 0.7,
-the two plugins' deltas arrive within 2 ms of each other in both directions.
+subscribes to closest-approach notifications and re-checks its alarms the
+moment another producer raises or clears one. Measured against signalk-server
+2.37 with Collision Alerts 0.7, the two plugins' deltas arrive within 2 ms of
+each other in both directions.
 
-All of this fails safe: only an announcement or an alarm that is actually there
-makes this plugin stand down, and anything it cannot read leaves its own alarm
+All of this fails safe: only an alarm that is actually there makes this
+plugin stand down, and anything it cannot read leaves its own alarm
 up: a duplicate alarm is a lesser failure than a missing one.
 

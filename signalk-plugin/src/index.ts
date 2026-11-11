@@ -12,7 +12,7 @@ import { PluginConfig, schema, uiSchema, withDefaults } from './config';
 import { collectAisContacts, fuse } from './aisFusion';
 import { enrichTarget } from './enrich';
 import { AlarmCoordination, NOTIFICATION_SOURCE, NotificationManager, degradedFaultKey } from './notifications';
-import { CollisionAlertsWatch, ForeignAlarmWatch, othersAlarmedRefs } from './alarmCoordination';
+import { ForeignAlarmWatch, othersAlarmedRefs } from './alarmCoordination';
 import { Publisher } from './publisher';
 import { SessionTokens, readSameAs, sensorTargetContext, sensorTargetId } from './sensorTargets';
 import { readAttitude, readOwnShip } from './nav';
@@ -31,9 +31,6 @@ export = function (app: ServerApp): Plugin {
   let publisher: Publisher | null = null;
   let notifier: NotificationManager | null = null;
   let cpa: CpaEstimator | null = null;
-  // Collision Alerts' announcement: while it evaluates sensor targets, the
-  // boats it can see alarm through it alone.
-  const collisionAlerts = new CollisionAlertsWatch();
   // Other producers' closest-approach alarms, re-checked as they are raised.
   const foreignAlarms = new ForeignAlarmWatch();
   let lastCycle: { all: EnrichedTarget[]; darkKeys: Set<string> } | null = null;
@@ -264,9 +261,8 @@ export = function (app: ServerApp): Plugin {
   /** What the notifier needs to alarm each boat once: which targets are on
    * the chart, their fusion links, and what other plugins already alarm. */
   /** Re-run the alarm decisions on the last cycle's targets as soon as another
-   * producer raises or clears an alarm, or Collision Alerts starts or stops,
-   * so a boat is never alarmed twice, or not at all, for the rest of the
-   * cycle. Deferred a tick so the server has applied the delta to the model
+   * producer raises or clears an alarm, so a boat is never alarmed twice, or
+   * not at all, for the rest of the cycle. Deferred a tick so the server has applied the delta to the model
    * the coordination reads. */
   function recheckAlarms(): void {
     if (recheckQueued) return;
@@ -291,7 +287,6 @@ export = function (app: ServerApp): Plugin {
         return context !== null && pub?.isPublished(context) ? context : null;
       },
       sameAs: (context) => readSameAs(app, context),
-      collisionAlertsRunning: collisionAlerts.running(),
       // Read only when there is a boat that could be alarmed.
       othersAlarmed:
         all.length > 0 ? othersAlarmedRefs(app, NOTIFICATION_SOURCE) : new Set<string>(),
@@ -470,10 +465,15 @@ export = function (app: ServerApp): Plugin {
       app.debug('vision-ai: event stream (re)connected — dropping the previous connection\'s targets');
     }
     targets.clear();
+    // A re-check must not replay the previous connection's targets.
+    lastCycle = null;
     aisAssignment = new Map<string, string>();
     lastEventTsByCamera.clear();
     if (cpa) cpa.reset();
     if (publisher) publisher.reset();
+    // Per-track MOB counts restart too: a reused key on the new connection is
+    // a different sighting. A raised MOB alarm keeps its hold.
+    if (notifier) notifier.forgetTracks();
   }
 
   async function checkHealth(): Promise<void> {
@@ -600,7 +600,6 @@ export = function (app: ServerApp): Plugin {
       publisher = new Publisher(app, pluginId, cfg);
       notifier = new NotificationManager(app, pluginId, cfg);
       cpa = new CpaEstimator();
-      collisionAlerts.start(app, recheckAlarms);
       foreignAlarms.start(app, NOTIFICATION_SOURCE, recheckAlarms);
 
       stream = new EventStream(
@@ -686,7 +685,6 @@ export = function (app: ServerApp): Plugin {
       attitudeInFlight = false;
       attitudeWatch = null;
       if (stream) stream.stop();
-      collisionAlerts.stop();
       foreignAlarms.stop();
       lastCycle = null;
       if (notifier) notifier.clearAll();

@@ -254,9 +254,10 @@ VISION_MODE=cpu VISION_MOCK_SOURCE=/path/clip.mp4 VISION_PORT=8001 \
   it fires, Freeboard-SK draws the ring and the course lines to the closest
   approach, and it later clears (`value:null`) when the risk passes.
 - **One alarm per boat:** with the Collision Alerts plugin enabled and
-  "Publish targets to the chart" on, the same encounter raises Collision Alerts'
-  alarm only (`…closestApproach.camera:visionai-*` or the AIS vessel's id), none
-  under `…closestApproach.visionai-*`. A boat both cameras see, or that AIS also
+  "Publish targets to the chart" on, the same encounter shows one alarm at a
+  time: Collision Alerts' (`…closestApproach.camera:visionai-*` or the AIS
+  vessel's id) once it raises one, vision-ai's (`…closestApproach.visionai-*`)
+  only while Collision Alerts has none for that boat. A boat both cameras see, or that AIS also
   reports, raises one alarm and no dark-target alert alongside it.
 ```bash
 curl -s "$SK/signalk/v1/api/vessels/self/notifications" | jq

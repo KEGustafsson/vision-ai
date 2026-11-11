@@ -39,8 +39,6 @@ export interface AlarmCoordination {
   publishedContext(t: EnrichedTarget): string | null;
   /** The `sameAs` link a fusion plugin set on a published context, or null. */
   sameAs(context: string): string | null;
-  /** Collision Alerts runs and evaluates AIS vessels and sensor targets. */
-  collisionAlertsRunning: boolean;
   /** Contexts another producer currently raises a closest-approach alarm on. */
   othersAlarmed: Set<string>;
 }
@@ -48,7 +46,6 @@ export interface AlarmCoordination {
 const NO_COORDINATION: AlarmCoordination = {
   publishedContext: () => null,
   sameAs: () => null,
-  collisionAlertsRunning: false,
   othersAlarmed: new Set(),
 };
 
@@ -64,8 +61,9 @@ export interface Boat {
   token: string;
   // Every context that names this boat, to match other producers' alarms.
   refs: string[];
-  // Collision Alerts sees this boat: it is published, or it is an AIS vessel.
-  seenByCollisionAlerts: boolean;
+  // Some track of the boat is an AIS vessel: by a fusion link, or by this
+  // plugin's own AIS match. Such a boat is never called dark or "no AIS".
+  hasAis: boolean;
   // The tracks of this boat.
   targets: EnrichedTarget[];
 }
@@ -87,12 +85,12 @@ interface TrackRefs {
 export function groupBoats(targets: EnrichedTarget[], coord: AlarmCoordination): Boat[] {
   const tracks: TrackRefs[] = targets.map((t) => {
     const own = coord.publishedContext(t);
-    return {
-      t,
-      own,
-      link: own ? coord.sameAs(own) : null,
-      ais: t.aisMmsi ? aisContext(t.aisMmsi) : null,
-    };
+    const link = own ? coord.sameAs(own) : null;
+    // A fusion link to an AIS vessel identifies the boat; this plugin's own
+    // match is a position match and must not add a second, different vessel
+    // that would merge two boats or let one's alarm silence the other's.
+    const linkedVessel = link?.startsWith('vessels.') ?? false;
+    return { t, own, link, ais: t.aisMmsi && !linkedVessel ? aisContext(t.aisMmsi) : null };
   });
   const parent = tracks.map((_, i) => i);
   const find = (i: number): number => {
@@ -138,9 +136,7 @@ function boatOf(members: TrackRefs[]): Boat {
     key,
     token: boatToken(key, rep),
     refs: [...new Set(members.flatMap((m) => [m.own, m.link, m.ais]).filter(nonNull))],
-    seenByCollisionAlerts: members.some(
-      (m) => m.own !== null || m.ais !== null || (m.link?.startsWith('vessels.') ?? false)
-    ),
+    hasAis: members.some((m) => m.ais !== null || (m.link?.startsWith('vessels.') ?? false)),
     targets: members.map((m) => m.t),
   };
 }
@@ -153,18 +149,26 @@ function boatOf(members: TrackRefs[]): Boat {
 export function boatToken(key: string, rep: EnrichedTarget): string {
   const mmsi = /^vessels\.urn:mrn:imo:mmsi:(\d+)$/.exec(key)?.[1];
   if (mmsi) return `visionai-mmsi-${mmsi}`;
-  const ownId = /^targets\.camera:(visionai-.+)$/.exec(key)?.[1];
-  if (ownId) return sanitizeToken(ownId);
+  // This plugin's own target ids are already one segment of plain
+  // characters (see sensorTargets.ts) and are used as they are.
+  const ownId = /^targets\.camera:(visionai-[a-zA-Z0-9_-]+)$/.exec(key)?.[1];
+  if (ownId) return ownId;
   if (key.startsWith('vision:')) {
     const id = sensorTargetId(rep);
-    return sanitizeToken(id ? id.slice(id.indexOf(':') + 1) : `visionai-${rep.key}`);
+    return id ? id.slice(id.indexOf(':') + 1) : `visionai-${encodeToken(rep.key)}`;
   }
-  return sanitizeToken(`visionai-${key.replace(/^(vessels|targets)\./, '')}`);
+  return `visionai-${encodeToken(key.replace(/^(vessels|targets)\./, ''))}`;
 }
 
-/** Keep a notification key to one path segment of plain characters. */
-function sanitizeToken(token: string): string {
-  return token.replace(/[^a-zA-Z0-9_-]/g, '_');
+/**
+ * Any context as one path segment, one-to-one: every character outside
+ * [a-zA-Z0-9-] is written as its hex code between underscores, so contexts
+ * that differ only in punctuation (`radar:a:b`, `radar:a_b`) keep apart.
+ */
+function encodeToken(text: string): string {
+  return Array.from(text, (ch) =>
+    /[a-zA-Z0-9-]/.test(ch) ? ch : `_${(ch.codePointAt(0) as number).toString(16)}_`
+  ).join('');
 }
 
 const THREAT_RANK: Record<string, number> = { high: 2, medium: 1 };
@@ -279,7 +283,7 @@ export class NotificationManager {
     // Collision/dark notifications need their computation on (they read values
     // it produces) and the notification itself enabled.
     if (this.cfg.enableCollision && this.cfg.notifyCollision) {
-      this.evaluateCollision(boats, darkTargetKeys, coord, wantActive, raised, release, underCollisionAlarm);
+      this.evaluateCollision(boats, darkTargetKeys, wantActive, raised, release, underCollisionAlarm);
     }
     if (this.cfg.enableAisFusion && this.cfg.notifyDarkTarget) {
       this.evaluateDark(boats, darkTargetKeys, underCollisionAlarm, wantActive, raised, release);
@@ -309,18 +313,6 @@ export class NotificationManager {
       if (EXTERNAL_PATHS.has(path)) continue;
       if (!wantActive.has(path)) this.clear(path);
     }
-  }
-
-  /** Whether a collision alarm this plugin raised for any of the boat's
-   * tracks is still up (raised or held). */
-  private holdsCollisionAlarm(boat: Boat): boolean {
-    const keys = new Set(boat.targets.map((t) => t.key));
-    for (const [path, members] of this.members) {
-      if (path.startsWith(COLLISION_PREFIX) && this.active.has(path) && [...members].some((k) => keys.has(k))) {
-        return true;
-      }
-    }
-    return false;
   }
 
   /** Release every path of a kind raised for any of the boat's tracks under
@@ -439,7 +431,9 @@ export class NotificationManager {
       const dark = boat.targets.filter((t) => darkKeys.has(t.key));
       if (dark.length === 0) continue;
       const path = `${DARK_PREFIX}${boat.token}`;
-      if (underCollisionAlarm.has(boat.key)) {
+      // A boat some track of which is an AIS vessel is not dark, whatever one
+      // linked track's own AIS correlation says.
+      if (boat.hasAis || underCollisionAlarm.has(boat.key)) {
         release.add(path);
         this.releaseHeld(DARK_PREFIX, boat, release);
         continue;
@@ -451,7 +445,9 @@ export class NotificationManager {
       const brg = t.bearingTrue !== null ? `${((t.bearingTrue * 180) / Math.PI).toFixed(0)}°T` : '';
       this.send(path, 'alert', `Non-AIS ${t.label} detected at ${brg} ${rng}`, ['visual']);
       want.add(path);
-      raised.set(path, new Set(dark.map((d) => d.key)));
+      // Every track of the boat, so the alert is released if a later grouping
+      // raises it under another path, whichever track qualifies then.
+      raised.set(path, new Set(boat.targets.map((d) => d.key)));
     }
   }
 
@@ -459,14 +455,16 @@ export class NotificationManager {
    * One closest-approach alarm per boat, on the standard
    * `notifications.navigation.closestApproach.*` path in the shared collision
    * alarm shape, so chartplotters draw it (Freeboard: a ring on the boat and
-   * both course lines on to the closest approach). A boat another plugin
-   * covers raises none here, and an alarm this plugin still holds for it is
-   * released at once, even when the boat no longer threatens.
+   * both course lines on to the closest approach). A boat another producer
+   * already alarms raises none here, and an alarm this plugin still holds for
+   * it is released at once, even when the boat no longer threatens. Until
+   * such an alarm exists, this plugin keeps alarming a boat it finds risky,
+   * Collision Alerts running or not: its limits may differ from this
+   * plugin's, and a boat must not go without an alarm meanwhile.
    */
   private evaluateCollision(
     boats: Boat[],
     darkKeys: Set<string>,
-    coord: AlarmCoordination,
     want: Set<string>,
     raised: Map<string, Set<string>>,
     release: Set<string>,
@@ -480,28 +478,19 @@ export class NotificationManager {
         this.releaseHeld(COLLISION_PREFIX, boat, release);
         continue;
       }
-      if (coord.collisionAlertsRunning && boat.seenByCollisionAlerts) {
-        // Collision Alerts takes the boat over but has not raised its alarm
-        // yet (it evaluates on its own cycle). An alarm this plugin already
-        // raised keeps its anti-flap hold until Collision Alerts' alarm
-        // appears, and is released then, so the boat is never left without
-        // an alarm during the hand-over. It still counts as under a
-        // collision alarm, so no dark-target alert comes up meanwhile.
-        if (this.holdsCollisionAlarm(boat)) underCollisionAlarm.add(boat.key);
-        continue;
-      }
       const risky = boat.targets.filter((t) => t.threatLevel === 'medium' || t.threatLevel === 'high');
       if (risky.length === 0) continue;
       const t = risky.reduce(moreUrgent);
       const state: State = t.threatLevel === 'high' ? 'alarm' : 'warn';
       const tcpa = t.tcpa !== null ? `${(t.tcpa / 60).toFixed(1)} min` : '?';
       const cpa = t.cpa !== null ? `${t.cpa.toFixed(0)} m` : '?';
-      const noAis = risky.some((r) => darkKeys.has(r.key));
+      // "No AIS" only when AIS was checked and no track of the boat is AIS.
+      const noAis = !boat.hasAis && risky.some((r) => darkKeys.has(r.key));
       const who = t.aisMmsi ? `AIS ${t.aisMmsi}` : `${t.label}${noAis ? ' (no AIS)' : ''}`;
       this.send(path, state, `Collision risk: ${who} CPA ${cpa} in ${tcpa}`, ['visual', 'sound'],
         collisionData(boat, t));
       want.add(path);
-      raised.set(path, new Set(risky.map((r) => r.key)));
+      raised.set(path, new Set(boat.targets.map((r) => r.key)));
       underCollisionAlarm.add(boat.key);
     }
   }
@@ -550,6 +539,14 @@ export class NotificationManager {
 
   clearContainerDegraded(): void {
     this.clear('notifications.vision.containerDegraded');
+  }
+
+  /** Forget per-track MOB persistence counts, as when the tracks behind them
+   * are gone (a new event-stream connection). A MOB alarm already raised
+   * keeps its hold; only the counts towards a new one restart. */
+  forgetTracks(): void {
+    this.mobCounters.clear();
+    this.mobLastCounted.clear();
   }
 
   clearAll(): void {

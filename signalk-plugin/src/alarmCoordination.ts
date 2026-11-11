@@ -1,60 +1,15 @@
 // No double alarms: a boat must alarm once, whichever plugins see it.
 //
-// Two signals tell this plugin another one already alarms a boat:
-//  1. Collision Alerts announces the `collisionAlerts` PropertyValue
-//     `{ evaluatesTargets: true }` while it runs. It then evaluates every AIS
-//     vessel and every `targets.*` sensor target, following `sameAs` links, so
-//     a sensor plugin leaves those alarms to it (MaYaRa does the same).
-//  2. A closest-approach alarm another producer already raised
-//     (`notifications.navigation.closestApproach.*`, e.g. SK Derived Data)
-//     names the same boat.
-// Both are fail-safe: only an announcement or an alarm that is actually there
-// makes this plugin stand down. A missing alarm is worse than a duplicate, so
-// anything unreadable leaves this plugin's own alarm up.
+// A closest-approach alarm another producer raised
+// (`notifications.navigation.closestApproach.*`: Collision Alerts, MaYaRa,
+// SK Derived Data) that names the same boat makes this plugin stand down for
+// it, at once, and take the boat back the moment that alarm clears. That is
+// fail-safe: only an alarm that is actually there makes this plugin stand
+// down, so a boat this plugin finds risky is never left without one, even
+// where another producer's limits differ. A missing alarm is worse than a
+// duplicate, so anything unreadable leaves this plugin's own alarm up.
 
 import { ServerApp } from './skapp';
-
-export const COLLISION_ALERTS_PROPERTY = 'collisionAlerts';
-
-/** Whether a `collisionAlerts` value announces that Collision Alerts
- * evaluates targets. Any plugin can emit under any name, so the shape is
- * checked instead of cast. */
-export function evaluatesTargets(value: unknown): boolean {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    (value as { evaluatesTargets?: unknown }).evaluatesTargets === true
-  );
-}
-
-/** Whether Collision Alerts is running and evaluating sensor targets. */
-export class CollisionAlertsWatch {
-  private latest: unknown = undefined;
-  private unsubscribe: (() => void) | undefined;
-
-  /** The history replays on subscribe, so plugin start order does not matter.
-   * `onChange` is called when Collision Alerts starts or stops evaluating. */
-  start(app: Pick<ServerApp, 'onPropertyValues'>, onChange?: () => void): void {
-    this.stop();
-    if (typeof app.onPropertyValues !== 'function') return;
-    this.unsubscribe = app.onPropertyValues(COLLISION_ALERTS_PROPERTY, (history) => {
-      const was = this.running();
-      this.latest = history[history.length - 1]?.value;
-      if (this.running() !== was) onChange?.();
-    });
-  }
-
-  /** Forgets the announcement so a restart never inherits a stale one. */
-  stop(): void {
-    this.unsubscribe?.();
-    this.unsubscribe = undefined;
-    this.latest = undefined;
-  }
-
-  running(): boolean {
-    return evaluatesTargets(this.latest);
-  }
-}
 
 const ACTIVE_STATES = new Set(['alert', 'warn', 'alarm', 'emergency']);
 
