@@ -127,6 +127,23 @@ describe('CpaEstimator', () => {
     expect(lost.sog).toBeNull();   // no velocity invented from the source change
   });
 
+  it('does not difference two vessels\' AIS fixes when the match moves to another vessel', () => {
+    // Vessels A and B lie 400 m apart; neither reports SOG/COG. Differencing
+    // A's fix against B's would read the gap as B closing at 400 m/s.
+    const est = new CpaEstimator();
+    const own: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 5, cog: 0, stale: false };
+    const seen = destinationPoint(own.position!, 0, 700);
+    const a = { ...target(seen), aisCorrelated: true, aisMmsi: '230000001', aisPosition: destinationPoint(own.position!, 0, 900) };
+    est.update([a], own, cfg, 0);
+
+    const b = { ...target(seen), aisCorrelated: true, aisMmsi: '230000002', aisPosition: destinationPoint(own.position!, 0, 500) };
+    est.update([b], own, cfg, 1000);
+
+    expect(b.tcpa).toBeNull();
+    expect(b.threatLevel).toBe('none');
+    expect(b.sog).toBeNull();   // no velocity invented from the change of vessel
+  });
+
   it('leaves CPA unresolved when own velocity is unknown (no SOG/COG)', () => {
     const est = new CpaEstimator();
     // Own position is known but SOG/COG are null (e.g. aged out as stale by

@@ -18,6 +18,9 @@ interface Sample {
   // of source would read the difference between a monocular estimate and a GPS
   // fix — tens of metres in one cycle — as target motion.
   fromAis: boolean;
+  // The AIS vessel an AIS sample is that vessel's fix of. A track whose match
+  // moves to another vessel must not difference two vessels' positions.
+  aisMmsi: string | null;
 }
 
 function fromLocal(ref: LatLon, e: number, n: number): LatLon {
@@ -90,6 +93,7 @@ export class CpaEstimator {
         refLat: own.position.latitude,
         refLon: own.position.longitude,
         fromAis: useAis,
+        aisMmsi: useAis ? tgt.aisMmsi : null,
       };
       const prev = this.history.get(tgt.key);
       this.history.set(tgt.key, sample);
@@ -104,7 +108,7 @@ export class CpaEstimator {
       } else {
         if (!prev) continue; // need a previous fix for finite-difference velocity
         // Don't difference across a change of position source (see Sample).
-        if (prev.fromAis !== useAis) continue;
+        if (prev.fromAis !== useAis || prev.aisMmsi !== sample.aisMmsi) continue;
         const dt = t - prev.t;
         if (dt < 0.2) continue; // need a meaningful baseline
         // Re-express the previous target position in the current local frame so
