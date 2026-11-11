@@ -169,7 +169,10 @@ Each hand-over clears this plugin's alarm at once, skipping its anti-flap
 hold, including an alarm still held for a boat that has stopped threatening.
 Hand-overs happen as they occur, not on the next process cycle: the plugin
 subscribes to closest-approach notifications and re-checks its alarms the
-moment another producer raises or clears one. Measured against signalk-server
+moment another producer raises or clears one. A re-check uses the Target
+Fusion links read at the start of the cycle, the ones its CPA was made with;
+a link that changes in between takes effect on the next cycle, so an alarm
+never names a vessel whose assessment it does not carry. Measured against signalk-server
 2.37 with Collision Alerts 0.7, the two plugins' deltas arrive within 2 ms of
 each other in both directions.
 

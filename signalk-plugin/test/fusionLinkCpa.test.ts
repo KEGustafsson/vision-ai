@@ -60,8 +60,23 @@ class FakeApp implements ServerApp {
     if (this.linkTo && /^targets\.camera:visionai-.*\.sameAs$/.test(path)) return { value: this.linkTo };
     return undefined;
   }
+  // Delivers deltas the plugin subscribed to, as the server would.
+  deliver: ((delta: any) => void) | null = null;
+  subscriptionmanager = {
+    subscribe: (_cmd: unknown, _unsubscribes: Array<() => void>, _err: unknown, cb: (d: any) => void) => {
+      this.deliver = cb;
+    },
+  };
   debug(): void {}
   error(): void {}
+  /** Every collision alarm path ever raised. */
+  everRaised(): Set<string> {
+    const paths = new Set<string>();
+    for (const d of this.deltas)
+      for (const u of d.updates)
+        for (const v of u.values ?? []) if (v.path.startsWith(CPA) && v.value !== null) paths.add(v.path);
+    return paths;
+  }
   collisionAlarms(): Map<string, any> {
     const latest = new Map<string, any>();
     for (const d of this.deltas)
@@ -147,4 +162,23 @@ describe('plugin — fusion link against its own AIS match', () => {
     // for A goes, and none is raised for B.
     expect([...app.collisionAlarms().keys()]).toEqual([]);
   }, 10_000);
+
+  it('keeps the cycle\'s links when another producer\'s alarm re-checks between cycles', async () => {
+    const app = new FakeApp();
+    // A long cycle, so the re-check below lands well before the next one.
+    await run(app, { notifyHoldS: 0, processIntervalMs: 3000 });
+    await until(() => app.collisionAlarms().size > 0);
+    // Target Fusion links the boat to vessel B after this cycle's CPA was made
+    // from vessel A's AIS, and another producer's alarm changes at once.
+    app.linkTo = VESSEL_B;
+    app.deliver!({
+      updates: [{
+        $source: 'collision-alerts',
+        values: [{ path: `${CPA}urn:mrn:imo:mmsi:244000000`, value: { state: 'alarm' } }],
+      }],
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    // The re-check must not raise vessel A's assessment under vessel B's name.
+    expect(app.everRaised().has(`${CPA}visionai_mmsi_230000002`)).toBe(false);
+  }, 15_000);
 });

@@ -40,7 +40,7 @@ export = function (app: ServerApp): Plugin {
   let cpa: CpaEstimator | null = null;
   // Other producers' closest-approach alarms, re-checked as they are raised.
   const foreignAlarms = new ForeignAlarmWatch();
-  let lastCycle: { all: EnrichedTarget[]; darkKeys: Set<string> } | null = null;
+  let lastCycle: { all: EnrichedTarget[]; darkKeys: Set<string>; links: Map<string, string | null> } | null = null;
   let recheckQueued = false;
   let processTimer: NodeJS.Timeout | null = null;
   let syncTimer: NodeJS.Timeout | null = null;
@@ -229,6 +229,10 @@ export = function (app: ServerApp): Plugin {
     pruneLabelSelection();
     const all = [...targets.values()];
 
+    // The fusion links as they stand now, read once: CPA and every alarm
+    // decision until the next cycle, re-checks included, use the same links,
+    // so no alarm names a vessel its assessment was not made for.
+    const links = readLinks(all);
     let darkKeys = new Set<string>();
     let aisCount = 0;
     // Scanning every vessel in the SignalK model (hundreds in a busy harbour)
@@ -239,7 +243,7 @@ export = function (app: ServerApp): Plugin {
         app.getPath('vessels'), own, cfg.ownAisMinRangeM, cfg.aisMaxAgeS * 1000, now);
       const res = fuse(all, contacts, cfg, aisAssignment);
       aisAssignment = res.assignment;
-      const overridden = overriddenAisMatches(all, trackLinks());
+      const overridden = overriddenAisMatches(all, trackLinks(links));
       // Where a fusion link names a different vessel than this plugin's own
       // match, the link wins before CPA, so no collision assessment is made
       // from one vessel's AIS kinematics and raised under another's name: the
@@ -265,8 +269,8 @@ export = function (app: ServerApp): Plugin {
       publisher.publishTargets(all, now);
       if (cfg.enableAisFusion) publisher.publishFusionSummary(darkKeys.size, aisCount);
     }
-    if (notifier) notifier.evaluate(all, darkKeys, now, alarmCoordination(all));
-    lastCycle = { all, darkKeys };
+    if (notifier) notifier.evaluate(all, darkKeys, now, alarmCoordination(all, links));
+    lastCycle = { all, darkKeys, links };
 
     publishSystemStats(now);
   }
@@ -282,31 +286,42 @@ export = function (app: ServerApp): Plugin {
       recheckQueued = false;
       if (!notifier || !lastCycle) return;
       try {
-        notifier.evaluate(lastCycle.all, lastCycle.darkKeys, Date.now(), alarmCoordination(lastCycle.all));
+        const { all, darkKeys, links } = lastCycle;
+        notifier.evaluate(all, darkKeys, Date.now(), alarmCoordination(all, links));
       } catch (e) {
         app.error(`vision-ai: alarm re-check failed: ${e}`);
       }
     });
   }
 
-  /** Which targets are on the chart, and how fusion linked them. */
-  function trackLinks(): TrackLinks {
-    const pub = publisher;
-    return {
-      publishedContext: (t) => {
-        const id = sensorTargetId(t);
-        const context = id === null ? null : sensorTargetContext(id);
-        return context !== null && pub?.isPublished(context) ? context : null;
-      },
-      sameAs: (context) => readSameAs(app, context),
-    };
+  /** The context a target is published under, or null. */
+  function publishedContext(t: EnrichedTarget): string | null {
+    const id = sensorTargetId(t);
+    const context = id === null ? null : sensorTargetContext(id);
+    return context !== null && publisher?.isPublished(context) ? context : null;
+  }
+
+  /** The fusion link on each published target, read from the model now. A
+   * target published later in the cycle is new and has none yet. */
+  function readLinks(all: EnrichedTarget[]): Map<string, string | null> {
+    const links = new Map<string, string | null>();
+    for (const t of all) {
+      const context = publishedContext(t);
+      if (context !== null) links.set(context, readSameAs(app, context));
+    }
+    return links;
+  }
+
+  /** Which targets are on the chart, and the fusion links read for them. */
+  function trackLinks(links: Map<string, string | null>): TrackLinks {
+    return { publishedContext, sameAs: (context) => links.get(context) ?? null };
   }
 
   /** What the notifier needs to alarm each boat once: which targets are on
    * the chart, their fusion links, and what other plugins already alarm. */
-  function alarmCoordination(all: EnrichedTarget[]): AlarmCoordination {
+  function alarmCoordination(all: EnrichedTarget[], links: Map<string, string | null>): AlarmCoordination {
     return {
-      ...trackLinks(),
+      ...trackLinks(links),
       // Read only when there is a boat that could be alarmed.
       othersAlarmed:
         all.length > 0 ? othersAlarmedRefs(app, NOTIFICATION_SOURCE) : new Set<string>(),
