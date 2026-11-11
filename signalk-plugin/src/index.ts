@@ -99,6 +99,8 @@ export = function (app: ServerApp): Plugin {
         // back ON simply repopulates from fresh events.
         targets.clear();
         if (publisher) publisher.reset();
+        // Nor may a re-check between cycles alarm the withdrawn targets.
+        lastCycle = null;
       }
       // Push immediately so the webapp toggle takes effect without waiting for
       // the next periodic sync.

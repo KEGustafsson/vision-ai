@@ -181,4 +181,32 @@ describe('plugin — fusion link against its own AIS match', () => {
     // The re-check must not raise vessel A's assessment under vessel B's name.
     expect(app.everRaised().has(`${CPA}visionai_mmsi_230000002`)).toBe(false);
   }, 15_000);
+
+  it('alarms no withdrawn target when detection is switched off before a re-check', async () => {
+    const app = new FakeApp();
+    await run(app, { processIntervalMs: 3000 });
+    await until(() => app.collisionAlarms().size > 0);
+    const routes = new Map<string, (req: any, res: any) => void>();
+    const reply = { json: () => reply, status: () => reply, set: () => reply };
+    plugin!.registerWithRouter!({
+      get: () => undefined,
+      use: () => undefined,
+      post: (path: string, handler: (req: any, res: any) => void) => routes.set(path, handler),
+    });
+    // The operator switches detection off; another producer's alarm changes
+    // before the next cycle.
+    routes.get('/detection')!({ body: { enabled: false } }, reply);
+    const sent = app.deltas.length;
+    app.deliver!({
+      updates: [{
+        $source: 'collision-alerts',
+        values: [{ path: `${CPA}urn:mrn:imo:mmsi:244000000`, value: { state: 'alarm' } }],
+      }],
+    });
+    await new Promise((r) => setTimeout(r, 100));
+    const raisedAfter = app.deltas.slice(sent)
+      .flatMap((d) => d.updates.flatMap((u) => u.values ?? []))
+      .filter((v) => v.path.startsWith(CPA) && v.value !== null);
+    expect(raisedAfter).toEqual([]);
+  }, 15_000);
 });
