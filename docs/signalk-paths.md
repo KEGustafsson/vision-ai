@@ -150,7 +150,10 @@ A boat alarms **once**, whichever plugins and sensors see it:
    one, on every track joined to the linked one: that match neither names the
    boat nor feeds its CPA, which then comes from the camera's own
    observation. The same grouping gives one dark-target alert per boat, and none for a
-   boat any track of which is an AIS vessel.
+   boat any track of which is an AIS vessel: matched by this plugin, or linked
+   by Target Fusion to a vessel that is an AIS transmitter (a 9-digit MMSI and
+   an AIS class). A link to a vessel some other sensor put in the model leaves
+   the boat's dark-target alert up.
 2. **An alarm raised elsewhere wins.** A `closestApproach` alarm that another
    producer raised (Collision Alerts, MaYaRa, SK Derived Data) and that names
    the same boat — by its AIS vessel, its camera target or the target it is

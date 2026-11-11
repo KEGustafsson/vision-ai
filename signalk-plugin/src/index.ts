@@ -9,7 +9,7 @@ import { ContainerClient, ControlBody, HealthInfo } from './containerClient';
 import { CpaEstimator } from './cpa';
 import { EventStream } from './eventStream';
 import { PluginConfig, schema, uiSchema, withDefaults } from './config';
-import { collectAisContacts, dropAisMatch, fuse } from './aisFusion';
+import { collectAisContacts, dropAisMatch, fuse, isAisVessel } from './aisFusion';
 import { enrichTarget } from './enrich';
 import {
   AlarmCoordination,
@@ -324,6 +324,14 @@ export = function (app: ServerApp): Plugin {
   function alarmCoordination(all: EnrichedTarget[], links: Map<string, string | null>): AlarmCoordination {
     return {
       ...trackLinks(links),
+      isAisVessel: (context) => {
+        if (!context.startsWith('vessels.')) return false;
+        try {
+          return isAisVessel(context.slice('vessels.'.length), app.getPath(context));
+        } catch {
+          return false;
+        }
+      },
       // Read only when there is a boat that could be alarmed.
       othersAlarmed:
         all.length > 0 ? othersAlarmedRefs(app, NOTIFICATION_SOURCE) : new Set<string>(),

@@ -57,6 +57,7 @@ function coordination(partial: Partial<AlarmCoordination> & { links?: Record<str
     publishedContext: (t) => ctxOf(t),
     sameAs: (context) => links[context] ?? null,
     othersAlarmed: new Set(),
+    isAisVessel: (context) => context.startsWith('vessels.urn:mrn:imo:mmsi:'),
     ...rest,
   };
 }
@@ -325,6 +326,29 @@ describe('NotificationManager — dark targets', () => {
     const links = { [ctxOf(stern)]: ctxOf(bow) };
     n.evaluate([bow, stern], new Set([bow.key, stern.key]), 1_000, coordination({ links }));
     expect([...app.raised(DARK).keys()]).toEqual([`${DARK}visionai-forward-3`]);
+  });
+
+  it('keeps the dark-target alert for a boat linked to a vessel that sends no AIS', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
+    const t = boat(3, { threatLevel: 'none' });
+    // Fusion names a vessel some other sensor put in the model, with an MMSI
+    // but no AIS class: that says nothing about the boat sending AIS.
+    const links = { [ctxOf(t)]: 'vessels.urn:mrn:imo:mmsi:230000001' };
+    n.evaluate([t], new Set([t.key]), 1_000, coordination({ links, isAisVessel: () => false }));
+    expect(app.raised(DARK).size).toBe(1);
+    // The same link to an AIS transmitter: the boat is not dark.
+    n.evaluate([t], new Set([t.key]), 2_000, coordination({ links }));
+    expect(app.raised(DARK).size).toBe(0);
+  });
+
+  it('does not call a linked vessel that sends no AIS an AIS vessel in the collision message', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
+    const t = boat(3);
+    const links = { [ctxOf(t)]: 'vessels.urn:mrn:imo:mmsi:230000001' };
+    n.evaluate([t], new Set([t.key]), 1_000, coordination({ links, isAisVessel: () => false }));
+    const message = [...app.raised(CPA).values()][0].message;
+    expect(message).toContain('vessel 230000001 (no AIS)');
+    expect(message).not.toContain('AIS 230000001');
   });
 
   it('raises no dark-target alert for a boat under a collision alarm', () => {

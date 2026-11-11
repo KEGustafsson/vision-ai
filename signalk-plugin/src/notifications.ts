@@ -41,6 +41,10 @@ export interface AlarmCoordination {
   sameAs(context: string): string | null;
   /** Contexts another producer currently raises a closest-approach alarm on. */
   othersAlarmed: Set<string>;
+  /** Whether a linked `vessels.*` context is an AIS transmitter. A fusion
+   * link may name a vessel some other sensor put in the model, which says
+   * nothing about whether the boat sends AIS. */
+  isAisVessel(context: string): boolean;
 }
 
 /** How fusion links the targets on the chart. */
@@ -50,6 +54,7 @@ const NO_COORDINATION: AlarmCoordination = {
   publishedContext: () => null,
   sameAs: () => null,
   othersAlarmed: new Set(),
+  isAisVessel: () => false,
 };
 
 /** One physical boat, as far as this plugin can tell, and how to name it. */
@@ -64,8 +69,9 @@ export interface Boat {
   token: string;
   // Every context that names this boat, to match other producers' alarms.
   refs: string[];
-  // Some track of the boat is an AIS vessel: by a fusion link, or by this
-  // plugin's own AIS match. Such a boat is never called dark or "no AIS".
+  // Some track of the boat is an AIS vessel: by a fusion link to an AIS
+  // transmitter, or by this plugin's own AIS match. Such a boat is never
+  // called dark or "no AIS".
   hasAis: boolean;
   // The tracks of this boat.
   targets: EnrichedTarget[];
@@ -93,7 +99,8 @@ export function groupBoats(targets: EnrichedTarget[], coord: AlarmCoordination):
     link,
     ais: t.aisMmsi && !overridden.has(t.key) ? aisContext(t.aisMmsi) : null,
   }));
-  return unionGroups(tracks, (track) => [track.own, track.link, track.ais]).map(boatOf);
+  return unionGroups(tracks, (track) => [track.own, track.link, track.ais])
+    .map((members) => boatOf(members, coord.isAisVessel));
 }
 
 /**
@@ -159,7 +166,7 @@ const firstOf = (refs: Array<string | null>): string | null => refs.filter(nonNu
 
 /** Name a group of tracks: the most authoritative context first, by id so the
  * choice does not depend on the order tracks arrive in. */
-function boatOf(members: TrackRefs[]): Boat {
+function boatOf(members: TrackRefs[], isAisVessel: (context: string) => boolean): Boat {
   const links = members.map((m) => m.link);
   const targetRef =
     firstOf(links.filter((l) => l?.startsWith('vessels.') ?? false)) ??
@@ -173,7 +180,7 @@ function boatOf(members: TrackRefs[]): Boat {
     key,
     token: boatToken(key, rep),
     refs: [...new Set(members.flatMap((m) => [m.own, m.link, m.ais]).filter(nonNull))],
-    hasAis: members.some((m) => m.ais !== null || (m.link?.startsWith('vessels.') ?? false)),
+    hasAis: members.some((m) => m.ais !== null || (m.link !== null && isAisVessel(m.link))),
     targets: members.map((m) => m.t),
   };
 }
@@ -538,7 +545,9 @@ export class NotificationManager {
       // own match, and "no AIS" only when AIS was checked and no track is AIS.
       const mmsi = /^vessels\.urn:mrn:imo:mmsi:(\d+)$/.exec(boat.targetRef ?? '')?.[1];
       const noAis = !boat.hasAis && risky.some((r) => darkKeys.has(r.key));
-      const who = mmsi ? `AIS ${mmsi}` : `${t.label}${noAis ? ' (no AIS)' : ''}`;
+      const who = mmsi
+        ? `${boat.hasAis ? 'AIS' : 'vessel'} ${mmsi}${noAis ? ' (no AIS)' : ''}`
+        : `${t.label}${noAis ? ' (no AIS)' : ''}`;
       this.send(path, state, `Collision risk: ${who} CPA ${cpa} in ${tcpa}`, ['visual', 'sound'],
         collisionData(boat, t));
       want.add(path);
