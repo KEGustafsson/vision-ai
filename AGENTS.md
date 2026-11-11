@@ -109,7 +109,7 @@ Note in the plan which backends you actually exercised vs. reasoned about.
 **Surface trade-offs, don't silently choose.** For safety-affecting choices
 (alert thresholds, fail-open vs fail-closed, defaulting a hazard feature on),
 state the options and the recommendation rather than picking quietly. The
-synthetic-AIS projection being **off by default** is the template: hazardous
+chart-target output (`enableVisualRadar`) being **off by default** is the template: hazardous
 features are opt-in.
 
 When using the `Plan` agent or plan mode, include: the boundary side, whether
