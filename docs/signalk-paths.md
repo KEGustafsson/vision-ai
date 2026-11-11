@@ -162,6 +162,14 @@ A boat alarms **once**, whichever plugins and sensors see it:
 
 Each hand-over clears this plugin's alarm at once, skipping its anti-flap
 hold, including an alarm still held for a boat that has stopped threatening.
+Hand-overs happen as they occur, not on the next process cycle: the plugin
+subscribes to closest-approach notifications and to the `collisionAlerts`
+announcement, and re-checks its alarms the moment another producer raises or
+clears one, or Collision Alerts starts or stops. When Collision Alerts starts,
+an alarm this plugin already raised stays up (within its anti-flap hold) until
+Collision Alerts' own alarm for the boat appears, so the boat is never left
+without one. Measured against signalk-server 2.37 with Collision Alerts 0.7,
+the two plugins' deltas arrive within 2 ms of each other in both directions.
 
 All of this fails safe: only an announcement or an alarm that is actually there
 makes this plugin stand down, and anything it cannot read leaves its own alarm

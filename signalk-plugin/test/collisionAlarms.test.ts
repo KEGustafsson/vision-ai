@@ -151,11 +151,28 @@ describe('NotificationManager — collision alarms', () => {
     expect(app.raised(CPA).size).toBe(0);
   });
 
-  it('releases its held alarm when Collision Alerts starts covering the boat', () => {
-    const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
+  it('hands a standing alarm over to Collision Alerts without a gap or a double', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg); // hold 10 s
+    const t = boat(3);
+    n.evaluate([t], new Set([t.key]), 1_000, coordination());
+    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai-forward-3`]);
+    // Collision Alerts announces itself but has not evaluated the boat yet:
+    // ours stays up, and no dark-target alert appears beside it.
+    n.evaluate([t], new Set([t.key]), 2_000, coordination({ collisionAlertsRunning: true }));
+    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai-forward-3`]);
+    expect(app.raised(DARK).size).toBe(0);
+    // Its alarm appears: ours goes in the same cycle.
+    n.evaluate([t], new Set([t.key]), 3_000,
+      coordination({ collisionAlertsRunning: true, othersAlarmed: new Set([ctxOf(t)]) }));
+    expect(app.raised('notifications.').size).toBe(0);
+  });
+
+  it('lets a standing alarm lapse after its hold if Collision Alerts never alarms the boat', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg); // hold 10 s
     n.evaluate([boat(3)], new Set(), 1_000, coordination());
-    n.evaluate([boat(3, { threatLevel: 'none' })], new Set(), 2_000,
-      coordination({ collisionAlertsRunning: true }));
+    n.evaluate([boat(3)], new Set(), 5_000, coordination({ collisionAlertsRunning: true }));
+    expect(app.raised(CPA).size).toBe(1);
+    n.evaluate([boat(3)], new Set(), 12_000, coordination({ collisionAlertsRunning: true }));
     expect(app.raised(CPA).size).toBe(0);
   });
 

@@ -311,6 +311,18 @@ export class NotificationManager {
     }
   }
 
+  /** Whether a collision alarm this plugin raised for any of the boat's
+   * tracks is still up (raised or held). */
+  private holdsCollisionAlarm(boat: Boat): boolean {
+    const keys = new Set(boat.targets.map((t) => t.key));
+    for (const [path, members] of this.members) {
+      if (path.startsWith(COLLISION_PREFIX) && this.active.has(path) && [...members].some((k) => keys.has(k))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /** Release every path of a kind raised for any of the boat's tracks under
    * an earlier grouping, whose name (token) may differ from the current one. */
   private releaseHeld(prefix: string, boat: Boat, release: Set<string>): void {
@@ -462,12 +474,20 @@ export class NotificationManager {
   ): void {
     for (const boat of boats) {
       const path = `${COLLISION_PREFIX}${boat.token}`;
-      const covered =
-        underCollisionAlarm.has(boat.key) ||
-        (coord.collisionAlertsRunning && boat.seenByCollisionAlerts);
-      if (covered) {
+      if (underCollisionAlarm.has(boat.key)) {
+        // Another producer's alarm stands for this boat: ours goes at once.
         release.add(path);
         this.releaseHeld(COLLISION_PREFIX, boat, release);
+        continue;
+      }
+      if (coord.collisionAlertsRunning && boat.seenByCollisionAlerts) {
+        // Collision Alerts takes the boat over but has not raised its alarm
+        // yet (it evaluates on its own cycle). An alarm this plugin already
+        // raised keeps its anti-flap hold until Collision Alerts' alarm
+        // appears, and is released then, so the boat is never left without
+        // an alarm during the hand-over. It still counts as under a
+        // collision alarm, so no dark-target alert comes up meanwhile.
+        if (this.holdsCollisionAlarm(boat)) underCollisionAlarm.add(boat.key);
         continue;
       }
       const risky = boat.targets.filter((t) => t.threatLevel === 'medium' || t.threatLevel === 'high');

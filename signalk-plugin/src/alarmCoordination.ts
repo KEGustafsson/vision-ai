@@ -32,12 +32,15 @@ export class CollisionAlertsWatch {
   private latest: unknown = undefined;
   private unsubscribe: (() => void) | undefined;
 
-  /** The history replays on subscribe, so plugin start order does not matter. */
-  start(app: Pick<ServerApp, 'onPropertyValues'>): void {
+  /** The history replays on subscribe, so plugin start order does not matter.
+   * `onChange` is called when Collision Alerts starts or stops evaluating. */
+  start(app: Pick<ServerApp, 'onPropertyValues'>, onChange?: () => void): void {
     this.stop();
     if (typeof app.onPropertyValues !== 'function') return;
     this.unsubscribe = app.onPropertyValues(COLLISION_ALERTS_PROPERTY, (history) => {
+      const was = this.running();
       this.latest = history[history.length - 1]?.value;
+      if (this.running() !== was) onChange?.();
     });
   }
 
@@ -54,6 +57,66 @@ export class CollisionAlertsWatch {
 }
 
 const ACTIVE_STATES = new Set(['alert', 'warn', 'alarm', 'emergency']);
+
+const CPA_PATH_PREFIX = 'notifications.navigation.closestApproach.';
+
+/**
+ * Whether a delta raises, updates or clears another producer's
+ * closest-approach alarm: any value on a key this plugin does not use, from a
+ * source other than this plugin's. A clear matters as much as a raise: the
+ * boat may now need this plugin's own alarm.
+ */
+export function touchesForeignAlarm(
+  delta: { updates?: Array<{ $source?: unknown; values?: Array<{ path: string; value: unknown }> }> },
+  ownLabel: string,
+  ownKeyPrefix = 'visionai-'
+): boolean {
+  for (const u of delta.updates ?? []) {
+    if (isOwnSource(u.$source, ownLabel)) continue;
+    for (const v of u.values ?? []) {
+      if (!v.path.startsWith(CPA_PATH_PREFIX)) continue;
+      if (!v.path.slice(CPA_PATH_PREFIX.length).startsWith(ownKeyPrefix)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Calls back as soon as another producer raises or clears a closest-approach
+ * alarm, so this plugin stands down for a boat the moment another alarm
+ * covers it, and takes it back the moment that alarm goes, instead of on its
+ * next process cycle: a double alarm, or none, for up to a cycle.
+ */
+export class ForeignAlarmWatch {
+  private unsubscribes: Array<() => void> = [];
+
+  start(app: Pick<ServerApp, 'subscriptionmanager'>, ownLabel: string, onRaised: () => void): void {
+    this.stop();
+    const sm = app.subscriptionmanager;
+    if (!sm || typeof sm.subscribe !== 'function') return;
+    sm.subscribe(
+      {
+        context: 'vessels.self',
+        subscribe: [{ path: 'notifications.navigation.closestApproach.*', policy: 'instant' }],
+      },
+      this.unsubscribes,
+      () => undefined,
+      (delta) => {
+        if (touchesForeignAlarm(delta, ownLabel)) onRaised();
+      }
+    );
+  }
+
+  stop(): void {
+    for (const unsubscribe of this.unsubscribes.splice(0)) {
+      try {
+        unsubscribe();
+      } catch {
+        // already gone with the server's subscription
+      }
+    }
+  }
+}
 
 /**
  * The contexts other producers currently raise a closest-approach alarm on.

@@ -27,6 +27,16 @@ export interface ServerApp {
     name: string,
     cb: (history: Array<{ value?: unknown } | undefined>) => void
   ): () => void;
+  // Delta subscriptions, as a client's. Optional: without it, other
+  // producers' alarms are only noticed on the next process cycle.
+  subscriptionmanager?: {
+    subscribe(
+      command: { context: string; subscribe: Array<{ path: string; policy?: string }> },
+      unsubscribes: Array<() => void>,
+      errorCallback: (err: unknown) => void,
+      callback: (delta: Delta & { updates: Array<{ $source?: string }> }) => void
+    ): void;
+  };
 }
 
 export interface Plugin {

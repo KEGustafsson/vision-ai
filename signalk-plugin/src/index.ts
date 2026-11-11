@@ -12,7 +12,7 @@ import { PluginConfig, schema, uiSchema, withDefaults } from './config';
 import { collectAisContacts, fuse } from './aisFusion';
 import { enrichTarget } from './enrich';
 import { AlarmCoordination, NOTIFICATION_SOURCE, NotificationManager, degradedFaultKey } from './notifications';
-import { CollisionAlertsWatch, othersAlarmedRefs } from './alarmCoordination';
+import { CollisionAlertsWatch, ForeignAlarmWatch, othersAlarmedRefs } from './alarmCoordination';
 import { Publisher } from './publisher';
 import { SessionTokens, readSameAs, sensorTargetContext, sensorTargetId } from './sensorTargets';
 import { readAttitude, readOwnShip } from './nav';
@@ -34,6 +34,10 @@ export = function (app: ServerApp): Plugin {
   // Collision Alerts' announcement: while it evaluates sensor targets, the
   // boats it can see alarm through it alone.
   const collisionAlerts = new CollisionAlertsWatch();
+  // Other producers' closest-approach alarms, re-checked as they are raised.
+  const foreignAlarms = new ForeignAlarmWatch();
+  let lastCycle: { all: EnrichedTarget[]; darkKeys: Set<string> } | null = null;
+  let recheckQueued = false;
   let processTimer: NodeJS.Timeout | null = null;
   let syncTimer: NodeJS.Timeout | null = null;
   let attitudeTimer: NodeJS.Timeout | null = null;
@@ -252,12 +256,32 @@ export = function (app: ServerApp): Plugin {
       if (cfg.enableAisFusion) publisher.publishFusionSummary(darkKeys.size, aisCount);
     }
     if (notifier) notifier.evaluate(all, darkKeys, now, alarmCoordination(all));
+    lastCycle = { all, darkKeys };
 
     publishSystemStats(now);
   }
 
   /** What the notifier needs to alarm each boat once: which targets are on
    * the chart, their fusion links, and what other plugins already alarm. */
+  /** Re-run the alarm decisions on the last cycle's targets as soon as another
+   * producer raises or clears an alarm, or Collision Alerts starts or stops,
+   * so a boat is never alarmed twice, or not at all, for the rest of the
+   * cycle. Deferred a tick so the server has applied the delta to the model
+   * the coordination reads. */
+  function recheckAlarms(): void {
+    if (recheckQueued) return;
+    recheckQueued = true;
+    setImmediate(() => {
+      recheckQueued = false;
+      if (!notifier || !lastCycle) return;
+      try {
+        notifier.evaluate(lastCycle.all, lastCycle.darkKeys, Date.now(), alarmCoordination(lastCycle.all));
+      } catch (e) {
+        app.error(`vision-ai: alarm re-check failed: ${e}`);
+      }
+    });
+  }
+
   function alarmCoordination(all: EnrichedTarget[]): AlarmCoordination {
     const pub = publisher;
     return {
@@ -576,7 +600,8 @@ export = function (app: ServerApp): Plugin {
       publisher = new Publisher(app, pluginId, cfg);
       notifier = new NotificationManager(app, pluginId, cfg);
       cpa = new CpaEstimator();
-      collisionAlerts.start(app);
+      collisionAlerts.start(app, recheckAlarms);
+      foreignAlarms.start(app, NOTIFICATION_SOURCE, recheckAlarms);
 
       stream = new EventStream(
         client.wsUrl(),
@@ -662,6 +687,8 @@ export = function (app: ServerApp): Plugin {
       attitudeWatch = null;
       if (stream) stream.stop();
       collisionAlerts.stop();
+      foreignAlarms.stop();
+      lastCycle = null;
       if (notifier) notifier.clearAll();
       if (publisher) publisher.reset();
       if (cpa) cpa.reset();
