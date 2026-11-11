@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { AlarmCoordination, NotificationManager } from '../src/notifications';
+import { AlarmCoordination, NotificationManager, overriddenAisMatches } from '../src/notifications';
 import { sensorTargetContext, sensorTargetId } from '../src/sensorTargets';
 import { withDefaults } from '../src/config';
 import { Delta, ServerApp } from '../src/skapp';
@@ -238,6 +238,22 @@ describe('NotificationManager — collision alarms', () => {
       [`${CPA}visionai_mmsi_230000001`, `${CPA}visionai_mmsi_230000002`]);
   });
 
+  it('lets a fusion link override a position match on every track joined to it', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
+    // Fusion says the bow track is vessel B and the stern track is the bow
+    // track's target; the stern track's own position match said vessel A.
+    const bow = boat(3, { threatLevel: 'none' });
+    const stern = boat(9, { camera: 'aft', key: 'aft.9', aisMmsi: '230000001', aisCorrelated: true });
+    const links = {
+      [ctxOf(bow)]: 'vessels.urn:mrn:imo:mmsi:230000002',
+      [ctxOf(stern)]: ctxOf(bow),
+    };
+    // Another producer alarms vessel A: that must not silence the alarm for B.
+    n.evaluate([bow, stern], new Set(), 1_000,
+      coordination({ links, othersAlarmed: new Set(['vessels.urn:mrn:imo:mmsi:230000001']) }));
+    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai_mmsi_230000002`]);
+  });
+
   it('releases an alarm at once when its boat is renamed, whichever track qualifies', () => {
     const n = new NotificationManager(app, 'signalk-vision-ai', cfg); // hold 10 s
     const bow = boat(3);
@@ -384,5 +400,27 @@ describe('NotificationManager — dark targets', () => {
     const links = { [ctxOf(t)]: 'vessels.urn:mrn:imo:mmsi:230000001' };
     n.evaluate([t], new Set([t.key]), 1_000, coordination({ links }));
     expect(app.raised(DARK).size).toBe(0);
+  });
+});
+
+describe('overriddenAisMatches', () => {
+  it('finds the position matches a fusion link to another vessel overrides, across linked tracks', () => {
+    const bow = boat(3, { aisMmsi: '230000002' });
+    const stern = boat(9, { camera: 'aft', key: 'aft.9', aisMmsi: '230000001' });
+    const alone = boat(5, { aisMmsi: '230000003' });
+    const links = {
+      [ctxOf(bow)]: 'vessels.urn:mrn:imo:mmsi:230000002',
+      [ctxOf(stern)]: ctxOf(bow),
+    };
+    // The bow track's match agrees with its link; the stern track's does not;
+    // a track no link reaches keeps its own match.
+    expect([...overriddenAisMatches([bow, stern, alone], coordination({ links }))]).toEqual(['aft.9']);
+  });
+
+  it('overrides nothing without a link to an AIS vessel', () => {
+    const bow = boat(3, { aisMmsi: '230000002' });
+    const stern = boat(9, { camera: 'aft', key: 'aft.9', aisMmsi: '230000001' });
+    const links = { [ctxOf(stern)]: ctxOf(bow) };
+    expect(overriddenAisMatches([bow, stern], coordination({ links })).size).toBe(0);
   });
 });

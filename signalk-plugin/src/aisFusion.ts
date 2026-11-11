@@ -258,11 +258,7 @@ export function fuse(
   for (const t of targets) {
     // Reset correlation state every pass — targets persist across cycles, so a
     // target that loses its AIS match must not retain stale identity/kinematics.
-    t.aisCorrelated = false;
-    t.aisMmsi = null;
-    t.aisCog = null;
-    t.aisSog = null;
-    t.aisPosition = null;
+    dropAisMatch(t);
 
     const a = assignedContact.get(t.key);
     if (a) {
@@ -297,4 +293,13 @@ export function fuse(
   }
 
   return { targets, darkTargetKeys, aisCorrelatedCount, assignment };
+}
+
+/** Forget a target's AIS match: its vessel identity and kinematics. */
+export function dropAisMatch(t: EnrichedTarget): void {
+  t.aisCorrelated = false;
+  t.aisMmsi = null;
+  t.aisCog = null;
+  t.aisSog = null;
+  t.aisPosition = null;
 }

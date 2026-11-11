@@ -9,9 +9,16 @@ import { ContainerClient, ControlBody, HealthInfo } from './containerClient';
 import { CpaEstimator } from './cpa';
 import { EventStream } from './eventStream';
 import { PluginConfig, schema, uiSchema, withDefaults } from './config';
-import { collectAisContacts, fuse } from './aisFusion';
+import { collectAisContacts, dropAisMatch, fuse } from './aisFusion';
 import { enrichTarget } from './enrich';
-import { AlarmCoordination, NOTIFICATION_SOURCE, NotificationManager, degradedFaultKey } from './notifications';
+import {
+  AlarmCoordination,
+  NOTIFICATION_SOURCE,
+  NotificationManager,
+  TrackLinks,
+  degradedFaultKey,
+  overriddenAisMatches,
+} from './notifications';
 import { ForeignAlarmWatch, othersAlarmedRefs } from './alarmCoordination';
 import { Publisher } from './publisher';
 import { SessionTokens, readSameAs, sensorTargetContext, sensorTargetId } from './sensorTargets';
@@ -232,12 +239,18 @@ export = function (app: ServerApp): Plugin {
         app.getPath('vessels'), own, cfg.ownAisMinRangeM, cfg.aisMaxAgeS * 1000, now);
       const res = fuse(all, contacts, cfg, aisAssignment);
       aisAssignment = res.assignment;
+      const overridden = overriddenAisMatches(all, trackLinks());
+      // Where a fusion link names a different vessel than this plugin's own
+      // match, the link wins before CPA, so no collision assessment is made
+      // from one vessel's AIS kinematics and raised under another's name: the
+      // track falls back to its own camera observation.
+      for (const t of all) if (overridden.has(t.key)) dropAisMatch(t);
       // Without an own-ship position there are no AIS contacts to compare
       // against (collectAisContacts returns nothing), so a "no AIS match" result
       // says nothing about the target. Same reasoning as the bearing gate in
       // fuse(): don't raise dark-target alerts a lost fix made unfalsifiable.
       darkKeys = own.position ? new Set(res.darkTargetKeys) : new Set<string>();
-      aisCount = res.aisCorrelatedCount;
+      aisCount = res.aisCorrelatedCount - overridden.size;
     } else if (aisAssignment.size > 0) {
       // Nothing to correlate — fusion off, or no visual target at all. Drop the
       // hysteresis state so a later cycle starts from live associations instead
@@ -258,8 +271,6 @@ export = function (app: ServerApp): Plugin {
     publishSystemStats(now);
   }
 
-  /** What the notifier needs to alarm each boat once: which targets are on
-   * the chart, their fusion links, and what other plugins already alarm. */
   /** Re-run the alarm decisions on the last cycle's targets as soon as another
    * producer raises or clears an alarm, so a boat is never alarmed twice, or
    * not at all, for the rest of the cycle. Deferred a tick so the server has applied the delta to the model
@@ -278,7 +289,8 @@ export = function (app: ServerApp): Plugin {
     });
   }
 
-  function alarmCoordination(all: EnrichedTarget[]): AlarmCoordination {
+  /** Which targets are on the chart, and how fusion linked them. */
+  function trackLinks(): TrackLinks {
     const pub = publisher;
     return {
       publishedContext: (t) => {
@@ -287,6 +299,14 @@ export = function (app: ServerApp): Plugin {
         return context !== null && pub?.isPublished(context) ? context : null;
       },
       sameAs: (context) => readSameAs(app, context),
+    };
+  }
+
+  /** What the notifier needs to alarm each boat once: which targets are on
+   * the chart, their fusion links, and what other plugins already alarm. */
+  function alarmCoordination(all: EnrichedTarget[]): AlarmCoordination {
+    return {
+      ...trackLinks(),
       // Read only when there is a boat that could be alarmed.
       othersAlarmed:
         all.length > 0 ? othersAlarmedRefs(app, NOTIFICATION_SOURCE) : new Set<string>(),

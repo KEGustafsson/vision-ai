@@ -147,7 +147,9 @@ A boat alarms **once**, whichever plugins and sensors see it:
    (`sameAs`) names, the AIS vessel this plugin matched — are one boat,
    followed transitively; it alarms with its most urgent track. A fusion link
    to an AIS vessel overrides this plugin's own position match to a different
-   one. The same grouping gives one dark-target alert per boat, and none for a
+   one, on every track joined to the linked one: that match neither names the
+   boat nor feeds its CPA, which then comes from the camera's own
+   observation. The same grouping gives one dark-target alert per boat, and none for a
    boat any track of which is an AIS vessel.
 2. **An alarm raised elsewhere wins.** A `closestApproach` alarm that another
    producer raised (Collision Alerts, MaYaRa, SK Derived Data) and that names

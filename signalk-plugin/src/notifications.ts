@@ -43,6 +43,9 @@ export interface AlarmCoordination {
   othersAlarmed: Set<string>;
 }
 
+/** How fusion links the targets on the chart. */
+export type TrackLinks = Pick<AlarmCoordination, 'publishedContext' | 'sameAs'>;
+
 const NO_COORDINATION: AlarmCoordination = {
   publishedContext: () => null,
   sameAs: () => null,
@@ -83,16 +86,50 @@ interface TrackRefs {
  * is that vessel.
  */
 export function groupBoats(targets: EnrichedTarget[], coord: AlarmCoordination): Boat[] {
-  const tracks: TrackRefs[] = targets.map((t) => {
+  const overridden = overriddenAisMatches(targets, coord);
+  const tracks: TrackRefs[] = linkedTracks(targets, coord).map(({ t, own, link }) => ({
+    t,
+    own,
+    link,
+    ais: t.aisMmsi && !overridden.has(t.key) ? aisContext(t.aisMmsi) : null,
+  }));
+  return unionGroups(tracks, (track) => [track.own, track.link, track.ais]).map(boatOf);
+}
+
+/**
+ * The tracks whose own AIS match a fusion link overrides. A fusion link to an
+ * AIS vessel identifies the boat; this plugin's own match is a position
+ * match, and a different vessel there must neither name the boat nor carry
+ * its collision assessment, nor let that vessel's alarm silence this boat's.
+ * The link speaks for every track joined to it by published targets and
+ * links, not only the track it is set on: a stern track linked to the bow
+ * track's target is the bow track's vessel, whatever the stern track matched.
+ */
+export function overriddenAisMatches(targets: EnrichedTarget[], coord: TrackLinks): Set<string> {
+  const overridden = new Set<string>();
+  for (const group of unionGroups(linkedTracks(targets, coord), (track) => [track.own, track.link])) {
+    const vessels = new Set(group.map((m) => m.link).filter((l) => l?.startsWith('vessels.') ?? false));
+    if (vessels.size === 0) continue;
+    for (const { t } of group) {
+      if (t.aisMmsi && !vessels.has(aisContext(t.aisMmsi))) overridden.add(t.key);
+    }
+  }
+  return overridden;
+}
+
+function linkedTracks(
+  targets: EnrichedTarget[],
+  coord: TrackLinks
+): Array<{ t: EnrichedTarget; own: string | null; link: string | null }> {
+  return targets.map((t) => {
     const own = coord.publishedContext(t);
-    const link = own ? coord.sameAs(own) : null;
-    // A fusion link to an AIS vessel identifies the boat; this plugin's own
-    // match is a position match and must not add a second, different vessel
-    // that would merge two boats or let one's alarm silence the other's.
-    const linkedVessel = link?.startsWith('vessels.') ?? false;
-    return { t, own, link, ais: t.aisMmsi && !linkedVessel ? aisContext(t.aisMmsi) : null };
+    return { t, own, link: own ? coord.sameAs(own) : null };
   });
-  const parent = tracks.map((_, i) => i);
+}
+
+/** Items that share any ref, grouped transitively (union-find). */
+function unionGroups<T>(items: T[], refsOf: (item: T) => Array<string | null>): T[][] {
+  const parent = items.map((_, i) => i);
   const find = (i: number): number => {
     while (parent[i] !== i) {
       parent[i] = parent[parent[i]];
@@ -101,20 +138,20 @@ export function groupBoats(targets: EnrichedTarget[], coord: AlarmCoordination):
     return i;
   };
   const byRef = new Map<string, number>();
-  tracks.forEach((track, i) => {
-    for (const ref of [track.own, track.link, track.ais]) {
+  items.forEach((item, i) => {
+    for (const ref of refsOf(item)) {
       if (ref === null) continue;
       const j = byRef.get(ref);
       if (j === undefined) byRef.set(ref, i);
       else parent[find(i)] = find(j);
     }
   });
-  const groups = new Map<number, TrackRefs[]>();
-  tracks.forEach((track, i) => {
+  const groups = new Map<number, T[]>();
+  items.forEach((item, i) => {
     const root = find(i);
-    groups.set(root, [...(groups.get(root) ?? []), track]);
+    groups.set(root, [...(groups.get(root) ?? []), item]);
   });
-  return [...groups.values()].map(boatOf);
+  return [...groups.values()];
 }
 
 const nonNull = (r: string | null): r is string => r !== null;
