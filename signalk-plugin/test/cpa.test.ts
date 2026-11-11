@@ -144,6 +144,27 @@ describe('CpaEstimator', () => {
     expect(b.sog).toBeNull();   // no velocity invented from the change of vessel
   });
 
+  it('drops the last velocity when one target object\'s match moves to another vessel', () => {
+    // The same object stays in the track table across cycles when no new
+    // event arrives; vessel A's velocity must not stay on it as vessel B's.
+    const est = new CpaEstimator();
+    const own: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 5, cog: 0, stale: false };
+    const t = {
+      ...target(destinationPoint(own.position!, 0, 700)),
+      aisCorrelated: true, aisMmsi: '230000001', aisPosition: destinationPoint(own.position!, 0, 900),
+      aisCog: Math.PI, aisSog: 6,
+    };
+    est.update([t], own, cfg, 0);
+    expect(t.sog).toBeCloseTo(6);
+
+    Object.assign(t, { aisMmsi: '230000002', aisPosition: destinationPoint(own.position!, 0, 500), aisCog: null, aisSog: null });
+    est.update([t], own, cfg, 1000);
+
+    expect(t.sog).toBeNull();
+    expect(t.cog).toBeNull();
+    expect(t.threatLevel).toBe('none');
+  });
+
   it('leaves CPA unresolved when own velocity is unknown (no SOG/COG)', () => {
     const est = new CpaEstimator();
     // Own position is known but SOG/COG are null (e.g. aged out as stale by

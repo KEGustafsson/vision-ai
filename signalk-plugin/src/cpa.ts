@@ -72,6 +72,13 @@ export class CpaEstimator {
       // own velocity — leaves the target unresolved instead of preserving a stale
       // cpa/tcpa/threatLevel that would keep a collision alarm up on unsupported data.
       clearCpa(tgt);
+      // Likewise its ground velocity: a target can stay in the track table
+      // across cycles with no new event, and a velocity this cycle cannot
+      // support (a change of position source or of AIS vessel, no baseline)
+      // must not be kept from the last one, where the chart would draw it and
+      // AIS matching would score course agreement against it.
+      tgt.sog = null;
+      tgt.cog = null;
       // Once a target is correlated, use the contact's OWN reported position
       // rather than the monocular estimate. Range from a single camera carries
       // tens of percent of error, and pairing that with the precise AIS
