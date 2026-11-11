@@ -31,7 +31,7 @@ audible alarm. Highlights:
 | `enableDetection` | on | Master detection on/off (also toggled live from the webapp); off releases the cameras and stops inference |
 | `enableVisualRadar` | **off** | Publish each georeferenced target as a sensor target, `targets.camera:visionai-<camera>-<session>-<stable_id>` (`VIS-` name), which Freeboard-SK draws as a camera target and Target Fusion links to its AIS vessel. Data only — never alarms. Off by default |
 | `enableAisFusion` / `enableCollision` | on | Compute: AIS correlation + dark targets / CPA-TCPA + threat level |
-| `enableMob` / `notifyCollision` / `notifyDarkTarget` | on | Notify: `notifications.mob` / `…navigation.closestApproach.visionai-*` / `…vision.darkTarget.*`. One collision alarm per boat: none for a boat another plugin (e.g. Collision Alerts) already alarms ([details](../docs/signalk-paths.md#collision-alarms--one-per-boat)) |
+| `enableMob` / `notifyCollision` / `notifyDarkTarget` | on | Notify: `notifications.mob` / `…navigation.closestApproach.visionai*` / `…vision.darkTarget.*`. One collision alarm per boat: none for a boat another plugin (e.g. Collision Alerts) already alarms ([details](../docs/signalk-paths.md#collision-alarms--one-per-boat)) |
 | `enableContextControl` | on | Steer active camera/confidence by SOG + time of day |
 | `detectClasses` | `person, vessel, buoy` | Object types to surface; empty => all |
 | `minConfidence` | 0.4 | Minimum detection confidence |

@@ -250,13 +250,13 @@ VISION_MODE=cpu VISION_MOCK_SOURCE=/path/clip.mp4 VISION_PORT=8001 \
   = `emergency` with a lat/lon in the message; it persists through brief dropouts
   (60 s hold) and clears afterwards.
 - **Collision:** with a closing target crossing the TCPA/CPA thresholds, expect
-  `notifications.navigation.closestApproach.visionai-*` `warn`→`alarm`; **PASS:**
+  `notifications.navigation.closestApproach.visionai*` `warn`→`alarm`; **PASS:**
   it fires, Freeboard-SK draws the ring and the course lines to the closest
   approach, and it later clears (`value:null`) when the risk passes.
 - **One alarm per boat:** with the Collision Alerts plugin enabled and
   "Publish targets to the chart" on, the same encounter shows one alarm at a
   time: Collision Alerts' (`…closestApproach.camera:visionai-*` or the AIS
-  vessel's id) once it raises one, vision-ai's (`…closestApproach.visionai-*`)
+  vessel's id) once it raises one, vision-ai's (`…closestApproach.visionai*`)
   only while Collision Alerts has none for that boat. A boat both cameras see, or that AIS also
   reports, raises one alarm and no dark-target alert alongside it.
 ```bash
