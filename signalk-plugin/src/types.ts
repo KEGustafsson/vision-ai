@@ -127,4 +127,7 @@ export interface EnrichedTarget extends RawTarget {
   // across a detector dropout (lastSeen advances on coasted frames too).
   // Unset until its first real detection.
   observedAt?: number; // epoch ms
+  // The event-stream connection the track was seen on (see index.ts), so a
+  // serial the container reuses after a restart never names an old target.
+  session?: string;
 }

@@ -36,16 +36,32 @@ export function displayName(camera: string, n: number): string {
 
 /**
  * The target id after `targets.`. Keyed on the never-recycled `stable_id`:
- * consumers treat a track whose position went null as finished, and the
- * recycled 2-digit `track_id` would hand one context to a different boat
- * later in the session. The `visionai-` prefix keeps the id unique to this
- * plugin among other camera sensors. `track_id` is the fallback for containers
- * that predate `stable_id`.
+ * the recycled 2-digit `track_id` would hand one context to a different boat
+ * later in the session. `stable_id` restarts with the container, so the id
+ * also carries the event-stream connection it was seen on (`session`): no id
+ * is ever reused, and a consumer that reads the model on a timer (Target
+ * Fusion) cannot carry an old boat's link over to a new one, even if it never
+ * saw the old track withdrawn. The `visionai-` prefix keeps the id unique to
+ * this plugin among other camera sensors. `track_id` is the fallback for
+ * containers that predate `stable_id`.
  */
-export function sensorTargetId(t: Pick<EnrichedTarget, 'camera' | 'stable_id' | 'track_id'>): string | null {
+export function sensorTargetId(
+  t: Pick<EnrichedTarget, 'camera' | 'stable_id' | 'track_id' | 'session'>
+): string | null {
   const n = t.stable_id ?? t.track_id;
   if (n === null || n === undefined) return null;
-  return `${SENSOR_TYPE}:visionai-${cameraSegment(t.camera)}-${n}`;
+  const session = t.session ? `${t.session}-` : '';
+  return `${SENSOR_TYPE}:visionai-${cameraSegment(t.camera)}-${session}${n}`;
+}
+
+/**
+ * A token for one event-stream connection: the time it opened, in base 36,
+ * made distinct from the previous token should two connections open within
+ * the same millisecond. Letters and digits only, so it sits in an id as is.
+ */
+export function nextSession(previous: string | null, nowMs: number): string {
+  const token = Math.floor(nowMs).toString(36);
+  return token === previous ? `${token}0` : token;
 }
 
 export function sensorTargetContext(id: string): string {

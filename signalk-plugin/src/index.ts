@@ -14,7 +14,7 @@ import { enrichTarget } from './enrich';
 import { AlarmCoordination, NOTIFICATION_SOURCE, NotificationManager, degradedFaultKey } from './notifications';
 import { CollisionAlertsWatch, othersAlarmedRefs } from './alarmCoordination';
 import { Publisher } from './publisher';
-import { readSameAs, sensorTargetContext, sensorTargetId } from './sensorTargets';
+import { nextSession, readSameAs, sensorTargetContext, sensorTargetId } from './sensorTargets';
 import { readAttitude, readOwnShip } from './nav';
 import { AttitudeSmoother, AttitudeWatch } from './attitude';
 import { registerRoutes, SharedState } from './router';
@@ -51,6 +51,8 @@ export = function (app: ServerApp): Plugin {
   // cycles so fuse() can keep a stable target on the same contact instead of
   // flapping its identity as the noisy monocular range wanders.
   let aisAssignment = new Map<string, string>();
+  // The current event-stream connection's token; see forgetPreviousConnection.
+  let session: string | null = null;
   const lastEventByCamera = new Map<string, DetectionEvent>();
   const frameCount = new Map<string, number>();
   let activeCamera = 'forward';
@@ -176,6 +178,7 @@ export = function (app: ServerApp): Plugin {
         if (!raw.is_person_in_water) continue;
         const t = enrichTarget(raw, ev.camera, own, cfg, seenAt);
         t.key = `${ev.camera}.mob-anon`;
+        t.session = session ?? undefined;
         targets.set(t.key, t);
         continue;
       }
@@ -183,6 +186,7 @@ export = function (app: ServerApp): Plugin {
       // A coasted frame is the container's prediction: the last real
       // detection stays the one the chart ages from.
       t.observedAt = t.coasting ? targets.get(t.key)?.observedAt : seenAt;
+      t.session = session ?? undefined;
       targets.set(t.key, t);
     }
     pruneLabelSelection();
@@ -429,11 +433,14 @@ export = function (app: ServerApp): Plugin {
    * be a new session whose serials start over. Its targets are withdrawn from
    * the chart (track lost) and their CPA and AIS history forgotten before the
    * first event on the new connection, so a new boat that receives a reused
-   * serial starts as a new target. Withdrawing first is what makes reusing the
-   * id safe: consumers treat a context whose position went null as finished.
-   * A reconnect within one session costs only a fresh start for its tracks.
+   * serial starts as a new target. The new connection also gets a new session
+   * token, which goes into every target id, so its targets never reuse an old
+   * context: a consumer that reads the model on a timer and missed the
+   * withdrawal still cannot mistake a new boat for an old one. A reconnect
+   * within one container session costs only a fresh start for its tracks.
    */
   function forgetPreviousConnection(): void {
+    session = nextSession(session, Date.now());
     if (targets.size > 0) {
       app.debug('vision-ai: event stream (re)connected — dropping the previous connection\'s targets');
     }

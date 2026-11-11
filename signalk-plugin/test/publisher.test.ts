@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Publisher } from '../src/publisher';
-import { sensorTargetId } from '../src/sensorTargets';
+import { nextSession, sensorTargetId } from '../src/sensorTargets';
 import { withDefaults } from '../src/config';
 import { Delta, ServerApp } from '../src/skapp';
 import { EnrichedTarget } from '../src/types';
@@ -62,6 +62,20 @@ describe('sensorTargetId', () => {
     expect(sensorTargetId({ camera: 'aft', stable_id: undefined, track_id: 14 }))
       .toBe('camera:visionai-aft-14');
     expect(sensorTargetId({ camera: 'aft', stable_id: null, track_id: null })).toBeNull();
+  });
+
+  it('carries the connection the track was seen on, so no id is ever reused', () => {
+    expect(sensorTargetId({ camera: 'forward', stable_id: 5, track_id: 14, session: 'mhb3k2x1' }))
+      .toBe('camera:visionai-forward-mhb3k2x1-5');
+    expect(sensorTargetId({ camera: 'forward', stable_id: 5, track_id: 14, session: 'mhb3k2x1' }))
+      .not.toBe(sensorTargetId({ camera: 'forward', stable_id: 5, track_id: 14, session: 'mhb3k2x2' }));
+  });
+
+  it('gives every connection a new session token', () => {
+    const a = nextSession(null, 1_800_000_000_000);
+    expect(a).toMatch(/^[a-z0-9]+$/);
+    expect(nextSession(a, 1_800_000_000_000)).not.toBe(a); // same millisecond
+    expect(nextSession(a, 1_800_000_001_000)).not.toBe(a);
   });
 
   it('keeps free-form camera names from splitting the context', () => {

@@ -12,7 +12,7 @@ published as its own context in the server's *sensor targets* convention
 (signalk-server docs, *Sensor Targets*):
 
 ```
-targets.camera:visionai-<camera>-<stable_id>
+targets.camera:visionai-<camera>-<session>-<stable_id>
 ```
 
 Radar, camera and AIS plugins share this convention, so the targets are ordinary
@@ -38,9 +38,13 @@ for an AIS vessel.
 - **Container restarts.** `stable_id` is unique within one container session,
   and a restart always drops the event-stream connection. So whenever the
   connection (re)opens, before its first event, every target of the previous
-  connection is withdrawn (null position) and its CPA and AIS history dropped:
-  a new boat that receives a reused serial starts as a new target, never as an
-  old one. A reconnect within one session only restarts its tracks.
+  connection is withdrawn (null position) and its CPA and AIS history dropped.
+  Each connection also gets its own `<session>` token (the time it opened, in
+  base 36), so a serial the container reuses after a restart never names an
+  old context: a consumer that reads the model on a timer, as Target Fusion
+  does every 2 s, can't carry an old boat's link over to a new one even if it
+  never saw the withdrawal. A reconnect within one session only restarts its
+  tracks.
 - **One source per camera** (`vision-ai-<camera>`). Target Fusion never merges
   two targets from one sensor and identifies the sensor by `$source`; with one
   label for both cameras a boat seen by both would stay two rings.
@@ -108,7 +112,7 @@ Collision and dark-target notifications also have a short anti-flap hold
 The hold is skipped when another alarm takes the boat over, so it never keeps
 two alarms up for one boat.
 
-`<boat>` is `visionai-<camera>-<stable_id>` for a boat known only to the
+`<boat>` is `visionai-<camera>-<session>-<stable_id>` for a boat known only to the
 cameras, or `visionai-mmsi-<mmsi>` once it is matched to an AIS vessel. The
 `visionai-` prefix keeps the path apart from those Collision Alerts and SK
 Derived Data write (they key by the bare target id): two producers on one path

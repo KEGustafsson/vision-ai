@@ -37,6 +37,9 @@ class FakeApp implements ServerApp {
   getPath(): any { return undefined; }
   debug(): void {}
   error(): void {}
+  targetContexts(): string[] {
+    return [...new Set(this.deltas.map((d) => String(d.context)).filter((c) => c.startsWith('targets.')))];
+  }
   positions(context: string): unknown[] {
     return this.deltas
       .filter((d) => d.context === context)
@@ -80,7 +83,7 @@ describe('plugin — container restart', () => {
     wss = null;
   });
 
-  it('withdraws the old session\'s targets before a reused serial names a new boat', async () => {
+  it('withdraws the old session\'s targets and never reuses their contexts', async () => {
     http = createServer((_req, res) => { res.statusCode = 503; res.end(); });
     wss = new WebSocketServer({ server: http, path: '/ws/events' });
     let connections = 0;
@@ -101,17 +104,25 @@ describe('plugin — container restart', () => {
       processIntervalMs: 200,
       detectClasses: [],
     });
-    const ctx = 'targets.camera:visionai-forward-5';
-
-    await until(() => app.positions(ctx).length === 1);
+    await until(() => app.targetContexts().length === 1);
+    const [before] = app.targetContexts();
+    expect(before).toMatch(/^targets\.camera:visionai-forward-[a-z0-9]+-5$/);
     // The container restarts: its connection drops and the plugin reconnects.
     for (const c of wss.clients) c.terminate();
-    await until(() => connections === 2 && app.positions(ctx).length >= 3);
+    await until(() => connections === 2 && app.targetContexts().length === 2);
 
-    const [first, withdrawn, second] = app.positions(ctx) as Array<{ longitude: number } | null>;
-    expect(first).not.toBeNull();
-    expect(withdrawn).toBeNull();
-    expect(second).not.toBeNull();
-    expect(second!.longitude).not.toBeCloseTo(first!.longitude, 6);
+    // The old boat is withdrawn on its own context...
+    const old = app.positions(before) as Array<{ longitude: number } | null>;
+    expect(old).toHaveLength(2);
+    expect(old[0]).not.toBeNull();
+    expect(old[1]).toBeNull();
+    // ...and the new boat with the same serial gets a context of its own, so
+    // a consumer that missed the withdrawal (Target Fusion reads the model on
+    // a timer) can never carry the old boat's link over to it.
+    const after = app.targetContexts().find((c) => c !== before) as string;
+    expect(after).toMatch(/^targets\.camera:visionai-forward-[a-z0-9]+-5$/);
+    const fresh = app.positions(after) as Array<{ longitude: number } | null>;
+    expect(fresh).toHaveLength(1);
+    expect(fresh[0]!.longitude).not.toBeCloseTo(old[0]!.longitude, 6);
   }, 10_000);
 });
