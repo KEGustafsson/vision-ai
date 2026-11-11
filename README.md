@@ -295,6 +295,8 @@ cd signalk-plugin && npm test        # geo, enrich, AIS fusion, CPA, publisher
 
 Vision-derived alerts are an *aid*, not a replacement for proper lookout, radar
 or AIS. Range is monocular and coarse, and auto-MOB is a best-effort guess —
-all alerting features are configurable and publishing targets to the chart
-("Publish targets to the chart" / `enableVisualRadar`) is **off by default**:
-hazard outputs are opt-in.
+all alerting features are configurable. Publishing targets to the chart
+("Publish targets to the chart" / `enableVisualRadar`) is **off by default**.
+The alerts themselves — man overboard (`enableMob`), collision
+(`notifyCollision`) and dark target (`notifyDarkTarget`) — are **on by
+default**; turn off any you don't want raised.

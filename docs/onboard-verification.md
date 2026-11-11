@@ -175,8 +175,9 @@ gets a `sameAs` link and is drawn once; `vision.fusion.darkTargetCount`/
 ```
 (If `websocat` is unavailable I'll use a short Node/Python WS client instead.)
 **PASS:** live `vision.fusion.*` / `vision.system.*` deltas arrive at roughly the
-processing cadence. Synthetic-vessel position updates arrive on their own
-`vessels.urn:…:vision-*` contexts (subscribe with `"context":"vessels.*"`).
+processing cadence. Camera-target position updates arrive on their own
+`targets.camera:visionai-*` contexts (subscribe with `"context":"targets.*"`), one
+per new sighting, not on every processing cycle.
 
 ### 3.4 Plugin REST proxy (same-origin, behind SignalK auth)
 ```bash
@@ -205,8 +206,9 @@ is never substituted. Without a true heading the camera targets'
 the nav source first.
 
 ### 4.2 True-bearing check **[NEEDS YOU]**
-Pick a target visible in the camera and by eye/compass. Read its synthetic
-vessel's `navigation.position` (`vessels.urn:…:vision-<cam>-<id>`) and compare
+Pick a target visible in the camera and by eye/compass. Read its camera
+target's `navigation.position` (`targets.camera:visionai-<cam>-<id>`, named
+`VIS-<cam>-<overlay number>`) and compare
 the bearing from own-ship to that fix against the hand-compass bearing.
 **PASS:** within a few degrees once calibrated.
 

@@ -32,7 +32,13 @@ for an AIS vessel.
   `stable_id` (`track_id` for older containers without it): consumers treat a
   track whose position went null as finished, so a recycled number must never
   name a second boat. The `visionai-` prefix keeps it unique among camera
-  sensors.
+  sensors. Camera names are written one-to-one into the id (any character
+  outside `[a-zA-Z0-9]` as its hex code between underscores, so `bow cam` is
+  `bow_20_cam`), so two cameras never share a context.
+- **Container restarts.** `stable_id` is unique within one container session.
+  When the container's `/health` uptime shows it restarted, every target of
+  the old session is withdrawn (null position) and its CPA and AIS history
+  dropped, so a new boat that receives a reused serial starts as a new target.
 - **One source per camera** (`vision-ai-<camera>`). Target Fusion never merges
   two targets from one sensor and identifies the sensor by `$source`; with one
   label for both cameras a boat seen by both would stay two rings.
@@ -42,7 +48,8 @@ for an AIS vessel.
   consumers age a target from its real last sighting (Freeboard greys a ring
   after 20 s; Target Fusion and Collision Alerts ignore one older than a
   minute). A frame the container coasted across a detector dropout is a
-  prediction, not a sighting, and is not published.
+  prediction, not a sighting, and is not published; the hold runs from the
+  last real detection however long the container coasts.
 - **Track lost.** After `blipHoldS` without a detection, or when the target loses
   its georeference, `navigation.position` is published as `null` once: Freeboard
   removes it at once and Target Fusion withdraws its link. The server prunes the
@@ -125,10 +132,11 @@ approach, and the closest-approach line between them):
 
 A boat alarms **once**, whichever plugins and sensors see it:
 
-1. **Tracks of one boat raise one alarm.** Tracks that Target Fusion links
-   (`sameAs`), or that this plugin matched to the same AIS vessel, are one
-   boat; it alarms with its most urgent track. The same grouping gives one
-   dark-target alert per boat.
+1. **Tracks of one boat raise one alarm.** Tracks that share any context — the
+   target one is published as, the target or vessel a Target Fusion link
+   (`sameAs`) names, the AIS vessel this plugin matched — are one boat,
+   followed transitively; it alarms with its most urgent track. The same
+   grouping gives one dark-target alert per boat.
 2. **Collision Alerts takes the boats it can see.** While the Collision Alerts
    plugin runs it announces the `collisionAlerts` PropertyValue
    `{ evaluatesTargets: true }`. It then evaluates every AIS vessel and every
@@ -142,7 +150,11 @@ A boat alarms **once**, whichever plugins and sensors see it:
    names the same boat — by its AIS vessel, its camera target or the target it
    is linked to — makes this plugin clear its own at once.
 4. **A collision alarm replaces the dark-target alert** for the same boat; its
-   message says `(no AIS)` instead.
+   message says `(no AIS)` instead. That holds for another producer's alarm
+   too, even with this plugin's own collision alarms off.
+
+Each hand-over clears this plugin's alarm at once, skipping its anti-flap
+hold, including an alarm still held for a boat that has stopped threatening.
 
 All of this fails safe: only an announcement or an alarm that is actually there
 makes this plugin stand down, and anything it cannot read leaves its own alarm
