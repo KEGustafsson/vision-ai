@@ -111,7 +111,7 @@ export function schema(): object {
       enableVisualRadar: {
         type: 'boolean',
         title: 'Publish targets to the chart (camera sensor targets)',
-        description: 'Publishes each georeferenced target as a Signal K sensor target, targets.camera:visionai-<camera>-<id>, named VIS-<camera>-<overlay number>, with navigation.position and (when "Compute: collision" is on) SOG/COG. Chartplotters that show sensor targets (Freeboard-SK 3.5 and later) draw them as camera targets, not as AIS vessels. With the Target Fusion plugin installed, a boat the cameras and AIS both see is drawn once, as its AIS vessel, and Collision Alerts alarms on these targets itself. Data only — never raises a notification. Off by default: hazard outputs are opt-in.',
+        description: 'Publishes each georeferenced target as a Signal K sensor target, targets.camera:visionai-<camera>-<id>, named VIS-<camera>-<overlay number>, with navigation.position and (when "Compute: collision" is on) SOG/COG. Chartplotters that show sensor targets (Freeboard-SK 3.5 and later) draw them as camera targets, not as AIS vessels. With the Target Fusion plugin installed, a boat the cameras and AIS both see is drawn once, as its AIS vessel, and Collision Alerts alarms on these targets itself. Data only — never raises a notification. Off by default.',
         default: false,
       },
       enableCollision: {

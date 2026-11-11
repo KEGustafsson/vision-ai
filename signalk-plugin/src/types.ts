@@ -123,4 +123,8 @@ export interface EnrichedTarget extends RawTarget {
   cog: number | null; // rad [0,2π), target ground course
   threatLevel: ThreatLevel;
   lastSeen: number; // epoch ms
+  // When the container last detected the track, as opposed to coasting it
+  // across a detector dropout (lastSeen advances on coasted frames too).
+  // Unset until its first real detection.
+  observedAt?: number; // epoch ms
 }

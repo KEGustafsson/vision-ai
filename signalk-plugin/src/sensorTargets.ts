@@ -10,10 +10,18 @@ import { EnrichedTarget } from './types';
 
 export const SENSOR_TYPE = 'camera';
 
-// Camera names are free-form config strings; a `.` would split the context and
-// path segments, so anything outside [a-zA-Z0-9] becomes `_`.
+/**
+ * A camera name as an id segment. Names are free-form config strings and a
+ * `.` would split the context, so every character outside [a-zA-Z0-9] is
+ * written as its hex code between underscores (`bow cam` → `bow_20_cam`,
+ * `bow.cam` → `bow_2e_cam`). The encoding is
+ * one-to-one, so two cameras whose names differ only in punctuation never
+ * share a target context; the usual names (`forward`, `aft`) are unchanged.
+ */
 export function cameraSegment(camera: string): string {
-  return String(camera).replace(/[^a-zA-Z0-9]/g, '_');
+  return Array.from(String(camera), (ch) =>
+    /[a-zA-Z0-9]/.test(ch) ? ch : `_${(ch.codePointAt(0) as number).toString(16)}_`
+  ).join('');
 }
 
 /** The number the container burns into the video overlay for this target. */

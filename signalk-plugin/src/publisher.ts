@@ -115,9 +115,11 @@ export class Publisher {
    *
    * A track is held for blipHoldS after its last detection, so a detection gap
    * of a few seconds (waves, occlusion) does not drop the ring and its fusion
-   * link. After that its position is published as null once: the convention's
-   * "track lost", which removes it from the chart at once and withdraws its
-   * fusion link. The server prunes the context itself later.
+   * link. The hold runs from the last real detection (`observedAt`), however
+   * long the container keeps coasting the track. After that its position is
+   * published as null once: the convention's "track lost", which removes it
+   * from the chart at once and withdraws its fusion link. The server prunes
+   * the context itself later.
    */
   private publishSensorTargets(targets: EnrichedTarget[], now: number): void {
     // The floor of two process cycles keeps the gate sane if blipHoldS is
@@ -130,10 +132,16 @@ export class Publisher {
     const byContext = new Map<string, EnrichedTarget>();
     for (const t of targets) {
       const id = sensorTargetId(t);
-      if (!t.position || id === null || now - t.lastSeen > activeMs) continue;
+      const observedAt = Publisher.observedAt(t);
+      if (!t.position || id === null || observedAt === undefined || now - observedAt > activeMs) {
+        continue;
+      }
       const context = sensorTargetContext(id);
+      // A coasted frame is never published, so a coasted track not yet on the
+      // chart must not take a maxTargets slot from one with a sighting to show.
+      if (t.coasting && !this.published.has(context)) continue;
       const prev = byContext.get(context);
-      if (!prev || t.lastSeen > prev.lastSeen) byContext.set(context, t);
+      if (!prev || observedAt > (Publisher.observedAt(prev) as number)) byContext.set(context, t);
     }
     // Cap the chart to maxTargets, keeping the closest (most
     // collision-relevant) so the count tracks the detection limit.
@@ -153,10 +161,16 @@ export class Publisher {
     }
   }
 
-  // Course and speed are written value-or-null on every observation, so a
-  // target whose estimate is lost never keeps a stale course line. The name
-  // rides the root delta (path ''), as the convention asks, so consumers read
-  // a plain string.
+  /** When the track was last really detected; a target built without
+   * `observedAt` (older callers) counts its own frame unless it is coasted. */
+  private static observedAt(t: EnrichedTarget): number | undefined {
+    return t.observedAt ?? (t.coasting ? undefined : t.lastSeen);
+  }
+
+  /** One sighting's values. Course and speed are written value-or-null every
+   * time, so a target whose estimate is lost never keeps a stale course line.
+   * The name rides the root delta (path ''), as the convention asks, so
+   * consumers read a plain string. */
   private static observation(t: EnrichedTarget): Array<{ path: string; value: unknown }> {
     const n = overlayNumber(t);
     return [
@@ -167,6 +181,7 @@ export class Publisher {
     ];
   }
 
+  /** Publish a target's track as lost (null position) and forget it. */
   private withdraw(context: string): void {
     const camera = this.published.get(context)?.camera ?? '';
     this.published.delete(context);
@@ -175,6 +190,7 @@ export class Publisher {
     ]);
   }
 
+  /** One delta on a target context, under its camera's own source label. */
   private emitTarget(
     context: string,
     camera: string,

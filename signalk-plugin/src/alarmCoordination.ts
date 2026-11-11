@@ -16,7 +16,9 @@ import { ServerApp } from './skapp';
 
 export const COLLISION_ALERTS_PROPERTY = 'collisionAlerts';
 
-// Any plugin can emit under any name, so check the shape instead of casting.
+/** Whether a `collisionAlerts` value announces that Collision Alerts
+ * evaluates targets. Any plugin can emit under any name, so the shape is
+ * checked instead of cast. */
 export function evaluatesTargets(value: unknown): boolean {
   return (
     typeof value === 'object' &&
@@ -59,9 +61,19 @@ const ACTIVE_STATES = new Set(['alert', 'warn', 'alarm', 'emergency']);
  * alarm shape), in the older `other` field, or only by its path key, which
  * Collision Alerts and MaYaRa set to the target id (`urn:mrn:imo:mmsi:…` for
  * AIS, `radar:…` / `camera:…` for sensor targets).
- * @param ownSource the `$source` this plugin's notifications carry
+ *
+ * This plugin's own alarms are left out twice over: by path, since every one
+ * it raises is keyed `visionai-…` and no other producer uses that prefix, and
+ * by source, since servers store a plugin's source label either bare
+ * (`vision-ai`) or with a suffix (`vision-ai.XX` on older ones).
+ * @param ownLabel the source label this plugin's notifications carry
+ * @param ownKeyPrefix the path key prefix this plugin's alarms use
  */
-export function othersAlarmedRefs(app: ServerApp, ownSource: string): Set<string> {
+export function othersAlarmedRefs(
+  app: ServerApp,
+  ownLabel: string,
+  ownKeyPrefix = 'visionai-'
+): Set<string> {
   const refs = new Set<string>();
   let tree: unknown;
   try {
@@ -72,8 +84,9 @@ export function othersAlarmedRefs(app: ServerApp, ownSource: string): Set<string
   if (tree === null || typeof tree !== 'object') return refs;
   for (const [key, node] of Object.entries(tree as Record<string, unknown>)) {
     if (node === null || typeof node !== 'object' || key === 'value' || key === 'meta') continue;
+    if (key.startsWith(ownKeyPrefix)) continue;
     for (const entry of sourcedValues(node as Record<string, unknown>)) {
-      if (entry.source === ownSource) continue;
+      if (isOwnSource(entry.source, ownLabel)) continue;
       const v = entry.value as {
         state?: unknown;
         other?: unknown;
@@ -89,8 +102,13 @@ export function othersAlarmedRefs(app: ServerApp, ownSource: string): Set<string
   return refs;
 }
 
-// A leaf carries its latest value with its `$source`, and every source's own
-// value under `values` when several write it.
+/** Whether a `$source` is this plugin's label, bare or with a suffix. */
+function isOwnSource(source: unknown, ownLabel: string): boolean {
+  return typeof source === 'string' && (source === ownLabel || source.startsWith(`${ownLabel}.`));
+}
+
+/** A leaf's value per source: its latest value with its `$source`, or every
+ * source's own value under `values` when several write it. */
 function sourcedValues(node: Record<string, unknown>): Array<{ source: unknown; value: unknown }> {
   const out: Array<{ source: unknown; value: unknown }> = [];
   const values = node.values;
@@ -103,6 +121,7 @@ function sourcedValues(node: Record<string, unknown>): Array<{ source: unknown; 
   return out;
 }
 
+/** The context a notification names only by its path key. */
 function refFromKey(key: string): string {
   return key.startsWith('urn:') ? `vessels.${key}` : `targets.${key}`;
 }

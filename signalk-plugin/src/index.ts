@@ -5,7 +5,7 @@
 // notifications, and publishes the vision.* tree. Also serves a captain webapp
 // and proxies the annotated video stream (see router.ts).
 
-import { ContainerClient, ControlBody, HealthInfo } from './containerClient';
+import { ContainerClient, ContainerSessionWatch, ControlBody, HealthInfo } from './containerClient';
 import { CpaEstimator } from './cpa';
 import { EventStream } from './eventStream';
 import { PluginConfig, schema, uiSchema, withDefaults } from './config';
@@ -34,6 +34,8 @@ export = function (app: ServerApp): Plugin {
   // Collision Alerts' announcement: while it evaluates sensor targets, the
   // boats it can see alarm through it alone.
   const collisionAlerts = new CollisionAlertsWatch();
+  // Container restarts, after which track serials start over.
+  const containerSession = new ContainerSessionWatch();
   let processTimer: NodeJS.Timeout | null = null;
   let syncTimer: NodeJS.Timeout | null = null;
   let attitudeTimer: NodeJS.Timeout | null = null;
@@ -180,6 +182,9 @@ export = function (app: ServerApp): Plugin {
         continue;
       }
       const t = enrichTarget(raw, ev.camera, own, cfg, seenAt);
+      // A coasted frame is the container's prediction: the last real
+      // detection stays the one the chart ages from.
+      t.observedAt = t.coasting ? targets.get(t.key)?.observedAt : seenAt;
       targets.set(t.key, t);
     }
     pruneLabelSelection();
@@ -248,6 +253,8 @@ export = function (app: ServerApp): Plugin {
     publishSystemStats(now);
   }
 
+  /** What the notifier needs to alarm each boat once: which targets are on
+   * the chart, their fusion links, and what other plugins already alarm. */
   function alarmCoordination(all: EnrichedTarget[]): AlarmCoordination {
     const pub = publisher;
     return {
@@ -417,6 +424,22 @@ export = function (app: ServerApp): Plugin {
   let lastDegradedSig: string | null = null;
   let lastDegradedDetail: string | null = null;
 
+  /**
+   * Drop everything the previous container session tracked. Its targets are
+   * withdrawn from the chart (track lost) and their CPA and AIS history
+   * forgotten, so a new boat that receives a reused serial starts as a new
+   * target. Withdrawing first is what makes reusing the id safe: consumers
+   * treat a context whose position went null as finished.
+   */
+  function forgetContainerSession(): void {
+    app.debug('vision-ai: vision container restarted — dropping the previous session\'s targets');
+    targets.clear();
+    aisAssignment = new Map<string, string>();
+    lastEventTsByCamera.clear();
+    if (cpa) cpa.reset();
+    if (publisher) publisher.reset();
+  }
+
   async function checkHealth(): Promise<void> {
     const c = client;
     if (!c || !notifier) return;
@@ -454,6 +477,7 @@ export = function (app: ServerApp): Plugin {
       notifier.clearContainerDown();
       app.debug('vision-ai: container reachable again');
     }
+    if (containerSession.update(info.uptime_s, Date.now())) forgetContainerSession();
 
     // Degraded: container is up but reporting a camera stall or pipeline
     // restart (app/api/rest.py sets status="degraded"). Surface the detail.
@@ -626,6 +650,7 @@ export = function (app: ServerApp): Plugin {
       attitudeWatch = null;
       if (stream) stream.stop();
       collisionAlerts.stop();
+      containerSession.reset();
       if (notifier) notifier.clearAll();
       if (publisher) publisher.reset();
       if (cpa) cpa.reset();

@@ -15,6 +15,38 @@ export interface HealthInfo {
   camera_errors?: Record<string, string>;
   pipeline_restarts?: number;
   pipeline_last_error?: string | null;
+  uptime_s?: number;
+}
+
+/**
+ * Notices when the vision container has restarted, from the uptime its
+ * /health reports. Track serials (`stable_id`) are unique within one container
+ * session only, so after a restart a new boat can carry the serial of one
+ * still on the chart; the plugin then drops what the old session tracked
+ * before new detections reuse those ids.
+ *
+ * The start time (now − uptime) of one session stays put from poll to poll;
+ * a start more than `toleranceMs` later than the last one seen is a new
+ * session. The tolerance absorbs poll latency and clock steps.
+ */
+export class ContainerSessionWatch {
+  private startedAt: number | null = null;
+
+  constructor(private readonly toleranceMs = 30_000) {}
+
+  /** @returns true when this report shows a container session newer than
+   * the last one seen. The first report only records the session. */
+  update(uptimeS: unknown, nowMs: number): boolean {
+    if (typeof uptimeS !== 'number' || !Number.isFinite(uptimeS) || uptimeS < 0) return false;
+    const startedAt = nowMs - uptimeS * 1000;
+    const restarted = this.startedAt !== null && startedAt - this.startedAt > this.toleranceMs;
+    if (this.startedAt === null || restarted) this.startedAt = startedAt;
+    return restarted;
+  }
+
+  reset(): void {
+    this.startedAt = null;
+  }
 }
 
 export interface ControlBody {

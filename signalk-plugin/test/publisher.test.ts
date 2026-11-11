@@ -66,7 +66,14 @@ describe('sensorTargetId', () => {
 
   it('keeps free-form camera names from splitting the context', () => {
     expect(sensorTargetId({ camera: 'bow cam.2', stable_id: 7, track_id: 7 }))
-      .toBe('camera:visionai-bow_cam_2-7');
+      .toBe('camera:visionai-bow_20_cam_2e_2-7');
+  });
+
+  it('never gives two cameras one context, whatever their names', () => {
+    const names = ['bow cam', 'bow.cam', 'bow_cam', 'bow-cam', 'bow_20_cam', 'bowcam'];
+    const ids = names.map((camera) => sensorTargetId({ camera, stable_id: 1, track_id: 1 }));
+    expect(new Set(ids).size).toBe(names.length);
+    for (const id of ids) expect(id).not.toContain('.');
   });
 });
 
@@ -131,6 +138,33 @@ describe('Publisher — sensor targets', () => {
     expect(app.deltas).toHaveLength(0);
     pub.publishTargets([tgt(1, { coasting: false, lastSeen: NOW + 500 })], NOW + 1000);
     expect(positionsOf(app.valuesFor(T1))).toHaveLength(1);
+  });
+
+  it('ages the hold from the last real detection, not from coasted frames', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg); // blipHoldS 15 s
+    pub.publishTargets([tgt(1, { observedAt: NOW })], NOW);
+    // The container keeps coasting the track: lastSeen advances, observedAt stays.
+    const coasted = tgt(1, { coasting: true, observedAt: NOW, lastSeen: NOW + 14_000 });
+    pub.publishTargets([coasted], NOW + 14_000);
+    expect(pub.isPublished(T1)).toBe(true);
+    pub.publishTargets([{ ...coasted, lastSeen: NOW + 16_000 }], NOW + 16_000);
+    expect(pub.isPublished(T1)).toBe(false);
+    expect(app.valuesFor(T1).at(-1)).toEqual({ path: 'navigation.position', value: null });
+  });
+
+  it('gives a coasted track not yet on the chart no maxTargets slot', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', { ...cfg, maxTargets: 1 });
+    const near = tgt(1, { coasting: true, observedAt: NOW - 500,
+      geometry: { relative_bearing_deg: 0, range_m: 100, range_method: 'horizon', range_confidence: 0.7 } });
+    const far = tgt(2, { geometry: { relative_bearing_deg: 0, range_m: 900, range_method: 'horizon', range_confidence: 0.7 } });
+    pub.publishTargets([near, far], NOW);
+    expect(app.targetContexts()).toEqual([ctx('forward', 102)]);
+  });
+
+  it('never publishes a track that has only been coasted', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1, { coasting: true, observedAt: undefined })], NOW);
+    expect(app.deltas).toHaveLength(0);
   });
 
   it('writes course and speed as null when lost, so no stale course line lingers', () => {

@@ -120,6 +120,45 @@ describe('NotificationManager — collision alarms', () => {
     expect(v.data.targetRef).toBe(ctxOf(bow));
   });
 
+  it('alarms once when the links between tracks run through an AIS match', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
+    // The bow track matches AIS; fusion links the stern track to the bow's target.
+    const bow = boat(3, { aisMmsi: '244060000', aisCorrelated: true });
+    const stern = boat(9, { camera: 'aft', key: 'aft.9' });
+    const links = { [ctxOf(stern)]: ctxOf(bow) };
+    n.evaluate([bow, stern], new Set(), 1_000, coordination({ links }));
+    n.evaluate([stern, bow], new Set(), 2_000, coordination({ links }));
+    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai-mmsi-244060000`]);
+  });
+
+  it('stands down when another plugin alarms any track of the boat', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
+    const bow = boat(3);
+    const stern = boat(9, { camera: 'aft', key: 'aft.9' });
+    const links = { [ctxOf(stern)]: ctxOf(bow) };
+    // The other plugin names the stern camera's target, not the bow's.
+    n.evaluate([bow, stern], new Set(), 1_000,
+      coordination({ links, othersAlarmed: new Set([ctxOf(stern)]) }));
+    expect(app.raised(CPA).size).toBe(0);
+  });
+
+  it('releases its held alarm when another plugin takes over a boat that stopped threatening', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg); // hold 10 s
+    n.evaluate([boat(3)], new Set(), 1_000, coordination());
+    expect(app.raised(CPA).size).toBe(1);
+    n.evaluate([boat(3, { threatLevel: 'none' })], new Set(), 2_000,
+      coordination({ othersAlarmed: new Set([ctxOf(boat(3))]) }));
+    expect(app.raised(CPA).size).toBe(0);
+  });
+
+  it('releases its held alarm when Collision Alerts starts covering the boat', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
+    n.evaluate([boat(3)], new Set(), 1_000, coordination());
+    n.evaluate([boat(3, { threatLevel: 'none' })], new Set(), 2_000,
+      coordination({ collisionAlertsRunning: true }));
+    expect(app.raised(CPA).size).toBe(0);
+  });
+
   it('alarms once for tracks matched to the same AIS vessel, named by the vessel', () => {
     const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
     const a = boat(3, { aisMmsi: '244060000', aisCorrelated: true });
@@ -235,6 +274,13 @@ describe('NotificationManager — dark targets', () => {
 
   it('raises no dark-target alert for a boat another plugin already alarms', () => {
     const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
+    const t = boat(3, { threatLevel: 'none' });
+    n.evaluate([t], new Set([t.key]), 1_000, coordination({ othersAlarmed: new Set([ctxOf(t)]) }));
+    expect(app.raised('notifications.').size).toBe(0);
+  });
+
+  it('raises no dark-target alert for a boat another plugin alarms, with its own collision alarms off', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', withDefaults({ notifyCollision: false }));
     const t = boat(3, { threatLevel: 'none' });
     n.evaluate([t], new Set([t.key]), 1_000, coordination({ othersAlarmed: new Set([ctxOf(t)]) }));
     expect(app.raised('notifications.').size).toBe(0);
