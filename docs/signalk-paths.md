@@ -39,8 +39,9 @@ for an AIS vessel.
   and a restart always drops the event-stream connection. So whenever the
   connection (re)opens, before its first event, every target of the previous
   connection is withdrawn (null position) and its CPA and AIS history dropped.
-  Each connection also gets its own `<session>` token (the time it opened, in
-  base 36), so a serial the container reuses after a restart never names an
+  Each connection also gets its own `<session>` token (a time in base 36 that
+  only moves forward within a plugin run, even if the clock steps back, plus a
+  random suffix that keeps separate runs apart), so a serial the container reuses after a restart never names an
   old context: a consumer that reads the model on a timer, as Target Fusion
   does every 2 s, can't carry an old boat's link over to a new one even if it
   never saw the withdrawal. A reconnect within one session only restarts its

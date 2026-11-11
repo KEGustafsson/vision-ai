@@ -14,7 +14,7 @@ import { enrichTarget } from './enrich';
 import { AlarmCoordination, NOTIFICATION_SOURCE, NotificationManager, degradedFaultKey } from './notifications';
 import { CollisionAlertsWatch, othersAlarmedRefs } from './alarmCoordination';
 import { Publisher } from './publisher';
-import { nextSession, readSameAs, sensorTargetContext, sensorTargetId } from './sensorTargets';
+import { SessionTokens, readSameAs, sensorTargetContext, sensorTargetId } from './sensorTargets';
 import { readAttitude, readOwnShip } from './nav';
 import { AttitudeSmoother, AttitudeWatch } from './attitude';
 import { registerRoutes, SharedState } from './router';
@@ -52,6 +52,7 @@ export = function (app: ServerApp): Plugin {
   // flapping its identity as the noisy monocular range wanders.
   let aisAssignment = new Map<string, string>();
   // The current event-stream connection's token; see forgetPreviousConnection.
+  const sessionTokens = new SessionTokens();
   let session: string | null = null;
   const lastEventByCamera = new Map<string, DetectionEvent>();
   const frameCount = new Map<string, number>();
@@ -440,7 +441,7 @@ export = function (app: ServerApp): Plugin {
    * within one container session costs only a fresh start for its tracks.
    */
   function forgetPreviousConnection(): void {
-    session = nextSession(session, Date.now());
+    session = sessionTokens.next(Date.now());
     if (targets.size > 0) {
       app.debug('vision-ai: event stream (re)connected — dropping the previous connection\'s targets');
     }

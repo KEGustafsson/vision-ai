@@ -5,6 +5,7 @@
 // as. Chartplotters (Freeboard-SK) and collision alarms (Collision Alerts)
 // follow those links, so a boat several sensors see is drawn and alarmed once.
 
+import { randomBytes } from 'crypto';
 import { ServerApp } from './skapp';
 import { EnrichedTarget } from './types';
 
@@ -55,13 +56,21 @@ export function sensorTargetId(
 }
 
 /**
- * A token for one event-stream connection: the time it opened, in base 36,
- * made distinct from the previous token should two connections open within
- * the same millisecond. Letters and digits only, so it sits in an id as is.
+ * Tokens for event-stream connections, never the same twice. Each is a time
+ * in base 36 that only moves forward within this plugin run, whatever the
+ * clock does (boats' computers are often RTC-less and stepped by GPS or
+ * chrony after boot), plus a random suffix so two runs never share one either.
+ * Letters and digits only, so a token sits in an id as is.
  */
-export function nextSession(previous: string | null, nowMs: number): string {
-  const token = Math.floor(nowMs).toString(36);
-  return token === previous ? `${token}0` : token;
+export class SessionTokens {
+  private lastMs = -Infinity;
+
+  constructor(private readonly suffix: () => string = () => randomBytes(4).toString('hex')) {}
+
+  next(nowMs: number): string {
+    this.lastMs = Math.max(Math.floor(nowMs), this.lastMs + 1);
+    return `${this.lastMs.toString(36)}${this.suffix()}`;
+  }
 }
 
 export function sensorTargetContext(id: string): string {

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { Publisher } from '../src/publisher';
-import { nextSession, sensorTargetId } from '../src/sensorTargets';
+import { SessionTokens, sensorTargetId } from '../src/sensorTargets';
 import { withDefaults } from '../src/config';
 import { Delta, ServerApp } from '../src/skapp';
 import { EnrichedTarget } from '../src/types';
@@ -71,11 +71,22 @@ describe('sensorTargetId', () => {
       .not.toBe(sensorTargetId({ camera: 'forward', stable_id: 5, track_id: 14, session: 'mhb3k2x2' }));
   });
 
-  it('gives every connection a new session token', () => {
-    const a = nextSession(null, 1_800_000_000_000);
-    expect(a).toMatch(/^[a-z0-9]+$/);
-    expect(nextSession(a, 1_800_000_000_000)).not.toBe(a); // same millisecond
-    expect(nextSession(a, 1_800_000_001_000)).not.toBe(a);
+  it('never issues the same session token twice, even when the clock steps back', () => {
+    const t = new SessionTokens(() => '');
+    const at = (ms: number) => t.next(ms);
+    const tokens = [
+      at(1_800_000_000_000), at(1_800_000_000_000), at(1_800_000_000_000), // same millisecond
+      at(1_800_000_005_000), at(1_800_000_000_000), at(1_799_000_000_000), // clock stepped back
+    ];
+    expect(new Set(tokens).size).toBe(tokens.length);
+    for (const token of tokens) expect(token).toMatch(/^[a-z0-9]+$/);
+  });
+
+  it('ends each token with a random suffix that keeps separate plugin runs apart', () => {
+    const time = (1_800_000_000_000).toString(36);
+    expect(new SessionTokens().next(1_800_000_000_000)).toMatch(new RegExp(`^${time}[0-9a-f]{8}$`));
+    expect(new SessionTokens(() => 'aa').next(1_800_000_000_000))
+      .not.toBe(new SessionTokens(() => 'bb').next(1_800_000_000_000));
   });
 
   it('keeps free-form camera names from splitting the context', () => {
