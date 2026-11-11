@@ -52,7 +52,7 @@ describe('othersAlarmedRefs', () => {
       // Older servers store a plugin's label with a suffix.
       'urn:mrn:imo:mmsi:7': { $source: 'vision-ai.XX', value: alarm('alarm') },
       // Its own alarms are keyed visionai-…, whatever the source says.
-      'visionai-mmsi-8': { $source: 'unexpected', value: alarm('alarm', { other: 'vessels.urn:mrn:imo:mmsi:8' }) },
+      'visionai_mmsi_8': { $source: 'unexpected', value: alarm('alarm', { other: 'vessels.urn:mrn:imo:mmsi:8' }) },
       // A different plugin whose label merely starts the same way still counts.
       'urn:mrn:imo:mmsi:9': { $source: 'vision-ai-other', value: alarm('alarm') },
     }), 'vision-ai');

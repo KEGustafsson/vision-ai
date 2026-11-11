@@ -114,8 +114,11 @@ The hold is skipped when another alarm takes the boat over, so it never keeps
 two alarms up for one boat.
 
 `<boat>` is `visionai-<camera>-<session>-<stable_id>` for a boat known only to the
-cameras, or `visionai-mmsi-<mmsi>` once it is matched to an AIS vessel. The
-`visionai-` prefix keeps the path apart from those Collision Alerts and SK
+cameras, `visionai_mmsi_<mmsi>` once it is matched to an AIS vessel, or
+`visionai_ctx_<context>` when a fusion link names another sensor's target
+(punctuation written as its hex code between underscores). The separate forms
+keep any two boats on separate paths. The `visionai` prefix keeps the path
+apart from those Collision Alerts and SK
 Derived Data write (they key by the bare target id): two producers on one path
 would let this plugin's clear wipe the other's standing alarm off displays that
 key alarms by path.

@@ -145,20 +145,30 @@ function boatOf(members: TrackRefs[]): Boat {
  * A notification key per boat, never one another producer uses: two sources
  * writing one path would let this plugin's clear (value null) wipe the other's
  * still-standing alarm off every display that keys alarms by path.
+ *
+ * Every key starts `visionai`, then keeps its kind apart so no two boats can
+ * share one: this plugin's own target ids keep their `visionai-` form, and
+ * every other kind follows `visionai_` with a name no own id can take
+ * (`mmsi_` for an AIS vessel, `ctx_` for any other context, `key_` for a
+ * track with no id).
  */
 export function boatToken(key: string, rep: EnrichedTarget): string {
   const mmsi = /^vessels\.urn:mrn:imo:mmsi:(\d+)$/.exec(key)?.[1];
-  if (mmsi) return `visionai-mmsi-${mmsi}`;
+  if (mmsi) return `${OWN_KEY_PREFIX}_mmsi_${mmsi}`;
   // This plugin's own target ids are already one segment of plain
   // characters (see sensorTargets.ts) and are used as they are.
   const ownId = /^targets\.camera:(visionai-[a-zA-Z0-9_-]+)$/.exec(key)?.[1];
   if (ownId) return ownId;
   if (key.startsWith('vision:')) {
     const id = sensorTargetId(rep);
-    return id ? id.slice(id.indexOf(':') + 1) : `visionai-${encodeToken(rep.key)}`;
+    return id ? id.slice(id.indexOf(':') + 1) : `${OWN_KEY_PREFIX}_key_${encodeToken(rep.key)}`;
   }
-  return `visionai-${encodeToken(key.replace(/^(vessels|targets)\./, ''))}`;
+  return `${OWN_KEY_PREFIX}_ctx_${encodeToken(key.replace(/^(vessels|targets)\./, ''))}`;
 }
+
+/** What every notification key this plugin raises begins with, and no other
+ * producer's does. */
+export const OWN_KEY_PREFIX = 'visionai';
 
 /**
  * Any context as one path segment, one-to-one: every character outside
@@ -487,9 +497,11 @@ export class NotificationManager {
       const state: State = t.threatLevel === 'high' ? 'alarm' : 'warn';
       const tcpa = t.tcpa !== null ? `${(t.tcpa / 60).toFixed(1)} min` : '?';
       const cpa = t.cpa !== null ? `${t.cpa.toFixed(0)} m` : '?';
-      // "No AIS" only when AIS was checked and no track of the boat is AIS.
+      // The vessel the boat is named by, a fusion link before this plugin's
+      // own match, and "no AIS" only when AIS was checked and no track is AIS.
+      const mmsi = /^vessels\.urn:mrn:imo:mmsi:(\d+)$/.exec(boat.targetRef ?? '')?.[1];
       const noAis = !boat.hasAis && risky.some((r) => darkKeys.has(r.key));
-      const who = t.aisMmsi ? `AIS ${t.aisMmsi}` : `${t.label}${noAis ? ' (no AIS)' : ''}`;
+      const who = mmsi ? `AIS ${mmsi}` : `${t.label}${noAis ? ' (no AIS)' : ''}`;
       this.send(path, state, `Collision risk: ${who} CPA ${cpa} in ${tcpa}`, ['visual', 'sound'],
         collisionData(boat, t));
       want.add(path);

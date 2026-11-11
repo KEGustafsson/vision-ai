@@ -24,7 +24,7 @@ const CPA_PATH_PREFIX = 'notifications.navigation.closestApproach.';
 export function touchesForeignAlarm(
   delta: { updates?: Array<{ $source?: unknown; values?: Array<{ path: string; value: unknown }> }> },
   ownLabel: string,
-  ownKeyPrefix = 'visionai-'
+  ownKeyPrefix = 'visionai'
 ): boolean {
   for (const u of delta.updates ?? []) {
     if (isOwnSource(u.$source, ownLabel)) continue;
@@ -81,7 +81,7 @@ export class ForeignAlarmWatch {
  * AIS, `radar:…` / `camera:…` for sensor targets).
  *
  * This plugin's own alarms are left out twice over: by path, since every one
- * it raises is keyed `visionai-…` and no other producer uses that prefix, and
+ * it raises is keyed `visionai…` and no other producer uses that prefix, and
  * by source, since servers store a plugin's source label either bare
  * (`vision-ai`) or with a suffix (`vision-ai.XX` on older ones).
  * @param ownLabel the source label this plugin's notifications carry
@@ -90,7 +90,7 @@ export class ForeignAlarmWatch {
 export function othersAlarmedRefs(
   app: ServerApp,
   ownLabel: string,
-  ownKeyPrefix = 'visionai-'
+  ownKeyPrefix = 'visionai'
 ): Set<string> {
   const refs = new Set<string>();
   let tree: unknown;

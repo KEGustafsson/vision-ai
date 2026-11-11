@@ -127,7 +127,7 @@ describe('NotificationManager — collision alarms', () => {
     const links = { [ctxOf(stern)]: ctxOf(bow) };
     n.evaluate([bow, stern], new Set(), 1_000, coordination({ links }));
     n.evaluate([stern, bow], new Set(), 2_000, coordination({ links }));
-    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai-mmsi-244060000`]);
+    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai_mmsi_244060000`]);
   });
 
   it('stands down when another plugin alarms any track of the boat', () => {
@@ -169,8 +169,8 @@ describe('NotificationManager — collision alarms', () => {
     const b = boat(4, { camera: 'aft', key: 'aft.4', aisMmsi: '244060000', aisCorrelated: true });
     n.evaluate([a, b], new Set(), 1_000, coordination({ publishedContext: () => null }));
     const raised = app.raised(CPA);
-    expect([...raised.keys()]).toEqual([`${CPA}visionai-mmsi-244060000`]);
-    expect(raised.get(`${CPA}visionai-mmsi-244060000`).data.targetRef)
+    expect([...raised.keys()]).toEqual([`${CPA}visionai_mmsi_244060000`]);
+    expect(raised.get(`${CPA}visionai_mmsi_244060000`).data.targetRef)
       .toBe('vessels.urn:mrn:imo:mmsi:244060000');
   });
 
@@ -200,6 +200,17 @@ describe('NotificationManager — collision alarms', () => {
     expect(app.raised(CPA).size).toBe(2);
   });
 
+  it('keeps its own target keys apart from encoded foreign contexts', () => {
+    const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
+    // A camera named "radar:a" and a radar target "a-abc-3" would encode alike
+    // without separate namespaces.
+    const own = boat(3, { camera: 'radar:a', key: 'radar:a.3', session: 'abc' });
+    const linked = boat(4);
+    const links = { [ctxOf(linked)]: 'targets.radar:a-abc-3' };
+    n.evaluate([own, linked], new Set(), 1_000, coordination({ links }));
+    expect(app.raised(CPA).size).toBe(2);
+  });
+
   it('lets a fusion link to an AIS vessel override its own position match', () => {
     const n = new NotificationManager(app, 'signalk-vision-ai', cfg);
     // Fusion says this track is vessel B; our position match said vessel A.
@@ -209,9 +220,12 @@ describe('NotificationManager — collision alarms', () => {
     n.evaluate([t], new Set(), 1_000,
       coordination({ links, othersAlarmed: new Set(['vessels.urn:mrn:imo:mmsi:230000001']) }));
     const raised = app.raised(CPA);
-    expect([...raised.keys()]).toEqual([`${CPA}visionai-mmsi-230000002`]);
-    expect(raised.get(`${CPA}visionai-mmsi-230000002`).data.targetRef)
+    expect([...raised.keys()]).toEqual([`${CPA}visionai_mmsi_230000002`]);
+    expect(raised.get(`${CPA}visionai_mmsi_230000002`).data.targetRef)
       .toBe('vessels.urn:mrn:imo:mmsi:230000002');
+    // The message names the linked vessel, not the position match.
+    expect(raised.get(`${CPA}visionai_mmsi_230000002`).message).toContain('AIS 230000002');
+    expect(raised.get(`${CPA}visionai_mmsi_230000002`).message).not.toContain('230000001');
   });
 
   it('does not merge a track linked to one vessel with a track matched to another', () => {
@@ -221,7 +235,7 @@ describe('NotificationManager — collision alarms', () => {
     const links = { [ctxOf(linked)]: 'vessels.urn:mrn:imo:mmsi:230000002' };
     n.evaluate([linked, matched], new Set(), 1_000, coordination({ links }));
     expect([...app.raised(CPA).keys()].sort()).toEqual(
-      [`${CPA}visionai-mmsi-230000001`, `${CPA}visionai-mmsi-230000002`]);
+      [`${CPA}visionai_mmsi_230000001`, `${CPA}visionai_mmsi_230000002`]);
   });
 
   it('releases an alarm at once when its boat is renamed, whichever track qualifies', () => {
@@ -236,7 +250,7 @@ describe('NotificationManager — collision alarms', () => {
     const links2 = { ...links, [ctxOf(bow)]: 'vessels.urn:mrn:imo:mmsi:230000001' };
     n.evaluate([{ ...bow, threatLevel: 'none' }, { ...stern, threatLevel: 'high' }], new Set(), 2_000,
       coordination({ links: links2 }));
-    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai-mmsi-230000001`]);
+    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai_mmsi_230000001`]);
   });
 
   it('stands down at once, without its hold, when another plugin alarms the boat', () => {
@@ -267,7 +281,7 @@ describe('NotificationManager — collision alarms', () => {
     // A fusion link to the AIS vessel arrives: the boat is now named by it.
     const links = { [ctxOf(boat(3))]: 'vessels.urn:mrn:imo:mmsi:244060000' };
     n.evaluate([boat(3)], new Set(), 2_000, coordination({ links }));
-    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai-mmsi-244060000`]);
+    expect([...app.raised(CPA).keys()]).toEqual([`${CPA}visionai_mmsi_244060000`]);
   });
 
   it('still holds an alarm whose boat merely stopped threatening (anti-flap)', () => {
