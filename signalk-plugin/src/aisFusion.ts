@@ -48,10 +48,9 @@ const VESSEL_LABELS = new Set([
 /**
  * Extract REAL AIS contacts (excluding self) to correlate against. A contact
  * qualifies only if it carries both an MMSI and an AIS class — i.e. it is an
- * actual transmitting vessel, not a position-only blip. This deliberately
- * excludes our own synthetic camera vessels (published as UUID contexts with no
- * MMSI/class), which would otherwise self-correlate with the visual targets that
- * spawned them.
+ * actual transmitting vessel, not a position-only contact (a buddy boat over
+ * the internet, or another plugin's synthetic vessel), which would otherwise
+ * self-correlate with a visual target and mask a dark one.
  */
 export function collectAisContacts(
   vessels: any,

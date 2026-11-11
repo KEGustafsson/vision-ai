@@ -73,7 +73,7 @@ chosen by `VISION_MODE`/`detector.backend`; all of them emit the identical
 
 On the plugin side, each `DetectionEvent` is enriched in stages:
 
-![Plugin-side enrichment of each DetectionEvent: enrichTarget() combines the relative bearing with own heading for a true bearing and own position + bearing + range for the target lat/lon; collectAisContacts() enumerates vessels.* with positions; fuse() correlates visual versus AIS into aisCorrelated or darkTarget; CpaEstimator.update() turns per-track ground velocity into CPA/TCPA and a threatLevel; then the NotificationManager raises MOB / dark-target / collision alerts (set and clear with hysteresis) and the Publisher emits synthetic AIS vessels (vessels.*) plus vision.fusion.* and vision.system.* paths.](images/plugin-enrichment.svg)
+![Plugin-side enrichment of each DetectionEvent: enrichTarget() combines the relative bearing with own heading for a true bearing and own position + bearing + range for the target lat/lon; collectAisContacts() enumerates vessels.* with positions; fuse() correlates visual versus AIS into aisCorrelated or darkTarget; CpaEstimator.update() turns per-track ground velocity into CPA/TCPA and a threatLevel; then the NotificationManager raises MOB / dark-target / collision alerts (set and clear with hysteresis) and the Publisher emits camera sensor targets (targets.*) plus vision.fusion.* and vision.system.* paths.](images/plugin-enrichment.svg)
 
 ## Why "visual radar"?
 

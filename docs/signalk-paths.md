@@ -2,39 +2,63 @@
 
 `vision.*` telemetry (fusion / system) and notifications are published on
 `vessels.self` with source label `vision-ai`, in SI units. Visual targets
-themselves are published as separate synthetic vessels (see below), not as a
+themselves are published as Signal K **sensor targets** (see below), not as a
 `vision.targets.*` tree.
 
-## Visual targets — synthetic AIS vessels (`enableVisualRadar`, default OFF)
+## Visual targets — sensor targets (`enableVisualRadar`, default OFF)
 
-With **Publish targets as synthetic AIS vessels** on, each georeferenced target
-is published as its own vessel context
-`vessels.urn:mrn:signalk:uuid:VIS-<camera>-<id>`, so it renders as a blip on
-any chartplotter that draws `vessels.*`. The token in the uuid slot is a
-deliberate spec deviation (see `publisher.ts`): readable and deterministic, so
-the same target always maps back to the same context and a fully-retracted
-shell stays identifiable as ours. `<id>` is the event's **`track_id`** — the
-same short number the container burns into the video overlay, so a chart
-contact and its on-screen box always carry the same label (`stable_id` is the
-fallback for events without a track id). `track_id` is recycled, but the
-tracker quarantines a freed number for far longer than a blip is held after its
-last detection, so a retracted blip is gone before its number can return on
-another vessel. Internal fusion and CPA state stay keyed on `stable_id`. Off by
-default to avoid confusion with real AIS contacts.
+With **Publish targets to the chart** on, each georeferenced camera track is
+published as its own context in the server's *sensor targets* convention
+(signalk-server docs, *Sensor Targets*):
+
+```
+targets.camera:visionai-<camera>-<stable_id>
+```
+
+Radar, camera and AIS plugins share this convention, so the targets are ordinary
+Signal K data that chartplotters and collision alarms read without knowing this
+plugin. Freeboard-SK (3.5 and later) draws each one as a camera target: an
+orange ring with a course line, shown with its Vessels layer, never mistaken
+for an AIS vessel.
 
 | Leaf | Units | Description |
 |------|-------|-------------|
-| `navigation.position` | — | `{ latitude, longitude }` georeferenced fix (always set on a live blip) |
-| `name` | — | `VIS-<camera>-<id>` (same token as the context), published via the root-merge delta (`path: ""`) so `vessel.name` is a plain string |
-| `navigation.speedOverGround` | m/s | Target ground speed (needs `enableCollision`) |
-| `navigation.courseOverGroundTrue` | rad | Target ground course `[0,2π)` (needs `enableCollision`) |
-| `navigation.closestApproach` | — | `{ distance (m), timeTo (s) }` — the standard SignalK CPA/TCPA container (vision-AI estimate); `null` when unresolved |
+| `name` | — | `VIS-<camera>-<track_id>`: the number the container burns into the video overlay, so a chart ring and its on-screen box carry the same label. Published at the root (`path: ""`) so it is a plain string |
+| `navigation.position` | — | `{ latitude, longitude }` georeferenced fix; `null` once when the track is lost |
+| `navigation.speedOverGround` | m/s | Target ground speed (needs `enableCollision`), `null` while unknown |
+| `navigation.courseOverGroundTrue` | rad | Target ground course `[0,2π)` (needs `enableCollision`), `null` while unknown |
 
-A blip is **never** published without a real `navigation.position`. When a track
-disappears (ages out after `trackTimeoutS`), every leaf — position, name and all
-kinematics — is published as `null`, so no synthetic vessel ever lingers without
-a location. SOG/COG let a chartplotter draw the vector and compute CPA natively;
-`navigation.closestApproach` exposes our own estimate on the standard path.
+- **Identity.** The id is keyed on the container's never-recycled
+  `stable_id` (`track_id` for older containers without it): consumers treat a
+  track whose position went null as finished, so a recycled number must never
+  name a second boat. The `visionai-` prefix keeps it unique among camera
+  sensors.
+- **One source per camera** (`vision-ai-<camera>`). Target Fusion never merges
+  two targets from one sensor and identifies the sensor by `$source`; with one
+  label for both cameras a boat seen by both would stay two rings.
+- **Observations, not repetitions.** A target is published only when the
+  container saw it again, stamped with the frame's capture time. Nothing is
+  republished while a track is held through a detection gap (`blipHoldS`), so
+  consumers age a target from its real last sighting (Freeboard greys a ring
+  after 20 s; Target Fusion and Collision Alerts ignore one older than a
+  minute). A frame the container coasted across a detector dropout is a
+  prediction, not a sighting, and is not published.
+- **Track lost.** After `blipHoldS` without a detection, or when the target loses
+  its georeference, `navigation.position` is published as `null` once: Freeboard
+  removes it at once and Target Fusion withdraws its link. The server prunes the
+  context later. A target is never published without a real position.
+- **No AIS shortcut.** Root `mmsi` is not set: this plugin's own AIS correlation
+  is a position match, not an identification, and Target Fusion links a target
+  that carries an MMSI to that vessel unconditionally.
+
+### With Target Fusion
+
+Install [signalk-target-fusion](https://github.com/dirkwa/signalk-target-fusion)
+and it sets `sameAs` on each camera target that is a boat AIS already reports,
+or the same boat another sensor (the other camera, a radar) tracks. Freeboard
+then draws such a boat once, as its AIS vessel, and Collision Alerts alarms it
+once. This plugin reads those links too, to alarm each boat once (below). It
+never writes `sameAs` itself: one fusion plugin at a time.
 
 ## Fusion summary — `vision.fusion.*`
 
@@ -60,8 +84,8 @@ a location. SOG/COG let a chartplotter draw the vector and compute CPA natively;
 | Path | State | Trigger |
 |------|-------|---------|
 | `notifications.mob` | `emergency` | Person-in-water, persisted, with lat/lon in the message |
-| `notifications.vision.darkTarget.<key>` | `alert` | In-range vessel with no AIS correlation |
-| `notifications.vision.collision.<key>` | `warn` / `alarm` | TCPA/CPA thresholds (alarm = high threat) |
+| `notifications.vision.darkTarget.<boat>` | `alert` | In-range vessel with no AIS correlation, once per boat; none while the boat is under a collision alarm |
+| `notifications.navigation.closestApproach.<boat>` | `warn` / `alarm` | TCPA/CPA thresholds (alarm = high threat), once per boat — see *Collision alarms* below |
 | `notifications.vision.labelMismatch` | `warn` | Selected labels not producible by the active model |
 | `notifications.vision.schemaMismatch` | `warn` | Vision container emits an incompatible event `schema_version` (major mismatch); events are ignored until it matches |
 | `notifications.vision.staleEvents` | `warn` | Detection events are arriving older than `eventMaxAgeS` and are being ignored (detection effectively offline — check the container, network link, and container/SignalK clock sync) |
@@ -72,4 +96,55 @@ Notifications are cleared (`value: null`) automatically when the condition
 resolves or the track ages out; MOB has a 60 s hold to ride out brief dropouts.
 Collision and dark-target notifications also have a short anti-flap hold
 (`notifyHoldS`) so a target near a threshold doesn't toggle the alarm each cycle.
+The hold is skipped when another alarm takes the boat over, so it never keeps
+two alarms up for one boat.
+
+`<boat>` is `visionai-<camera>-<stable_id>` for a boat known only to the
+cameras, or `visionai-mmsi-<mmsi>` once it is matched to an AIS vessel. The
+`visionai-` prefix keeps the path apart from those Collision Alerts and SK
+Derived Data write (they key by the bare target id): two producers on one path
+would let this plugin's clear wipe the other's standing alarm off displays that
+key alarms by path.
+
+## Collision alarms — one per boat
+
+The collision alarm uses the standard `navigation.closestApproach` notification
+in the shape Collision Alerts and MaYaRa share, so chartplotters draw it
+(Freeboard: a flashing ring on the boat, both course lines on to the closest
+approach, and the closest-approach line between them):
+
+| `data` field | Units | Description |
+|--------------|-------|-------------|
+| `targetRef` | — | The boat's context: its AIS vessel (fusion link or own AIS match), else its camera target. Omitted when the target is not published and not matched to AIS |
+| `source` | — | `camera` |
+| `cpa` / `tcpa` / `range` | m / s / m | Closest approach, time to it, current distance |
+| `targetCog` / `targetSog` | rad / m/s | Target ground course (`null` when stopped) and speed |
+| `cpaPositions` | — | `{ self, target }`: where both boats will be at the closest approach |
+
+`other` repeats `targetRef` for consumers older than `data.targetRef`.
+
+A boat alarms **once**, whichever plugins and sensors see it:
+
+1. **Tracks of one boat raise one alarm.** Tracks that Target Fusion links
+   (`sameAs`), or that this plugin matched to the same AIS vessel, are one
+   boat; it alarms with its most urgent track. The same grouping gives one
+   dark-target alert per boat.
+2. **Collision Alerts takes the boats it can see.** While the Collision Alerts
+   plugin runs it announces the `collisionAlerts` PropertyValue
+   `{ evaluatesTargets: true }`. It then evaluates every AIS vessel and every
+   sensor target, so this plugin leaves to it every boat that is published as a
+   target or matched to AIS, as the MaYaRa radar plugin does. A boat known only
+   to this plugin (not published, no AIS match) keeps its alarm here. Collision
+   Alerts applies its own limits (its *Alert sensitivity*), not
+   `collisionCpaM` / `collisionTcpaS`.
+3. **An alarm already raised elsewhere wins.** A `closestApproach` alarm that
+   another producer raised (SK Derived Data, MaYaRa, Collision Alerts) and that
+   names the same boat — by its AIS vessel, its camera target or the target it
+   is linked to — makes this plugin clear its own at once.
+4. **A collision alarm replaces the dark-target alert** for the same boat; its
+   message says `(no AIS)` instead.
+
+All of this fails safe: only an announcement or an alarm that is actually there
+makes this plugin stand down, and anything it cannot read leaves its own alarm
+up: a duplicate alarm is a lesser failure than a missing one.
 

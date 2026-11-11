@@ -1,82 +1,26 @@
 // Build and emit SignalK deltas: the vision.* telemetry tree (fusion + system
-// stats on own context) and synthetic AIS vessel blips — one vessels.* contact
-// per georeferenced target. A blip is never published without a real position,
-// and departed blips are fully retracted.
+// stats on own context) and one `targets.camera:<id>` sensor target per
+// georeferenced camera track (see sensorTargets.ts). A target is never
+// published without a real position, and a departed track is withdrawn with a
+// null position, which consumers read as "track lost".
 
 import { PluginConfig } from './config';
+import {
+  displayName,
+  overlayNumber,
+  sensorTargetContext,
+  sensorTargetId,
+  sourceLabel,
+} from './sensorTargets';
 import { ServerApp } from './skapp';
 import { EnrichedTarget } from './types';
 
-// The blip identity token: readable, deterministic, unique (ids count per
-// camera). Doubles as the vessel display name, so context and name can
-// never diverge. Camera names are free-form config strings; sanitize the
-// segment so a dot/space can't corrupt the context key.
-export function blipName(camera: string, trackId: number | string): string {
-  return `VIS-${String(camera).replace(/[^a-zA-Z0-9]/g, '_')}-${trackId}`;
-}
-
-// The id a blip is keyed and named by: the 2-digit track_id — the SAME number
-// the container burns into the video overlay, so the chart contact and the
-// on-screen box always match (owner's call; supersedes the earlier stable_id
-// keying). track_id is recycled, so over a session one number legitimately
-// names different physical vessels; that's safe here because the tracker
-// quarantines a freed number (~25 s) far longer than blipHoldS holds a blip
-// (15 s default), so the old blip is retracted before its number can return
-// on another vessel. Internal fusion/CPA state stays keyed on stable_id
-// (see enrich.targetKey) — only the published identity uses the display
-// number. stable_id is the fallback for events without a track_id.
-export function blipId(t: Pick<EnrichedTarget, 'stable_id' | 'track_id'>): number | null {
-  return t.track_id ?? t.stable_id ?? null;
-}
-
-// DELIBERATE spec deviation (owner's call): the SignalK spec wants vessels.*
-// keys to be `urn:mrn:imo:mmsi:<9 digits>` or `urn:mrn:signalk:uuid:<UUID v4>`,
-// but an opaque hashed UUID makes every retracted blip an anonymous shell in
-// vessel lists — a context can never be deleted, so after full retraction the
-// uuid is all a client has left to show. A readable token in the uuid slot
-// keeps every shell identifiable as ours, is deterministic (the same
-// camera/track always maps back to the same context, so a retraction always
-// finds the blip it published and a revived track gets its name back), and is
-// accepted end-to-end by signalk-server + Freeboard (ran in production before
-// and verified live). Strict spec-validating consumers may reject these
-// contexts; readability won.
-export function blipUrn(camera: string, trackId: number | string): string {
-  return `urn:mrn:signalk:uuid:${blipName(camera, trackId)}`;
-}
-
 export class Publisher {
   private metaSent = new Set<string>();
-  private publishedBlips = new Set<string>();
-  // Blips retracted last cycle whose (now all-null) context gets deleted this
-  // cycle — see publishBlips for why deletion is deferred by one cycle.
-  private pendingDelete = new Set<string>();
-
-  // Every leaf a synthetic vessel carries, built value-or-null in one place so
-  // a live blip, a lost-estimate blip and a full retraction always cover the
-  // same set and nothing lingers stale — including `name`: a fully-retracted
-  // blip carries no data and no name, just its readable context (blipUrn),
-  // which is what keeps the shell identifiable (a SignalK context can never be
-  // deleted; Freeboard ignores position:null and removes targets only via
-  // aisMaxAge). When the track revives, every live cycle republishes the name
-  // (derived from the same camera/track token as the context), so the name
-  // becomes visible again by itself. `name` rides the empty path (root merge)
-  // per the SignalK delta convention for vessel-root attributes, so
-  // vessel.name stays the plain string consumers expect in the full model.
-  // CPA/TCPA go in the spec's navigation.closestApproach container
-  // ({ distance, timeTo }) so chartplotters/MFDs pick them up natively.
-  private static blipValues(t: EnrichedTarget | null): Array<{ path: string; value: unknown }> {
-    const hasCpa = t !== null && t.cpa !== null && t.tcpa !== null;
-    return [
-      { path: 'navigation.position', value: t ? t.position : null },
-      { path: '', value: { name: t ? blipName(t.camera, blipId(t) as number) : null } },
-      { path: 'navigation.speedOverGround', value: t ? t.sog : null },
-      { path: 'navigation.courseOverGroundTrue', value: t ? t.cog : null },
-      {
-        path: 'navigation.closestApproach',
-        value: hasCpa ? { distance: t.cpa, timeTo: t.tcpa } : null,
-      },
-    ];
-  }
+  // Published target contexts -> the camera and the lastSeen of the
+  // observation last published, so each detection is published once, stamped
+  // with its capture time.
+  private published = new Map<string, { camera: string; lastSeen: number }>();
 
   constructor(
     private app: ServerApp,
@@ -99,11 +43,11 @@ export class Publisher {
     });
   }
 
-  publishTargets(targets: EnrichedTarget[]): void {
-    // Single output: render each georeferenced target as a synthetic AIS vessel
-    // (chart blip). No vision.targets.* data tree — the captain webapp reads the
-    // plugin REST API, and collision/MOB run off the in-memory target set.
-    if (this.cfg.enableVisualRadar) this.publishBlips(targets);
+  publishTargets(targets: EnrichedTarget[], nowMs = Date.now()): void {
+    // Single output: each georeferenced track as a sensor target. No
+    // vision.targets.* data tree — the captain webapp reads the plugin REST API,
+    // and collision/MOB run off the in-memory target set.
+    if (this.cfg.enableVisualRadar) this.publishSensorTargets(targets, nowMs);
   }
 
   publishFusionSummary(darkCount: number, aisCount: number): void {
@@ -158,103 +102,102 @@ export class Publisher {
     this.emit(values, meta);
   }
 
-  /** Render each georeferenced target as a synthetic AIS vessel so it draws as a
-   * chart blip. position + name identify it; SOG/COG let the chartplotter draw a
-   * vector and compute CPA natively; cpa/tcpa expose our own estimate too. A blip
-   * is NEVER created without a real position. */
-  private publishBlips(targets: EnrichedTarget[]): void {
-    const now = Date.now();
-    const ts = new Date(now).toISOString();
-    const current = new Set<string>();
-    // Draw recently-detected vessels, holding each blip blipHoldS after its
-    // last detection. Detection gaps of several seconds are routine (waves,
-    // occlusion — measured 8-9 s on live water), and retracting on them blinks
-    // the contact and strips its name label right when a chartplotter user is
-    // looking at it. Real AIS reports every 10-30 s, so a held blip with a
-    // slightly stale position is in character for a chart. The floor of two
-    // process cycles keeps the gate sane if blipHoldS is misconfigured low.
+  /**
+   * Publish each recently detected, georeferenced track as a sensor target.
+   *
+   * Observations, not repetitions: a target is published only when the
+   * container saw it again since the last publish, stamped with the capture
+   * time. Consumers age a target by its updates (Freeboard greys a ring after
+   * 20 s, Target Fusion and Collision Alerts ignore one older than a minute),
+   * so republishing a held position every cycle would make a boat the cameras
+   * lost look live. A coasted frame is the container's prediction across a
+   * detector dropout, not a sighting, so it is not published either.
+   *
+   * A track is held for blipHoldS after its last detection, so a detection gap
+   * of a few seconds (waves, occlusion) does not drop the ring and its fusion
+   * link. After that its position is published as null once: the convention's
+   * "track lost", which removes it from the chart at once and withdraws its
+   * fusion link. The server prunes the context itself later.
+   */
+  private publishSensorTargets(targets: EnrichedTarget[], now: number): void {
+    // The floor of two process cycles keeps the gate sane if blipHoldS is
+    // misconfigured low.
     const activeMs = Math.max(this.cfg.blipHoldS * 1000, this.cfg.processIntervalMs * 2);
-    // Blips are keyed on the recycled track_id, so if blipHoldS is configured
-    // above the tracker's reuse quarantine, a held departed target and a fresh
-    // one can briefly share a number. Never let two targets write one context
-    // in a cycle: the most recently seen wins. Dedup BEFORE the maxTargets cap
-    // so the cap counts distinct blips — a collision inside the slice must not
-    // shrink the chart below maxTargets while a distinct target sits dropped
-    // just past the boundary.
-    const byUuid = new Map<string, EnrichedTarget>();
+    // Two targets can share an id only on the track_id fallback (an older
+    // container without stable_id, whose numbers are recycled). Never let two
+    // write one context in a cycle: the most recently seen wins. Dedup BEFORE
+    // the maxTargets cap so the cap counts distinct targets.
+    const byContext = new Map<string, EnrichedTarget>();
     for (const t of targets) {
-      if (!t.position || blipId(t) === null || now - t.lastSeen > activeMs) continue;
-      const uuid = blipUrn(t.camera, blipId(t) as number);
-      const prev = byUuid.get(uuid);
-      if (!prev || t.lastSeen > prev.lastSeen) byUuid.set(uuid, t);
+      const id = sensorTargetId(t);
+      if (!t.position || id === null || now - t.lastSeen > activeMs) continue;
+      const context = sensorTargetContext(id);
+      const prev = byContext.get(context);
+      if (!prev || t.lastSeen > prev.lastSeen) byContext.set(context, t);
     }
-    // Cap the chart to maxTargets vessels, keeping the closest (most
+    // Cap the chart to maxTargets, keeping the closest (most
     // collision-relevant) so the count tracks the detection limit.
-    const eligible = [...byUuid.values()]
-      .sort((a, b) => (a.geometry.range_m ?? Infinity) - (b.geometry.range_m ?? Infinity))
+    const eligible = [...byContext.entries()]
+      .sort(([, a], [, b]) => (a.geometry.range_m ?? Infinity) - (b.geometry.range_m ?? Infinity))
       .slice(0, this.cfg.maxTargets);
-    for (const t of eligible) {
-      const uuid = blipUrn(t.camera, blipId(t) as number);
-      current.add(uuid);
-      // position + name always identify the contact. The kinematics are written
-      // value-or-null every cycle: emitting an explicit null when an estimate is
-      // lost clears any previously published value, so a live chart contact
-      // never carries a stale SOG/COG vector or CPA.
-      this.emitVessel(uuid, ts, Publisher.blipValues(t));
+    const current = new Set<string>();
+    for (const [context, t] of eligible) {
+      current.add(context);
+      const publishedAt = this.published.get(context)?.lastSeen;
+      if (t.coasting || (publishedAt !== undefined && t.lastSeen <= publishedAt)) continue;
+      this.published.set(context, { camera: t.camera, lastSeen: t.lastSeen });
+      this.emitTarget(context, t.camera, new Date(t.lastSeen).toISOString(), Publisher.observation(t));
     }
-    // Delete contexts retracted LAST cycle (unless the track revived since):
-    // one cycle in between guarantees the all-null retraction delta has been
-    // processed and forwarded to live subscribers before the vessel entry
-    // disappears from the model, regardless of handleMessage's internal timing.
-    for (const uuid of this.pendingDelete) {
-      if (!current.has(uuid)) this.deleteVessel(uuid);
+    for (const context of [...this.published.keys()]) {
+      if (!current.has(context)) this.withdraw(context);
     }
-    this.pendingDelete.clear();
-    // Age out departed blips: null every leaf so none lingers without a
-    // location, then schedule the emptied shell for deletion next cycle.
-    for (const uuid of this.publishedBlips) {
-      if (current.has(uuid)) continue;
-      this.emitVessel(uuid, ts, Publisher.blipValues(null));
-      this.pendingDelete.add(uuid);
-    }
-    this.publishedBlips = current;
   }
 
-  private emitVessel(uuid: string, ts: string, values: Array<{ path: string; value: unknown }>): void {
+  // Course and speed are written value-or-null on every observation, so a
+  // target whose estimate is lost never keeps a stale course line. The name
+  // rides the root delta (path ''), as the convention asks, so consumers read
+  // a plain string.
+  private static observation(t: EnrichedTarget): Array<{ path: string; value: unknown }> {
+    const n = overlayNumber(t);
+    return [
+      ...(n !== null ? [{ path: '', value: { name: displayName(t.camera, n) } }] : []),
+      { path: 'navigation.position', value: t.position },
+      { path: 'navigation.speedOverGround', value: t.sog },
+      { path: 'navigation.courseOverGroundTrue', value: t.cog },
+    ];
+  }
+
+  private withdraw(context: string): void {
+    const camera = this.published.get(context)?.camera ?? '';
+    this.published.delete(context);
+    this.emitTarget(context, camera, new Date().toISOString(), [
+      { path: 'navigation.position', value: null },
+    ]);
+  }
+
+  private emitTarget(
+    context: string,
+    camera: string,
+    ts: string,
+    values: Array<{ path: string; value: unknown }>
+  ): void {
     this.app.handleMessage(this.pluginId, {
-      context: `vessels.${uuid}`,
-      updates: [{ source: { label: 'vision-ai' }, timestamp: ts, values }],
+      context,
+      updates: [{ source: { label: sourceLabel(camera) }, timestamp: ts, values }],
     });
   }
 
-  /** Remove the synthetic vessel's context entirely, the same way the server's
-   * own pruneContextsMinutes sweep does. Undocumented internals, so fail soft:
-   * if either hook is missing the shell just lingers (all-null, readable
-   * context) until the server age-prunes it — the pre-deletion behavior. */
-  private deleteVessel(uuid: string): void {
-    const key = `vessels.${uuid}`;
-    try {
-      this.app.signalk?.deleteContext?.(key);
-      this.app.deltaCache?.deleteContext?.(key);
-    } catch (e) {
-      this.app.debug(`deleteContext failed for ${key}: ${e}`);
-    }
+  /** Whether a target context is on the chart: published and not withdrawn. */
+  isPublished(context: string): boolean {
+    return this.published.has(context);
   }
 
-  /** Retract all synthetic blips, then clear bookkeeping. Called on plugin stop
-   * so no stale synthetic vessel lingers. Contexts are deleted immediately —
-   * there is no next cycle to defer to; if the null delta lands after the
-   * delete and resurrects an all-null shell, the server's prune sweep is the
-   * backstop. */
+  /** Withdraw every published target, then clear bookkeeping. Called on plugin
+   * stop and when detection is switched off, so no vision contact lingers on a
+   * chart nobody is watching. */
   reset(): void {
-    const ts = new Date().toISOString();
-    for (const uuid of this.publishedBlips) {
-      this.emitVessel(uuid, ts, Publisher.blipValues(null));
-      this.deleteVessel(uuid);
-    }
-    for (const uuid of this.pendingDelete) this.deleteVessel(uuid);
+    for (const context of [...this.published.keys()]) this.withdraw(context);
     this.metaSent.clear();
-    this.publishedBlips.clear();
-    this.pendingDelete.clear();
+    this.published.clear();
   }
 }

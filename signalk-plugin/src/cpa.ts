@@ -20,6 +20,14 @@ interface Sample {
   fromAis: boolean;
 }
 
+function fromLocal(ref: LatLon, e: number, n: number): LatLon {
+  return {
+    latitude: ref.latitude + (n / EARTH_RADIUS_M) * (180 / Math.PI),
+    longitude:
+      ref.longitude + (e / (EARTH_RADIUS_M * Math.cos(deg2rad(ref.latitude)))) * (180 / Math.PI),
+  };
+}
+
 function toLocal(ref: LatLon, p: LatLon): { e: number; n: number } {
   const e =
     deg2rad(p.longitude - ref.longitude) *
@@ -51,6 +59,7 @@ export class CpaEstimator {
     const clearCpa = (target: EnrichedTarget): void => {
       target.cpa = null;
       target.tcpa = null;
+      target.approach = null;
       target.threatLevel = 'none';
     };
 
@@ -65,7 +74,7 @@ export class CpaEstimator {
       // tens of percent of error, and pairing that with the precise AIS
       // velocity below put a known vessel's CPA tens of metres out and made the
       // threat level flap across cycles. `tgt.position` stays the visual
-      // estimate — it is what the camera saw and what the blip publishes.
+      // estimate — it is what the camera saw and what the chart target publishes.
       // Truthiness, not `!== null`: a target built before this field existed
       // (or by an older caller) carries `undefined`, which would select the AIS
       // branch and then find no position at all.
@@ -100,20 +109,15 @@ export class CpaEstimator {
         if (dt < 0.2) continue; // need a meaningful baseline
         // Re-express the previous target position in the current local frame so
         // the difference is a ground displacement.
-        const prevAbs: LatLon = {
-          latitude: prev.refLat + (prev.n / EARTH_RADIUS_M) * (180 / Math.PI),
-          longitude:
-            prev.refLon +
-            (prev.e / (EARTH_RADIUS_M * Math.cos(deg2rad(prev.refLat)))) *
-              (180 / Math.PI),
-        };
+        const prevAbs = fromLocal(
+          { latitude: prev.refLat, longitude: prev.refLon }, prev.e, prev.n);
         const prevInCur = toLocal(own.position, prevAbs);
         vtE = (cur.e - prevInCur.e) / dt;
         vtN = (cur.n - prevInCur.n) / dt;
       }
 
-      // Target ground kinematics, surfaced onto the target for the synthetic
-      // vessel blip (navigation.speedOverGround / courseOverGroundTrue). These are
+      // Target ground kinematics, surfaced onto the target for the chart
+      // target (navigation.speedOverGround / courseOverGroundTrue). These are
       // the target's own ground velocity, independent of own-ship, so they're
       // still valid (and useful) even when own velocity is unknown.
       tgt.sog = Math.hypot(vtE, vtN);
@@ -145,6 +149,14 @@ export class CpaEstimator {
 
       tgt.cpa = cpa;
       tgt.tcpa = tcpa;
+      // Both boats carried on to the closest point (now, when it has passed),
+      // in the same local frame the solution used.
+      const tc = Math.max(tcpa, 0);
+      tgt.approach = {
+        range: Math.hypot(rE, rN),
+        self: fromLocal(own.position, voE * tc, voN * tc),
+        target: fromLocal(own.position, rE + vtE * tc, rN + vtN * tc),
+      };
       tgt.threatLevel = classify(cpa, tcpa, cfg);
     }
 

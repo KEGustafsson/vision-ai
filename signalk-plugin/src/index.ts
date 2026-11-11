@@ -11,8 +11,10 @@ import { EventStream } from './eventStream';
 import { PluginConfig, schema, uiSchema, withDefaults } from './config';
 import { collectAisContacts, fuse } from './aisFusion';
 import { enrichTarget } from './enrich';
-import { NotificationManager, degradedFaultKey } from './notifications';
+import { AlarmCoordination, NOTIFICATION_SOURCE, NotificationManager, degradedFaultKey } from './notifications';
+import { CollisionAlertsWatch, othersAlarmedRefs } from './alarmCoordination';
 import { Publisher } from './publisher';
+import { readSameAs, sensorTargetContext, sensorTargetId } from './sensorTargets';
 import { readAttitude, readOwnShip } from './nav';
 import { AttitudeSmoother, AttitudeWatch } from './attitude';
 import { registerRoutes, SharedState } from './router';
@@ -29,6 +31,9 @@ export = function (app: ServerApp): Plugin {
   let publisher: Publisher | null = null;
   let notifier: NotificationManager | null = null;
   let cpa: CpaEstimator | null = null;
+  // Collision Alerts' announcement: while it evaluates sensor targets, the
+  // boats it can see alarm through it alone.
+  const collisionAlerts = new CollisionAlertsWatch();
   let processTimer: NodeJS.Timeout | null = null;
   let syncTimer: NodeJS.Timeout | null = null;
   let attitudeTimer: NodeJS.Timeout | null = null;
@@ -76,12 +81,11 @@ export = function (app: ServerApp): Plugin {
       detectionEnabled = on;
       if (!on) {
         // Detection switched OFF by the operator: the chart must not keep
-        // showing vision contacts nobody is watching anymore. Retract and
-        // delete every synthetic AIS blip immediately (reset() nulls all
-        // leaves and removes the vessel contexts) instead of letting them
-        // age out through blipHoldS, and drop the target list so the REST
-        // API / captain webapp agree. Detection back ON simply repopulates
-        // from fresh events.
+        // showing vision contacts nobody is watching anymore. Withdraw every
+        // sensor target immediately (reset() publishes each one's track as
+        // lost) instead of letting them age out through blipHoldS, and drop
+        // the target list so the REST API / captain webapp agree. Detection
+        // back ON simply repopulates from fresh events.
         targets.clear();
         if (publisher) publisher.reset();
       }
@@ -115,7 +119,7 @@ export = function (app: ServerApp): Plugin {
     // Detection is off: drop events entirely. The container tears its pipeline
     // down when disabled, but frames already in flight (or arriving before the
     // /control push lands) must not repopulate a target — setDetection(false)
-    // just wiped the map and retracted every chart blip.
+    // just wiped the map and withdrew every chart target.
     if (!detectionEnabled) return;
     // eventStream already rejected invalid/over-age timestamps; here we enforce
     // monotonic per-camera ordering so a buffered burst of older-but-not-stale
@@ -194,9 +198,9 @@ export = function (app: ServerApp): Plugin {
     const own = readOwnShip(app, cfg.ownNavMaxAgeS, now);
 
     // Age out stale tracks first so downstream sees only live targets. When
-    // visual radar is on, retain at least the publisher's blip hold window —
+    // visual radar is on, retain at least the publisher's hold window —
     // blipHoldS with the same two-process-cycle floor as publisher activeMs —
-    // so a held chart blip's target survives the detection gap it is masking
+    // so a held chart target survives the detection gap it is masking
     // (MOB/notification logic already guards against retained-but-stale
     // tracks re-counting).
     const timeoutMs = Math.max(
@@ -234,13 +238,30 @@ export = function (app: ServerApp): Plugin {
     }
 
     if (cfg.enableCollision && cpa) cpa.update(all, own, cfg, now);
-    if (notifier) notifier.evaluate(all, darkKeys, now);
+    // Publish before alarming, so an alarm names a target the chart already has.
     if (publisher) {
-      publisher.publishTargets(all);
+      publisher.publishTargets(all, now);
       if (cfg.enableAisFusion) publisher.publishFusionSummary(darkKeys.size, aisCount);
     }
+    if (notifier) notifier.evaluate(all, darkKeys, now, alarmCoordination(all));
 
     publishSystemStats(now);
+  }
+
+  function alarmCoordination(all: EnrichedTarget[]): AlarmCoordination {
+    const pub = publisher;
+    return {
+      publishedContext: (t) => {
+        const id = sensorTargetId(t);
+        const context = id === null ? null : sensorTargetContext(id);
+        return context !== null && pub?.isPublished(context) ? context : null;
+      },
+      sameAs: (context) => readSameAs(app, context),
+      collisionAlertsRunning: collisionAlerts.running(),
+      // Read only when there is a boat that could be alarmed.
+      othersAlarmed:
+        all.length > 0 ? othersAlarmedRefs(app, NOTIFICATION_SOURCE) : new Set<string>(),
+    };
   }
 
   function publishSystemStats(now: number): void {
@@ -520,6 +541,7 @@ export = function (app: ServerApp): Plugin {
       publisher = new Publisher(app, pluginId, cfg);
       notifier = new NotificationManager(app, pluginId, cfg);
       cpa = new CpaEstimator();
+      collisionAlerts.start(app);
 
       stream = new EventStream(
         client.wsUrl(),
@@ -603,6 +625,7 @@ export = function (app: ServerApp): Plugin {
       attitudeInFlight = false;
       attitudeWatch = null;
       if (stream) stream.stop();
+      collisionAlerts.stop();
       if (notifier) notifier.clearAll();
       if (publisher) publisher.reset();
       if (cpa) cpa.reset();

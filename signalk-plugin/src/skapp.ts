@@ -20,13 +20,13 @@ export interface ServerApp {
   error(msg: string | Error): void;
   setPluginStatus?(msg: string): void;
   setPluginError?(msg: string): void;
-  // Undocumented signalk-server internals (FullSignalK / DeltaCache). There is
-  // no public API to remove a vessel context, but the server itself deletes
-  // contexts this way when pruning (pruneContextsMinutes). Optional + guarded
-  // at every call site so a server that renames these just degrades to the
-  // shell being age-pruned instead of removed immediately.
-  signalk?: { deleteContext?: (contextKey: string) => void };
-  deltaCache?: { deleteContext?: (contextKey: string) => void };
+  // PropertyValues: the server's channel for plugins to announce themselves to
+  // each other (Collision Alerts announces `collisionAlerts`). Optional: older
+  // servers lack it, and then this plugin keeps every alarm of its own.
+  onPropertyValues?(
+    name: string,
+    cb: (history: Array<{ value?: unknown } | undefined>) => void
+  ): () => void;
 }
 
 export interface Plugin {

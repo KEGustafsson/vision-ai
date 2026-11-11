@@ -5,15 +5,15 @@ export interface PluginConfig {
   // Master on/off for detection in the container. Persisted default; the captain
   // webapp can flip it live (the live state is re-synced to the container).
   enableDetection: boolean;
-  // Output toggle — publish each georeferenced target as a synthetic AIS vessel
-  // (vessels.* chart blip). No vision.targets.* data tree.
+  // Output toggle — publish each georeferenced target as a sensor target
+  // (targets.camera:<id>, see sensorTargets.ts). No vision.targets.* data tree.
   enableVisualRadar: boolean;
   enableAisFusion: boolean; // AIS correlation + dark-target detection + vision.fusion.*
-  enableCollision: boolean; // CPA/TCPA + threatLevel (drives blip SOG/COG/CPA + collision notify)
+  enableCollision: boolean; // CPA/TCPA + threatLevel (drives target SOG/COG + collision notify)
   // Notification toggles — raise/clear the SignalK alert. Collision and dark
   // target require their computation (above) to be on.
   enableMob: boolean; // notifications.mob (no separate computation)
-  notifyCollision: boolean; // notifications.vision.collision.*
+  notifyCollision: boolean; // notifications.navigation.closestApproach.visionai-*
   notifyDarkTarget: boolean; // notifications.vision.darkTarget.*
   enableContextControl: boolean;
   detectClasses: string[]; // object types to surface (person | vessel | buoy); empty => all
@@ -36,7 +36,7 @@ export interface PluginConfig {
   mobPersistFrames: number;
   underwaySogMs: number; // SOG above which we consider "underway"
   trackTimeoutS: number; // age out a visual track after this idle time
-  blipHoldS: number; // keep drawing a synthetic AIS blip this long after last detection
+  blipHoldS: number; // keep a chart target this long after its last detection
   eventMaxAgeS: number; // reject detection events whose timestamp is older than this (replay/buffer guard); 0 => off
   processIntervalMs: number; // cadence of the fusion/CPA/notify/publish cycle
   // IMU horizon compensation: forward navigation.attitude (pitch/roll) to the
@@ -110,14 +110,14 @@ export function schema(): object {
       // --- Computation: run the analysis and publish its data paths. ---
       enableVisualRadar: {
         type: 'boolean',
-        title: 'Publish targets as synthetic AIS vessels',
-        description: 'Renders each georeferenced target as a vessels.* chart blip with a VIS- name prefix, navigation.position and (when "Compute: collision" is on) SOG/COG/CPA. No vision.targets.* data tree is published. Data only — never raises a notification. Off by default to avoid confusion with real AIS.',
+        title: 'Publish targets to the chart (camera sensor targets)',
+        description: 'Publishes each georeferenced target as a Signal K sensor target, targets.camera:visionai-<camera>-<id>, named VIS-<camera>-<overlay number>, with navigation.position and (when "Compute: collision" is on) SOG/COG. Chartplotters that show sensor targets (Freeboard-SK 3.5 and later) draw them as camera targets, not as AIS vessels. With the Target Fusion plugin installed, a boat the cameras and AIS both see is drawn once, as its AIS vessel, and Collision Alerts alarms on these targets itself. Data only — never raises a notification. Off by default: hazard outputs are opt-in.',
         default: false,
       },
       enableCollision: {
         type: 'boolean',
         title: 'Compute: collision (CPA/TCPA)',
-        description: 'Computes CPA/TCPA, SOG/COG and threat level for each target (surfaced on the synthetic vessel blips above). Required for the collision notification below.',
+        description: 'Computes CPA/TCPA, SOG/COG and threat level for each target (SOG/COG are published on the chart targets above). Required for the collision notification below.',
         default: true,
       },
       enableAisFusion: {
@@ -136,13 +136,13 @@ export function schema(): object {
       notifyCollision: {
         type: 'boolean',
         title: 'Notify: collision risk',
-        description: 'Raises notifications.vision.collision.<track> (state: warn, then alarm; visual+sound) for risky approaches. Needs "Compute: collision" on. Turn this off to keep CPA on the synthetic vessels without an audible alarm.',
+        description: 'Raises one notifications.navigation.closestApproach.visionai-<boat> alarm per boat (state: warn, then alarm; visual+sound) for risky approaches, which chartplotters draw on the chart. Never two alarms for one boat: tracks of the same boat (both cameras, or a camera and its AIS match) raise one, and a boat the Collision Alerts plugin can see, or that another plugin already alarms, raises none here. Needs "Compute: collision" on.',
         default: true,
       },
       notifyDarkTarget: {
         type: 'boolean',
         title: 'Notify: dark target (non-AIS)',
-        description: 'Raises notifications.vision.darkTarget.<track> (state: alert, visual) for targets with no AIS match. Needs "Compute: AIS fusion" on.',
+        description: 'Raises notifications.vision.darkTarget.<boat> (state: alert, visual) for targets with no AIS match, once per boat. A boat under a collision alarm gets none, its collision alarm saying it has no AIS instead. Needs "Compute: AIS fusion" on.',
         default: true,
       },
       enableContextControl: {
@@ -236,8 +236,8 @@ export function schema(): object {
       trackTimeoutS: { type: 'number', title: 'Track age-out timeout (s)', default: 5 },
       blipHoldS: {
         type: 'number',
-        title: 'Chart blip hold (s)',
-        description: 'Keep drawing a synthetic AIS blip this long after its track was last detected, so brief detection gaps (waves, occlusion) don’t blink the contact off the chart and strip its name label. Real AIS reports every 10–30 s, so a held blip with a slightly stale position is in character for a chartplotter.',
+        title: 'Chart target hold (s)',
+        description: 'Keep a chart target this long after its track was last detected, so brief detection gaps (waves, occlusion) don’t drop it from the chart and break its fusion link. Nothing is republished while it is held: chartplotters see its last sighting age. After the hold its track is published as lost and it leaves the chart.',
         default: 15,
         minimum: 1,
       },

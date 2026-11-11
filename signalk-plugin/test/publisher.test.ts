@@ -1,14 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { Publisher, blipUrn } from '../src/publisher';
+import { Publisher } from '../src/publisher';
+import { sensorTargetId } from '../src/sensorTargets';
 import { withDefaults } from '../src/config';
 import { Delta, ServerApp } from '../src/skapp';
 import { EnrichedTarget } from '../src/types';
 
 class FakeApp implements ServerApp {
   deltas: Delta[] = [];
-  deleted: string[] = []; // contexts removed via the server's deleteContext hooks
-  signalk = { deleteContext: (key: string) => { this.deleted.push(key); } };
-  deltaCache = { deleteContext: (_key: string) => {} };
   handleMessage(_id: string, delta: Delta): void { this.deltas.push(delta); }
   getSelfPath(): any { return null; }
   getPath(): any { return null; }
@@ -18,56 +16,62 @@ class FakeApp implements ServerApp {
   values(): Array<{ path: string; value: unknown }> {
     return this.deltas.flatMap((d) => d.updates.flatMap((u) => u.values || []));
   }
-  // Values for a single context (e.g. a synthetic vessel's vessels.<uuid>).
   valuesFor(context: string): Array<{ path: string; value: unknown }> {
     return this.deltas
       .filter((d) => d.context === context)
       .flatMap((d) => d.updates.flatMap((u) => u.values || []));
   }
-  blipContexts(): string[] {
+  updatesFor(context: string): Delta['updates'] {
+    return this.deltas.filter((d) => d.context === context).flatMap((d) => d.updates);
+  }
+  targetContexts(): string[] {
     return [...new Set(this.deltas
-      .map((d) => d.context)
-      .filter((c) => c !== 'vessels.self' && c.startsWith('vessels.urn:mrn:signalk:uuid:')))];
+      .map((d) => d.context as string)
+      .filter((c) => c.startsWith('targets.')))];
   }
 }
 
+const NOW = Date.parse('2026-11-11T12:00:00.000Z');
+
 function tgt(id: number, partial: Partial<EnrichedTarget> = {}): EnrichedTarget {
   return {
-    track_id: id, label: 'vessel', coco_class: 8, confidence: 0.9,
+    track_id: id, stable_id: id + 100, label: 'vessel', coco_class: 8, confidence: 0.9,
     bbox: { x: 0, y: 0, w: 1, h: 1 }, is_person_in_water: false,
     geometry: { relative_bearing_deg: 0, range_m: 500, range_method: 'horizon', range_confidence: 0.7 },
     pixel_velocity: { vx: 0, vy: 0 }, first_seen: null, age_frames: 0,
-    key: `forward.${id}`, camera: 'forward', bearingTrue: 0.1,
+    key: `forward.${id + 100}`, camera: 'forward', bearingTrue: 0.1,
     position: { latitude: 60, longitude: 25 },
-    aisCorrelated: false, aisMmsi: null, aisCog: null, aisSog: null,
-    cpa: null, tcpa: null, sog: null, cog: null, threatLevel: 'none', lastSeen: Date.now(),
+    aisCorrelated: false, aisMmsi: null, aisCog: null, aisSog: null, aisPosition: null,
+    cpa: null, tcpa: null, sog: null, cog: null, threatLevel: 'none', lastSeen: NOW,
     ...partial,
   };
 }
 
-const ctx = (camera: string, id: number) => `vessels.${blipUrn(camera, id)}`;
-const VIS1 = ctx('forward', 1);
-// The name rides the empty path (root merge) per the SignalK convention for
-// vessel-root attributes, so match on the object value.
+const ctx = (camera: string, stableId: number) => `targets.camera:visionai-${camera}-${stableId}`;
+const T1 = ctx('forward', 101);
 const nameOf = (vals: Array<{ path: string; value: unknown }>): unknown =>
   (vals.find((v) => v.path === '')?.value as { name?: unknown } | undefined)?.name;
+const positionsOf = (vals: Array<{ path: string; value: unknown }>) =>
+  vals.filter((v) => v.path === 'navigation.position').map((v) => v.value);
 
-describe('blipUrn', () => {
-  it('produces a readable, deterministic context token per camera/track', () => {
-    // Deliberate spec deviation: a readable token in the uuid slot keeps a
-    // fully-retracted shell identifiable as ours (contexts cannot be deleted).
-    expect(blipUrn('forward', 1)).toBe('urn:mrn:signalk:uuid:VIS-forward-1');
-    expect(blipUrn('forward', 1)).toBe(blipUrn('forward', 1)); // deterministic
-    expect(blipUrn('forward', 1)).not.toBe(blipUrn('forward', 2));
-    expect(blipUrn('forward', 1)).not.toBe(blipUrn('aft', 1));
-    // Free-form camera names are sanitized so they can't corrupt the context.
-    expect(blipUrn('bow cam.2', 7)).toBe('urn:mrn:signalk:uuid:VIS-bow_cam_2-7');
+describe('sensorTargetId', () => {
+  it('is a camera target unique to this plugin, keyed on the never-recycled stable_id', () => {
+    expect(sensorTargetId({ camera: 'forward', stable_id: 137, track_id: 14 }))
+      .toBe('camera:visionai-forward-137');
+    // Older containers without stable_id fall back to the track number.
+    expect(sensorTargetId({ camera: 'aft', stable_id: undefined, track_id: 14 }))
+      .toBe('camera:visionai-aft-14');
+    expect(sensorTargetId({ camera: 'aft', stable_id: null, track_id: null })).toBeNull();
+  });
+
+  it('keeps free-form camera names from splitting the context', () => {
+    expect(sensorTargetId({ camera: 'bow cam.2', stable_id: 7, track_id: 7 }))
+      .toBe('camera:visionai-bow_cam_2-7');
   });
 });
 
-describe('Publisher', () => {
+describe('Publisher — sensor targets', () => {
   let app: FakeApp;
-  // Single output toggle is on for most cases; default config has it off.
   const cfg = withDefaults({ enableVisualRadar: true });
 
   beforeEach(() => {
@@ -76,265 +80,149 @@ describe('Publisher', () => {
 
   it('publishes nothing when the output toggle is off (default)', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', withDefaults(undefined));
-    pub.publishTargets([tgt(1)]);
+    pub.publishTargets([tgt(1)], NOW);
     expect(app.deltas).toHaveLength(0);
   });
 
-  it('keys and names the blip on the overlay track_id, ignoring stable_id', () => {
-    // Owner's call: the chart contact must carry the same 2-digit number the
-    // video overlay draws (track_id), not the per-session stable_id serial.
+  it('publishes a positioned track as a camera target, not as a vessel', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    pub.publishTargets([tgt(14, { stable_id: 137 })]);
-    expect(app.blipContexts()).toEqual([ctx('forward', 14)]);
-    expect(nameOf(app.valuesFor(ctx('forward', 14)))).toBe('VIS-forward-14');
-  });
-
-  it('falls back to stable_id when a target carries no track_id', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    pub.publishTargets([tgt(1, { track_id: null as unknown as number, stable_id: 137 })]);
-    expect(app.blipContexts()).toEqual([ctx('forward', 137)]);
-  });
-
-  it('never lets two targets sharing a recycled track_id write one context in a cycle', () => {
-    // A held departed target and a fresh one can briefly share a number if
-    // blipHoldS exceeds the tracker's reuse quarantine; latest lastSeen wins.
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    const old = tgt(14, { stable_id: 3, lastSeen: Date.now() - 5000, position: { latitude: 59, longitude: 24 } });
-    const fresh = tgt(14, { stable_id: 9, lastSeen: Date.now() });
-    pub.publishTargets([old, fresh]);
-    expect(app.blipContexts()).toEqual([ctx('forward', 14)]);
-    const positions = app.valuesFor(ctx('forward', 14)).filter((v) => v.path === 'navigation.position');
-    expect(positions).toHaveLength(1);
-    expect(positions[0].value).toEqual({ latitude: 60, longitude: 25 });
-  });
-
-  it('projects a positioned target as a synthetic AIS vessel', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    pub.publishTargets([tgt(1)]);
-
-    const vals = app.valuesFor(VIS1);
-    expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
-    expect(nameOf(vals)).toBe('VIS-forward-1');
-    // No vision.targets.* data tree on the own context anymore.
-    expect(app.valuesFor('vessels.self')).toHaveLength(0);
-  });
-
-  it('enriches the blip with SOG / COG / closestApproach when available', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    pub.publishTargets([tgt(1, { sog: 3.2, cog: 1.1, cpa: 50, tcpa: 120 })]);
-
-    const vals = app.valuesFor(VIS1);
+    pub.publishTargets([tgt(1, { sog: 3.2, cog: 1.1 })], NOW);
+    expect(app.targetContexts()).toEqual([T1]);
+    expect(app.deltas.some((d) => String(d.context).startsWith('vessels.'))).toBe(false);
+    const vals = app.valuesFor(T1);
+    expect(positionsOf(vals)).toEqual([{ latitude: 60, longitude: 25 }]);
     expect(vals.find((v) => v.path === 'navigation.speedOverGround')!.value).toBe(3.2);
     expect(vals.find((v) => v.path === 'navigation.courseOverGroundTrue')!.value).toBe(1.1);
-    // CPA/TCPA go in the spec's navigation.closestApproach container.
-    expect(vals.find((v) => v.path === 'navigation.closestApproach')!.value)
-      .toEqual({ distance: 50, timeTo: 120 });
+    // Not part of the convention, and consumers ignore it on targets.
+    expect(vals.some((v) => v.path === 'navigation.closestApproach')).toBe(false);
   });
 
-  it('writes kinematics as null when unavailable so stale values never linger', () => {
+  it('names the target with the overlay number, as a root delta', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    pub.publishTargets([tgt(1)]); // sog/cog/cpa all null
-    const vals = app.valuesFor(VIS1);
-    // position + name are always real; the kinematics are emitted as explicit
-    // null so a chartplotter clears any previously published vector.
-    expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
-    expect(nameOf(vals)).toBe('VIS-forward-1');
+    pub.publishTargets([tgt(14, { stable_id: 137 })], NOW);
+    expect(nameOf(app.valuesFor(ctx('forward', 137)))).toBe('VIS-forward-14');
+  });
+
+  it('stamps each observation with its capture time and a per-camera source', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    const seen = NOW - 700;
+    pub.publishTargets([tgt(1, { lastSeen: seen }), tgt(2, { camera: 'aft', lastSeen: seen })], NOW);
+    const [update] = app.updatesFor(T1);
+    expect(update.timestamp).toBe(new Date(seen).toISOString());
+    expect(update.source).toEqual({ label: 'vision-ai-forward' });
+    expect(app.updatesFor(ctx('aft', 102))[0].source).toEqual({ label: 'vision-ai-aft' });
+  });
+
+  it('publishes each sighting once, not again every cycle while it is held', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    const t = tgt(1, { lastSeen: NOW });
+    pub.publishTargets([t], NOW);
+    pub.publishTargets([t], NOW + 1000);
+    pub.publishTargets([t], NOW + 2000);
+    expect(positionsOf(app.valuesFor(T1))).toHaveLength(1);
+    // A new sighting is published.
+    pub.publishTargets([{ ...t, lastSeen: NOW + 2500 }], NOW + 3000);
+    expect(positionsOf(app.valuesFor(T1))).toHaveLength(2);
+  });
+
+  it('does not publish a coasted frame as a sighting', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1, { coasting: true })], NOW);
+    expect(app.deltas).toHaveLength(0);
+    pub.publishTargets([tgt(1, { coasting: false, lastSeen: NOW + 500 })], NOW + 1000);
+    expect(positionsOf(app.valuesFor(T1))).toHaveLength(1);
+  });
+
+  it('writes course and speed as null when lost, so no stale course line lingers', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1, { sog: 3, cog: 1 })], NOW);
+    app.deltas = [];
+    pub.publishTargets([tgt(1, { lastSeen: NOW + 1000 })], NOW + 1000);
+    const vals = app.valuesFor(T1);
     expect(vals.find((v) => v.path === 'navigation.speedOverGround')!.value).toBeNull();
     expect(vals.find((v) => v.path === 'navigation.courseOverGroundTrue')!.value).toBeNull();
-    expect(vals.find((v) => v.path === 'navigation.closestApproach')!.value).toBeNull();
   });
 
-  it('clears a stale kinematic when a live blip loses its estimate', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    pub.publishTargets([tgt(1, { sog: 3.2, cog: 1.1, cpa: 50, tcpa: 120 })]);
+  it('holds a target through a detection gap up to blipHoldS', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg); // blipHoldS 15 s
+    pub.publishTargets([tgt(1)], NOW);
     app.deltas = [];
-    // Same track still actively detected, but the velocity estimate is gone.
-    pub.publishTargets([tgt(1)]);
-    const vals = app.valuesFor(VIS1);
-    expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
-    expect(vals.find((v) => v.path === 'navigation.speedOverGround')!.value).toBeNull();
-    expect(vals.find((v) => v.path === 'navigation.courseOverGroundTrue')!.value).toBeNull();
-    expect(vals.find((v) => v.path === 'navigation.closestApproach')!.value).toBeNull();
+    pub.publishTargets([tgt(1)], NOW + 10_000);
+    expect(app.deltas).toHaveLength(0);
+    expect(pub.isPublished(T1)).toBe(true);
   });
 
-  it('publishes half a CPA pair as unresolved (never a partial closestApproach)', () => {
+  it('withdraws a departed track with a null position, once', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    pub.publishTargets([tgt(1, { cpa: 50, tcpa: null })]);
-    expect(app.valuesFor(VIS1).find((v) => v.path === 'navigation.closestApproach')!.value).toBeNull();
+    pub.publishTargets([tgt(1, { sog: 3, cog: 1 })], NOW);
     app.deltas = [];
-    pub.publishTargets([tgt(1, { cpa: null, tcpa: 120 })]);
-    expect(app.valuesFor(VIS1).find((v) => v.path === 'navigation.closestApproach')!.value).toBeNull();
+    pub.publishTargets([tgt(1)], NOW + 20_000); // beyond the hold
+    // Only the position: the convention's "track lost".
+    expect(app.valuesFor(T1)).toEqual([{ path: 'navigation.position', value: null }]);
+    expect(app.updatesFor(T1)[0].source).toEqual({ label: 'vision-ai-forward' });
+    expect(pub.isPublished(T1)).toBe(false);
+    pub.publishTargets([], NOW + 21_000);
+    expect(app.valuesFor(T1)).toHaveLength(1);
   });
 
-  it('publishes fusion summary counts', () => {
+  it('skips targets without a georeferenced position', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1, { position: null })], NOW);
+    expect(app.targetContexts()).toHaveLength(0);
+  });
+
+  it('withdraws a published target that loses its position', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1)], NOW);
+    app.deltas = [];
+    pub.publishTargets([tgt(1, { position: null, lastSeen: NOW + 1000 })], NOW + 1000);
+    expect(app.valuesFor(T1)).toEqual([{ path: 'navigation.position', value: null }]);
+  });
+
+  it('never lets two targets sharing an id write one context in a cycle', () => {
+    // Only on the track_id fallback (no stable_id), whose numbers recycle.
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    const old = tgt(14, { stable_id: undefined, lastSeen: NOW - 5000, position: { latitude: 59, longitude: 24 } });
+    const fresh = tgt(14, { stable_id: undefined, lastSeen: NOW });
+    pub.publishTargets([old, fresh], NOW);
+    expect(positionsOf(app.valuesFor(ctx('forward', 14)))).toEqual([{ latitude: 60, longitude: 25 }]);
+  });
+
+  it('caps the chart to maxTargets, keeping the closest', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', { ...cfg, maxTargets: 2 });
+    const near = (id: number, range: number) =>
+      tgt(id, { geometry: { relative_bearing_deg: 0, range_m: range, range_method: 'horizon', range_confidence: 0.7 } });
+    pub.publishTargets([near(1, 300), near(2, 100), near(3, 200)], NOW);
+    expect(app.targetContexts().sort()).toEqual([ctx('forward', 102), ctx('forward', 103)].sort());
+  });
+
+  it('withdraws every target on reset', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1), tgt(2)], NOW);
+    app.deltas = [];
+    pub.reset();
+    expect(app.valuesFor(T1)).toEqual([{ path: 'navigation.position', value: null }]);
+    expect(app.valuesFor(ctx('forward', 102))).toEqual([{ path: 'navigation.position', value: null }]);
+    expect(pub.isPublished(T1)).toBe(false);
+  });
+
+  it('never writes a target position that is not a real lat/lon', () => {
+    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
+    pub.publishTargets([tgt(1), tgt(2, { position: null })], NOW);
+    pub.publishTargets([tgt(1, { position: null, lastSeen: NOW + 1 }), tgt(3)], NOW + 1000);
+    for (const v of app.values()) {
+      if (v.path !== 'navigation.position' || v.value === null) continue;
+      expect(v.value).toHaveProperty('latitude');
+      expect(v.value).toHaveProperty('longitude');
+    }
+    expect(app.valuesFor(ctx('forward', 102))).toHaveLength(0);
+  });
+
+  it('publishes fusion summary counts on the own vessel', () => {
     const pub = new Publisher(app, 'signalk-vision-ai', cfg);
     pub.publishFusionSummary(2, 3);
     const v = app.values();
     expect(v.find((x) => x.path === 'vision.fusion.darkTargetCount')!.value).toBe(2);
     expect(v.find((x) => x.path === 'vision.fusion.aisCorrelatedCount')!.value).toBe(3);
-  });
-
-  it('skips targets without a georeferenced position', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    pub.publishTargets([tgt(1, { position: null })]);
-    expect(app.blipContexts()).toHaveLength(0);
-  });
-
-  it('ages out a departed blip by nulling every data leaf', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    pub.publishTargets([tgt(1, { sog: 3, cog: 1, cpa: 40, tcpa: 90 })]);
-    app.deltas = [];
-    pub.publishTargets([]); // track 1 gone
-
-    const vals = app.valuesFor(VIS1);
-    // No synthetic vessel lingers carrying any data without a location.
-    for (const path of ['navigation.position', 'navigation.speedOverGround',
-      'navigation.courseOverGroundTrue', 'navigation.closestApproach']) {
-      expect(vals.find((v) => v.path === path)!.value).toBeNull();
-    }
-    // name is nulled too — a retracted shell carries no data and no name; its
-    // readable context token is what keeps it identifiable, and a revived
-    // track republishes the (context-derived) name every live cycle.
-    expect(nameOf(vals)).toBeNull();
-  });
-
-  it('draws recently-detected vessels, holding through gaps up to blipHoldS', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg); // activeMs = blipHoldS (15 s)
-    const now = Date.now();
-    pub.publishTargets([
-      tgt(1, { lastSeen: now }),               // active → drawn
-      tgt(2, { lastSeen: now - 10_000 }),      // detection gap < hold → still drawn
-      tgt(3, { lastSeen: now - 20_000 }),      // beyond hold → not drawn
-    ]);
-    expect(app.blipContexts().sort()).toEqual([ctx('forward', 1), ctx('forward', 2)].sort());
-  });
-
-  it('prunes a vessel once its detection stops', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    const now = Date.now();
-    pub.publishTargets([tgt(1, { lastSeen: now })]);
-    app.deltas = [];
-    // Same track still retained in the map, but not detected for > blipHoldS.
-    pub.publishTargets([tgt(1, { lastSeen: now - 20_000 })]);
-    const vals = app.valuesFor(VIS1);
-    expect(vals.find((v) => v.path === 'navigation.position')!.value).toBeNull();
-    expect(nameOf(vals)).toBeNull(); // fully nulled; context stays readable
-  });
-
-  it('brings the name back when data resumes after a full retraction', () => {
-    // INVARIANT: data is never published over a nulled blip without its name.
-    // Every live cycle carries name + data in the same update, so a revived
-    // track re-names its vessel in the very delta that resumes its data.
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    const now = Date.now();
-    pub.publishTargets([tgt(1, { lastSeen: now })]);
-    pub.publishTargets([tgt(1, { lastSeen: now - 20_000 })]); // gone → all null
-    app.deltas = [];
-    pub.publishTargets([tgt(1, { lastSeen: Date.now() })]); // track revives
-    const vals = app.valuesFor(VIS1);
-    expect(nameOf(vals)).toBe('VIS-forward-1');
-    expect(vals.find((v) => v.path === 'navigation.position')!.value).toEqual({ latitude: 60, longitude: 25 });
-    // name and position arrive in the SAME update — no window where a client
-    // can see data on a nameless vessel.
-    const revival = app.deltas.find((d) => d.context === VIS1)!;
-    const paths = revival.updates[0].values!.map((v) => v.path);
-    expect(paths).toContain('');
-    expect(paths).toContain('navigation.position');
-  });
-
-  it('deletes a retracted blip context one cycle after nulling it', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    const now = Date.now();
-    pub.publishTargets([tgt(1, { lastSeen: now })]);
-    pub.publishTargets([]); // retraction cycle: all-null delta, no delete yet
-    expect(app.deleted).toEqual([]);
-    pub.publishTargets([]); // next cycle: emptied shell removed from the model
-    expect(app.deleted).toEqual([VIS1]);
-  });
-
-  it('does not delete a context whose track revives before the deferred delete', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    const now = Date.now();
-    pub.publishTargets([tgt(1, { lastSeen: now })]);
-    pub.publishTargets([]); // retracted, delete pending
-    pub.publishTargets([tgt(1, { lastSeen: Date.now() })]); // revived in time
-    expect(app.deleted).toEqual([]);
-  });
-
-  it('deletes all blip contexts on reset', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    pub.publishTargets([tgt(1)]);
-    pub.reset();
-    expect(app.deleted).toEqual([VIS1]);
-  });
-
-  it('survives a server without the deleteContext internals', () => {
-    // The hooks are undocumented server internals; if a future signalk-server
-    // renames them the shell must just linger for the prune sweep, not crash.
-    (app as any).signalk = undefined;
-    (app as any).deltaCache = undefined;
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    pub.publishTargets([tgt(1)]);
-    pub.publishTargets([]);
-    expect(() => pub.publishTargets([])).not.toThrow();
-    expect(() => pub.reset()).not.toThrow();
-  });
-
-  it('caps blips to maxTargets, keeping the closest', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', { ...cfg, maxTargets: 2 });
-    const near = (id: number, range: number) =>
-      tgt(id, { geometry: { relative_bearing_deg: 0, range_m: range, range_method: 'horizon', range_confidence: 0.7 } });
-    pub.publishTargets([near(1, 300), near(2, 100), near(3, 200)]);
-
-    // Only the two closest (ids 2 @100m and 3 @200m) get a vessel context.
-    expect(app.blipContexts().sort()).toEqual([ctx('forward', 2), ctx('forward', 3)].sort());
-    expect(app.valuesFor(ctx('forward', 1))).toHaveLength(0);
-  });
-
-  it('counts distinct blips against maxTargets when a recycled track_id collides', () => {
-    // Two targets sharing track_id 2 collapse to one blip; that collision must
-    // not eat a maxTargets slot — the next distinct target (id 1) still draws.
-    const pub = new Publisher(app, 'signalk-vision-ai', { ...cfg, maxTargets: 2 });
-    const now = Date.now();
-    const near = (id: number, range: number, partial: Partial<EnrichedTarget> = {}) =>
-      tgt(id, { geometry: { relative_bearing_deg: 0, range_m: range, range_method: 'horizon', range_confidence: 0.7 }, ...partial });
-    pub.publishTargets([
-      near(2, 100, { stable_id: 3, lastSeen: now - 5000 }),
-      near(2, 150, { stable_id: 9, lastSeen: now }),
-      near(1, 300),
-    ]);
-    expect(app.blipContexts().sort()).toEqual([ctx('forward', 1), ctx('forward', 2)].sort());
-  });
-
-  it('retracts all blips on reset', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    pub.publishTargets([tgt(1)]);
-    app.deltas = [];
-    pub.reset();
-    expect(app.valuesFor(VIS1).find((v) => v.path === 'navigation.position')!.value).toBeNull();
-    expect(nameOf(app.valuesFor(VIS1))).toBeNull();
-  });
-
-  it('never writes a synthetic vessel that lacks a real position', () => {
-    const pub = new Publisher(app, 'signalk-vision-ai', cfg);
-    // Mix of positioned and position-less targets across two cycles, including a
-    // target that loses its position while still being tracked.
-    pub.publishTargets([tgt(1), tgt(2, { position: null })]);
-    pub.publishTargets([tgt(1, { position: null }), tgt(3)]);
-
-    // Every non-null navigation.position ever written to a vision blip context
-    // must carry a real lat/lon — a blip is never created location-less.
-    for (const d of app.deltas) {
-      if (d.context === 'vessels.self' || !d.context.startsWith('vessels.urn:mrn:signalk:uuid:')) continue;
-      for (const u of d.updates) {
-        for (const v of u.values || []) {
-          if (v.path !== 'navigation.position' || v.value === null) continue;
-          expect(v.value).toHaveProperty('latitude');
-          expect(v.value).toHaveProperty('longitude');
-        }
-      }
-    }
-    // Target 2 (never positioned) gets no context at all.
-    expect(app.valuesFor(ctx('forward', 2))).toHaveLength(0);
   });
 });
