@@ -24,7 +24,10 @@ services:
     volumes:
       # Starts as a copy of the image's models/ (the YOLO11n weights); the engine
       # built above lands here. Named per release, because an engine only runs on
-      # the TensorRT it was built with: after an update, build it again.
+      # the TensorRT it was built with: after an update, build it again. On
+      # "edge" all builds of main share one volume: after pulling a new edge
+      # image, run `docker compose -f docker-compose.jetson.yml down -v` and
+      # build the engine again.
       - models:/opt/vision-service/models
       # - ./config:/opt/vision-service/config:ro
     ports:

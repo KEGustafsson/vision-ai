@@ -12,6 +12,11 @@
 # named per release so an update never reuses an engine or config from an
 # older image; remove old ones with: docker volume ls / docker volume rm.
 #
+# On "edge" (no VISION_AI_VERSION, a git checkout) every build of main shares
+# one volume, which would keep the previous image's ONNX, configs and engine.
+# Drop it whenever you pull a new edge image:
+#   docker compose -f <this file> pull && docker compose -f <this file> down -v && docker compose -f <this file> up -d
+#
 # Calibration: see docker-compose.cpu.yml.
 services:
   vision-service:

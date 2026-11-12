@@ -37,5 +37,7 @@ jobs:
       packages: write
     with:
       version: edge
-      push: ${{ github.event_name != 'pull_request' }}
+      # edge-* is "the latest build of main": only main may publish it. A
+      # manual run from another branch builds everything and pushes nothing.
+      push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
       scope: ${{ github.event_name == 'pull_request' && 'light' || 'all' }}

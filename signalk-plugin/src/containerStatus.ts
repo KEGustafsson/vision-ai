@@ -66,6 +66,10 @@ export class ContainerHealth {
  * useful part in `cause`, so prefer the cause's code or message.
  */
 export function describeError(error: unknown): string {
+  return redactCredentials(rawDescription(error));
+}
+
+function rawDescription(error: unknown): string {
   if (error && typeof error === 'object') {
     const cause = (error as { cause?: unknown }).cause;
     if (cause && typeof cause === 'object') {
@@ -78,6 +82,17 @@ export function describeError(error: unknown): string {
     if (typeof msg === 'string' && msg) return msg;
   }
   return String(error);
+}
+
+/**
+ * Remove `user:password@` from every URL in a piece of text. The container URL
+ * may carry credentials, and Node's fetch rejects such a URL with a message
+ * that repeats it in full ("Request cannot be constructed from a URL that
+ * includes credentials: http://user:secret@…"), so an error description must
+ * never be stored, served or logged unredacted.
+ */
+export function redactCredentials(text: string): string {
+  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi, '$1');
 }
 
 /** The text of the containerDown alarm and of the plugin's error status. */

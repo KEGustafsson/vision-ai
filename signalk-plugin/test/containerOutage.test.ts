@@ -111,4 +111,19 @@ describe('plugin — vision container not running', () => {
     expect(app.notification('notifications.vision.containerDown')).toBeNull();
     await until(() => app.statuses.some((s) => s.includes('targets')), 2000);
   }, 15000);
+
+  it('never serves or reports the password of a container URL with credentials', async () => {
+    const port = await freePort();
+    const app = new FakeApp();
+    plugin = createPlugin(app as any);
+    const routes = routesOf(plugin);
+    // Node's fetch rejects a URL with credentials, with a message repeating it.
+    plugin.start({ containerUrl: `http://vision:s3cr3t-pw@127.0.0.1:${port}`, processIntervalMs: 200 });
+    await until(() => getJson(routes, '/targets').container.reachable === false, 3000);
+    const served = JSON.stringify([getJson(routes, '/targets'), getJson(routes, '/setup')]);
+    expect(served).not.toContain('s3cr3t-pw');
+    expect(getJson(routes, '/targets').container.lastError).toBeTruthy();
+    expect(JSON.stringify(app.errors)).not.toContain('s3cr3t-pw');
+    expect(JSON.stringify(app.deltas)).not.toContain('s3cr3t-pw');
+  }, 10000);
 });

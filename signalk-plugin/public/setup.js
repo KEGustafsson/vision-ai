@@ -28,6 +28,7 @@
   let lastStatus = null;
   let hiddenFor = null; // downSince of the outage the user hid the guide for
   let wasOpen = false;
+  let focusBefore = null; // where keyboard focus was before the guide opened
 
   const $ = (id) => document.getElementById(id);
 
@@ -49,8 +50,8 @@
     }),
     env: () => ({
       t: 'Save the camera addresses',
-      cmd: "cat > .env <<'EOF'\nVISION_CAMERA_FORWARD_URL={{FWD}}\nVISION_CAMERA_AFT_URL={{AFT}}\nEOF",
-      d: 'Docker reads <code>.env</code> every time the container starts, so the addresses survive a reboot. Both cameras are required.',
+      cmd: "touch .env && chmod 600 .env\ncat > .env <<'EOF'\nVISION_CAMERA_FORWARD_URL={{FWD}}\nVISION_CAMERA_AFT_URL={{AFT}}\nEOF",
+      d: 'Docker reads <code>.env</code> every time the container starts, so the addresses survive a reboot. Both cameras are required. The file is made readable by you only first, because the addresses hold camera passwords.',
     }),
     up: (file, slow) => ({
       t: 'Start the container',
@@ -248,9 +249,18 @@
     fillCommands();
   }
 
+  // A value for Docker Compose's .env file. Compose substitutes $NAME in
+  // unquoted and double-quoted values, which would change a password such as
+  // "pa$word", so single-quote it (taken literally). A value that itself
+  // contains ' goes in double quotes with \, " and $ escaped.
+  function envQuote(value) {
+    if (!value.includes("'")) return `'${value}'`;
+    return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '$$$$')}"`;
+  }
+
   function fillCommands() {
-    const fwd = $('csFwd').value.trim() || 'rtsp://user:password@192.168.1.10:554/stream';
-    const aft = $('csAft').value.trim() || 'rtsp://user:password@192.168.1.11:554/stream';
+    const fwd = envQuote($('csFwd').value.trim() || 'rtsp://user:password@192.168.1.10:554/stream');
+    const aft = envQuote($('csAft').value.trim() || 'rtsp://user:password@192.168.1.11:554/stream');
     document.querySelectorAll('#csSteps pre[data-tpl]').forEach((pre) => {
       // textContent: whatever is typed into the address fields never becomes markup.
       pre.textContent = pre.dataset.tpl.replace('{{FWD}}', fwd).replace('{{AFT}}', aft);
@@ -293,12 +303,39 @@
     }
     $('csSetupView').hidden = false;
     $('csOkView').hidden = true;
-    $('csScrim').hidden = false;
+    if ($('csScrim').hidden) {
+      focusBefore = document.activeElement;
+      $('csScrim').hidden = false;
+      setBackgroundInert(true);
+      // Into the dialog: the selected hardware choice, else the dialog itself.
+      const chosen = document.querySelector('#csHw input:checked');
+      (chosen || $('csDialog')).focus();
+    }
     wasOpen = true;
   }
 
-  function hide() {
+  // While the guide is open, the page behind it can be neither clicked nor
+  // reached with Tab, so keyboard focus stays in the dialog.
+  function setBackgroundInert(on) {
+    document.querySelectorAll('body > header, body > main, #csBanner').forEach((el) => {
+      el.inert = on;
+    });
+  }
+
+  function closeScrim() {
+    if ($('csScrim').hidden) return;
     $('csScrim').hidden = true;
+    setBackgroundInert(false);
+    // Back where it was; after an automatic open (nothing focused) to the
+    // banner's button, which reopens the guide.
+    const was = focusBefore && focusBefore !== document.body && document.contains(focusBefore);
+    const back = was ? focusBefore : $('csBannerOpen');
+    focusBefore = null;
+    if (back && typeof back.focus === 'function' && !back.closest('[hidden]')) back.focus();
+  }
+
+  function hide() {
+    closeScrim();
     wasOpen = false;
     if (lastStatus && lastStatus.reachable === false) hiddenFor = lastStatus.downSince;
   }
@@ -308,8 +345,9 @@
     if (!wasOpen) return;
     $('csSetupView').hidden = true;
     $('csOkView').hidden = false;
+    $('csDialog').focus(); // the focused control was in the view just hidden
     wasOpen = false;
-    setTimeout(() => { $('csScrim').hidden = true; }, 2500);
+    setTimeout(closeScrim, 2500);
   }
 
   /** Called by app.js with /targets' `container`; undefined from an older plugin. */
@@ -372,10 +410,10 @@
       const b = e.target.closest('.cs-copy');
       if (b) copy(b);
     });
-    $('csWhich').addEventListener('click', (e) => {
+    ['csWhich', 'csRemote'].forEach((id) => $(id).addEventListener('click', (e) => {
       const b = e.target.closest('.cs-copy');
       if (b) copy(b);
-    });
+    }));
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape' && !$('csScrim').hidden) hide();
     });

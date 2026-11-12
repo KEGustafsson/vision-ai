@@ -7,7 +7,7 @@ import http from 'http';
 import https from 'https';
 import { join } from 'path';
 import { ContainerClient, ControlBody } from './containerClient';
-import { ContainerStatus } from './containerStatus';
+import { ContainerStatus, redactCredentials } from './containerStatus';
 import { PluginConfig } from './config';
 import { HostInfo } from './hostInfo';
 import { EnrichedTarget, OwnShip } from './types';
@@ -84,7 +84,13 @@ export interface SharedState {
 
 /** The container status as the webapp may see it: no credentials in the URL. */
 function publicContainerStatus(status: ContainerStatus): ContainerStatus {
-  return { ...status, url: redactUrl(status.url) };
+  return {
+    ...status,
+    url: redactUrl(status.url),
+    // describeError already redacts; this keeps the served status clean even
+    // if a future caller stores an unredacted message.
+    lastError: status.lastError === null ? null : redactCredentials(status.lastError),
+  };
 }
 
 function proxy(targetUrl: string, res: any): void {

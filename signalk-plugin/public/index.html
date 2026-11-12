@@ -77,7 +77,7 @@
     </main>
 
     <div class="cs-scrim" id="csScrim" hidden>
-      <div class="cs-dialog" role="dialog" aria-modal="true" aria-labelledby="csTitle">
+      <div class="cs-dialog" id="csDialog" role="dialog" aria-modal="true" aria-labelledby="csTitle" tabindex="-1">
         <div id="csSetupView" class="cs-view">
           <div class="cs-head">
             <div class="cs-title">
@@ -119,6 +119,14 @@
                   <tr><td>not a Jetson</td><td>A PC, mini-PC or Raspberry Pi → <b>CPU only</b></td></tr>
                 </table>
               </details>
+              <details class="cs-which" id="csRemote">
+                <summary>Signal K runs on a different computer?</summary>
+                <div class="cs-hint">The container answers only on <code>127.0.0.1:7000</code> of the computer it runs on.
+                  Don't open port 7000 to the boat's network: anyone on it could watch the cameras. Run this on the
+                  Signal K computer instead, and leave <b>Vision container base URL</b> at <code>http://localhost:7000</code>.
+                  Keep the tunnel running with <code>autossh</code> or a systemd service.</div>
+                <div class="cs-code"><pre>ssh -N -L 7000:127.0.0.1:7000 user@vision-computer</pre><button type="button" class="cs-copy">Copy</button></div>
+              </details>
             </section>
 
             <section class="cs-sec" id="csCamSec" aria-labelledby="csH2">
@@ -152,7 +160,7 @@
         <div class="cs-ok" id="csOkView" hidden>
           <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#28c76f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m8 12 3 3 5-6"/></svg>
           <h2>Vision container connected</h2>
-          <p>Camera targets and alarms are live. This window closes by itself.</p>
+          <p>Check that detection is on and both cameras show video before you rely on the camera alarms. This window closes by itself.</p>
         </div>
       </div>
     </div>

@@ -51,11 +51,19 @@ curl -fsSLO https://github.com/KEGustafsson/vision-ai/releases/download/v0.1.0/d
 ```
 
 ```bash
+touch .env && chmod 600 .env
 cat > .env <<'EOF'
-VISION_CAMERA_FORWARD_URL=rtsp://user:password@192.168.1.10:554/stream
-VISION_CAMERA_AFT_URL=rtsp://user:password@192.168.1.11:554/stream
+VISION_CAMERA_FORWARD_URL='rtsp://user:password@192.168.1.10:554/stream'
+VISION_CAMERA_AFT_URL='rtsp://user:password@192.168.1.11:554/stream'
 EOF
 ```
+
+The addresses usually hold camera passwords, so `.env` is made readable by
+you only before they are written. Keep the single quotes: Compose reads an
+unquoted value with a `$` in it as a variable, which would change a password
+such as `pa$word`. A password containing `'` needs double quotes instead,
+with `$` written as `$$`, `"` as `\"` and `\` as `\\`. The plugin's setup
+guide writes the file this way for you.
 
 ```bash
 docker compose -f docker-compose.deepstream.yml up -d
@@ -95,6 +103,23 @@ through behind Signal K's own login. If Signal K runs in a container, give
 that container host networking, or set the plugin's **Vision container base
 URL** to an address it can reach.
 
+### Signal K on another computer
+
+Running both on the same computer is simplest. If Signal K runs elsewhere,
+don't publish port 7000 on the boat's network: anyone on it could then watch
+the cameras and change detection settings. Reach it through an SSH tunnel
+from the Signal K computer instead:
+
+```bash
+ssh -N -L 7000:127.0.0.1:7000 user@vision-computer
+```
+
+and leave **Vision container base URL** at `http://localhost:7000`. Keep the
+tunnel up across reboots with `autossh` or a systemd service, and log in with
+an SSH key rather than a password. An authenticated reverse proxy (HTTPS
+with a login) on the vision computer also works; then set the base URL to
+that proxy's address.
+
 ## Update
 
 Download the compose file of the new release and start it again. Docker
@@ -110,6 +135,16 @@ The engine volume is named per release (`vision-ai-deepstream-0.2.0`, …), so a
 new release builds a fresh engine and never runs one built for an older
 TensorRT. On the TensorRT variant, run the `export_engine.py` step again.
 List and remove old volumes with `docker volume ls` and `docker volume rm`.
+
+The `edge` images from a git checkout don't get that protection: every build
+of `main` shares one volume, which would keep the previous image's ONNX,
+configs and engine. Drop it each time you pull a new `edge` image:
+
+```bash
+docker compose -f deploy/docker-compose.deepstream.yml pull
+docker compose -f deploy/docker-compose.deepstream.yml down -v
+docker compose -f deploy/docker-compose.deepstream.yml up -d
+```
 
 Update the Signal K plugin to the same version.
 

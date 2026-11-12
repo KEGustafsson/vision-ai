@@ -51,7 +51,9 @@ jobs:
     uses: ./.github/workflows/ci.yml
 
   images:
-    needs: check
+    # Publishing moves registry tags that a failed release can't take back, so
+    # nothing is pushed until the tagged commit has passed CI.
+    needs: [check, ci]
     uses: ./.github/workflows/docker-images.yml
     permissions:
       contents: read
