@@ -1,9 +1,11 @@
 name: Docker
 
-# Pull requests build the light images (mock and cpu, amd64) to prove the
-# Dockerfiles still build; nothing is pushed. Every push to main builds all
-# variants and publishes them as ghcr.io/<owner>/vision-ai:edge-<variant>,
-# which is what the compose files in deploy/ pull from a git checkout.
+# Pull requests build every variant, on the same runners as main, to prove
+# the Dockerfiles still build; nothing is pushed. (The Jetson and DeepStream
+# images are the ones most likely to break, so a PR builds them too.) Every
+# push to main builds all variants and publishes them as
+# ghcr.io/<owner>/vision-ai:edge-<variant>, which is what the compose files in
+# deploy/ pull from a git checkout.
 # Releases are built by release.yml.
 
 on:
@@ -40,4 +42,4 @@ jobs:
       # edge-* is "the latest build of main": only main may publish it. A
       # manual run from another branch builds everything and pushes nothing.
       push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
-      scope: ${{ github.event_name == 'pull_request' && 'light' || 'all' }}
+      scope: all

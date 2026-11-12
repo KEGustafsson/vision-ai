@@ -183,8 +183,8 @@ is built under emulation), bakes in the YOLO11n weights from a pinned
 Ultralytics release, and joins the per-architecture images into one tag. It
 runs:
 
-- on every pull request that touches `vision-service/` or `deploy/`: the mock
-  and CPU images for amd64, built but not pushed;
+- on every pull request that touches `vision-service/` or `deploy/`: all
+  variants, built but not pushed;
 - on every push to `main`: all variants, pushed as `edge-<variant>`;
 - from `release.yml` on a version tag: all variants, pushed as
   `X.Y.Z-<variant>`.
@@ -192,6 +192,10 @@ runs:
 The Jetson and DeepStream images are built on runners with no GPU. Building
 them needs no GPU, but it means CI only proves they build: the pipeline itself
 is verified on the boat (see [Onboard verification](onboard-verification.md)).
+On JetPack 5 the DeepStream Python binding also needs L4T libraries that only a
+Jetson's NVIDIA container runtime provides, so the Xavier image's build in CI
+cannot import it. It checks instead that everything else the binding needs is
+in the image; a build on the Xavier itself still imports it.
 
 ## Cut a release
 
