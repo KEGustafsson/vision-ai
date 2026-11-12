@@ -179,8 +179,11 @@ export VISION_CAMERA_AFT_URL="rtsp://user:pass@192.168.1.11:554/stream"
 ### `mock` — laptop / dev (no GPU, no cameras)
 
 Runs the vision service on synthetic frames, for the Signal K server you
-already run: install the plugin there and leave its **Vision container base
-URL** at `http://localhost:7000`.
+already run. Start it on the same computer as Signal K, install the plugin
+there and leave its **Vision container base URL** at `http://localhost:7000`.
+The service listens on that computer only; to reach it from Signal K on
+another computer, see
+[Signal K on another computer](docs/release.md#signal-k-on-another-computer).
 
 ```bash
 docker compose -f docker-compose.mock.yml up -d --build

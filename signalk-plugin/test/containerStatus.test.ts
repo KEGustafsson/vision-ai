@@ -67,6 +67,16 @@ describe('redactCredentials', () => {
     expect(redactCredentials('http://u:p@ss@host:7000/x')).toBe('http://host:7000/x');
     expect(redactCredentials('ECONNREFUSED')).toBe('ECONNREFUSED');
   });
+  it('removes a password typed with a raw space, as fetch repeats it', () => {
+    // fetch's message repeats the URL as configured, unencoded.
+    const msg = 'Request cannot be constructed from a URL that includes credentials: http://user:pa ss@127.0.0.1:7000/health';
+    expect(redactCredentials(msg))
+      .toBe('Request cannot be constructed from a URL that includes credentials: http://127.0.0.1:7000/health');
+    // Still stops at the authority: an @ after the path is not userinfo.
+    expect(redactCredentials('http://host:7000/x?to=a b@c')).toBe('http://host:7000/x?to=a b@c');
+    // Each line is redacted on its own.
+    expect(redactCredentials('http://host:7000\nmail me@example')).toBe('http://host:7000\nmail me@example');
+  });
   it('is applied by describeError', () => {
     expect(describeError(new TypeError('bad: http://user:secret@h:7000/health'))).not.toContain('secret');
   });

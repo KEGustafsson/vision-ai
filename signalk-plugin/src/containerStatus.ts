@@ -90,15 +90,21 @@ function rawDescription(error: unknown): string {
  * that repeats it in full ("Request cannot be constructed from a URL that
  * includes credentials: http://user:secret@…"), so an error description must
  * never be stored, served or logged unredacted.
+ *
+ * fetch repeats the URL as configured, unencoded, so the userinfo may hold
+ * spaces or an `@`: everything up to the last `@` before the path, query,
+ * fragment or end of line is removed. On a URL with no path that is followed
+ * by prose containing an `@`, this removes more than the userinfo, which errs
+ * on the side of hiding a password rather than showing one.
  */
 export function redactCredentials(text: string): string {
-  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/?#]*@/gi, '$1');
+  return text.replace(/([a-z][a-z0-9+.-]*:\/\/)[^/?#\r\n]*@/gi, '$1');
 }
 
 /** The text of the containerDown alarm and of the plugin's error status. */
 export function containerDownMessage(url: string): string {
   return (
-    `Vision container is not running at ${url}. ` +
+    `Vision container can't be reached at ${url}. ` +
     'No camera detections, video or camera-based alarms. ' +
     'Open the Vision-AI webapp for setup steps.'
   );

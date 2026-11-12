@@ -66,7 +66,7 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-describe('plugin — vision container not running', () => {
+describe('plugin — vision container unreachable', () => {
   let plugin: Plugin | null = null;
   let container: Server | null = null;
 
@@ -87,7 +87,7 @@ describe('plugin — vision container not running', () => {
     // Down: the admin gets the plugin error, the alarm is raised, the webapp
     // sees an outage of a container that has never answered.
     await until(() => app.errors.length > 0, 3000);
-    expect(app.errors[0]).toContain(`Vision container is not running at http://127.0.0.1:${port}/`);
+    expect(app.errors[0]).toContain(`Vision container can't be reached at http://127.0.0.1:${port}/`);
     expect(app.notification('notifications.vision.containerDown')?.state).toBe('alarm');
     const down = getJson(routes, '/targets').container;
     expect(down).toMatchObject({ reachable: false, everConnected: false });

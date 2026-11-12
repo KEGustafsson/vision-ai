@@ -101,6 +101,9 @@ main { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; padding: 14px; 
   gap: 8px; margin: 0 0 10px;
 }
 .targets h2 { font-size: 15px; margin: 0; }
+.targets-stale { margin: 8px 0 0; color: #ffb3c0; font-size: 13px; }
+.targets-stale[hidden] { display: none; }
+.targets.stale tbody { opacity: 0.5; }
 .target-show {
   display: flex; align-items: center; gap: 6px;
   color: var(--muted); font-size: 13px; font-weight: 600;
@@ -253,7 +256,7 @@ tr.mob td { background: rgba(234, 84, 85, 0.28); font-weight: 700; }
 /* Container down (app.js): hide the dead stream and say why the area is empty. */
 .video.offline img { visibility: hidden; }
 .video.offline::after {
-  content: "No video while the vision container is not running";
+  content: "No video while the vision container can't be reached";
   position: absolute; inset: 0; display: grid; place-items: center;
   color: var(--muted); font-size: 14px; pointer-events: none;
 }

@@ -29,7 +29,7 @@
          down, and the guide itself. Hidden until the plugin reports an outage. -->
     <div class="cs-banner" id="csBanner" role="status" hidden>
       <span class="cs-banner-dot" aria-hidden="true"></span>
-      <span id="csBannerText">Vision container is not running.</span>
+      <span id="csBannerText">Vision container can't be reached.</span>
       <span class="cs-banner-impact">No camera video, targets or camera-based alarms.</span>
       <button type="button" class="cs-btn" id="csBannerOpen">Setup guide</button>
       <span class="cs-banner-error" id="csBannerError" hidden>
@@ -70,6 +70,7 @@
             </select>
           </label>
         </div>
+        <p id="targetsStale" class="targets-stale" hidden>Last seen before the vision container stopped answering. Not live.</p>
         <table>
           <thead>
             <tr>
@@ -88,7 +89,7 @@
             <div class="cs-title">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ff9f43" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
               <div>
-                <h2 id="csTitle">Vision container is not running</h2>
+                <h2 id="csTitle">Vision container can't be reached</h2>
                 <p>The plugin can't reach the detection container at <code id="csUrl">—</code>. Set it up once on the computer that has the cameras' network and the GPU, and it starts by itself after every reboot.</p>
               </div>
               <button type="button" class="cs-x" id="csClose" aria-label="Hide for now" title="Hide for now">

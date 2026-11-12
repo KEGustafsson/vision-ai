@@ -8,7 +8,7 @@ against AIS, and raises standard Signal K alarms:
 - **Man overboard:** a person in the water is seen for several frames in a row.
 - **Collision risk:** a boat's closest point of approach (CPA) and time to it
   (TCPA) fall below your limits.
-- **Dark target:** a vessel in range is not sending AIS.
+- **Dark target:** a vessel in range has no matching AIS contact.
 
 It also serves the **Vision-AI** webapp: annotated live video from each
 camera, the target list with true bearing, range, CPA, TCPA and AIS match,
@@ -123,7 +123,7 @@ tune AIS matching, alarm hold times and track timeouts; their defaults are in
 
 ## Troubleshooting
 
-- **The webapp says "Vision container is not running".** Follow its setup
+- **The webapp says "Vision container can't be reached".** Follow its setup
   steps. If the container is running, check that **Vision container base
   URL** points at it: `curl -s http://127.0.0.1:7000/health` on that computer
   should answer `"status": "ok"`.

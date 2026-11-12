@@ -319,10 +319,16 @@ async function poll() {
     // The container setup guide (setup.js) follows the container's status.
     if (window.visionSetup) window.visionSetup.update(data.container);
     const containerDown = data.container && data.container.reachable === false;
+    // The plugin keeps a track for a few seconds after its last detection, so
+    // the list can still hold targets once the container is gone: say they are
+    // the last seen, not live.
+    const staleTargets = !!containerDown && (data.targets || []).length > 0;
+    document.querySelector('section.targets').classList.toggle('stale', staleTargets);
+    document.getElementById('targetsStale').hidden = !staleTargets;
     // No container, no video: show a plain message, not a broken-image icon.
     document.querySelector('.video').classList.toggle('offline', !!containerDown);
     document.getElementById('status').textContent = containerDown
-      ? `vision container not running · no detections · checked ${new Date().toLocaleTimeString()}`
+      ? `vision container unreachable · no detections · checked ${new Date().toLocaleTimeString()}`
       : detectionEnabled === false
         ? `detection off · updated ${new Date().toLocaleTimeString()}`
         : `${(data.targets || []).length} targets · ${activeCamera || '—'} · updated ${new Date().toLocaleTimeString()}`;

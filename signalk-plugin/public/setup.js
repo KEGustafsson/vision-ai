@@ -24,6 +24,7 @@
 
   let setup = null; // GET /setup, fetched again for every new outage
   let setupFor; // the outage (downSince) `setup` was fetched for
+  let closeTimer = null; // closes the "connected" view after a reconnect
   let setupPending = null;
   let renderedVersion = null; // plugin version the rendered commands are for
   let current = null; // hardware choice id; null until known or chosen
@@ -339,6 +340,12 @@
 
   function show() {
     clearSetupError();
+    // A reconnect's "connected" view closes itself after a moment; a newer
+    // outage that reopens the guide meanwhile must not be closed by it.
+    if (closeTimer !== null) {
+      clearTimeout(closeTimer);
+      closeTimer = null;
+    }
     if (renderedVersion !== setup.version) {
       // First open, or the plugin was updated since: rebuild for its release.
       // Pre-select only a real hint; the user's own choice is kept.
@@ -399,7 +406,10 @@
     $('csOkView').hidden = false;
     $('csDialog').focus(); // the focused control was in the view just hidden
     wasOpen = false;
-    setTimeout(closeScrim, 2500);
+    closeTimer = setTimeout(() => {
+      closeTimer = null;
+      closeScrim();
+    }, 2500);
   }
 
   /** Called by app.js with /targets' `container`; undefined from an older plugin. */
@@ -415,7 +425,7 @@
     $('csBanner').hidden = false;
     $('csBannerText').textContent = c.everConnected
       ? `Vision container not answering for ${fmtDuration(c.downForS)}.`
-      : 'Vision container is not running.';
+      : "Vision container can't be reached.";
     renderStatus(c);
     if (logic.shouldAutoOpen(c, guideState())) open(false);
   }
