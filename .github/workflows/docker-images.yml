@@ -65,7 +65,7 @@ jobs:
             {"variant":"cpu","dockerfile":"Dockerfile.cpu","args":"WITH_DETECTION=1","arch":"arm64","runner":"ubuntu-24.04-arm","weights":true},
             {"variant":"jetson","dockerfile":"Dockerfile","args":"","arch":"arm64","runner":"ubuntu-24.04-arm","weights":true},
             {"variant":"deepstream","dockerfile":"Dockerfile.deepstream","args":"","arch":"arm64","runner":"ubuntu-24.04-arm","weights":true},
-            {"variant":"deepstream-xavier","dockerfile":"Dockerfile.deepstream.xavier","args":"","arch":"arm64","runner":"ubuntu-24.04-arm","weights":true}
+            {"variant":"deepstream-xavier","dockerfile":"Dockerfile.deepstream.xavier","args":"PYDS_IMPORT_CHECK=0","arch":"arm64","runner":"ubuntu-24.04-arm","weights":true}
           ]'
           if [ "$SCOPE" = light ]; then
             matrix=$(echo "$all" | jq -c '[.[] | select((.variant=="mock" or .variant=="cpu") and .arch=="amd64")]')

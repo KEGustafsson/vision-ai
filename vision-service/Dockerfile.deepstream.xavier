@@ -332,10 +332,30 @@ RUN pip3 install --no-cache-dir --upgrade pip
 # is already installed, system-wide and prebuilt, by the python3-gi apt package
 # above, which is the copy `import gi` resolves to. Adding the -dev packages and a
 # toolchain just to rebuild what apt already provides would be pure bloat.
+#
+# Fail here, not at pipeline start, if the binding cannot actually load. That
+# needs the board: on JetPack 5 pyds links against L4T libraries
+# (libnvbufsurface and friends) that the NVIDIA container runtime mounts from
+# the host, so it can only be imported where that runtime runs, which an
+# on-board build does. A build elsewhere (CI, on GitHub's arm64 runners) sets
+# PYDS_IMPORT_CHECK=0: it still imports GStreamer's bindings and checks that
+# every library pyds cannot find there is an NVIDIA one the board provides
+# (libnv*, libcuda*), so a missing system library still fails the build. The
+# image is the same either way; only the check differs.
+ARG PYDS_IMPORT_CHECK=1
 RUN pip3 install --no-cache-dir --no-deps \
       https://github.com/NVIDIA-AI-IOT/deepstream_python_apps/releases/download/v1.1.8/pyds-1.1.8-py3-none-linux_aarch64.whl \
-    # Fail here, not at pipeline start, if the binding cannot actually load.
-    && python3 -c "import gi; gi.require_version('Gst','1.0'); import pyds; from gi.repository import Gst; print('pyds + GI import OK')"
+    && if [ "${PYDS_IMPORT_CHECK}" = 1 ]; then \
+        python3 -c "import gi; gi.require_version('Gst','1.0'); import pyds; from gi.repository import Gst; print('pyds + GI import OK')"; \
+    else \
+        python3 -c "import gi; gi.require_version('Gst','1.0'); from gi.repository import Gst; print('GI import OK')" \
+        && so=$(python3 -c "import importlib.util; print(importlib.util.find_spec('pyds').origin)") \
+        && missing=$(ldd "${so}" | awk '/not found/ {print $1}') \
+        && echo "pyds import not checked (PYDS_IMPORT_CHECK=0); libraries the board must provide:" \
+        && echo "${missing:-none}" \
+        && others=$(echo "${missing}" | grep -v -e '^libnv' -e '^libcuda' -e '^$' || true) \
+        && { [ -z "${others}" ] || { echo "ERROR: pyds needs libraries no Jetson host provides: ${others}" >&2; exit 1; }; }; \
+    fi
 
 COPY requirements-deepstream-xavier.txt constraints-xavier.txt ./
 RUN pip3 install --no-cache-dir \
