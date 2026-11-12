@@ -318,6 +318,15 @@
     fetchSetup(outage).then(
       () => {
         opening = false;
+        // The poll kept running while /setup loaded. Show nothing if the
+        // container answered meanwhile, and fetch again if a newer outage
+        // began, so the guide never shows a past outage's release.
+        const c = lastStatus;
+        if (!c || c.reachable !== false) return;
+        if (c.downSince !== outage) {
+          open();
+          return;
+        }
         show();
       },
       () => {
