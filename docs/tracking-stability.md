@@ -174,9 +174,10 @@ window, so a shadow-reacquired raw id walks back into its existing ids.
 
 Because the 2-digit pool is recycled, events also carry **`stable_id`**: a
 per-camera, per-session serial that is never reused. Downstream identity —
-the SignalK blip name/context `VIS-<camera>-<stable_id>` — keys on it, so a
-chart contact can never change physical vessel mid-session; `track_id` stays
-the number drawn on the video overlay.
+the SignalK target context `targets.camera:visionai-<camera>-<session>-<stable_id>` —
+keys on it, so a chart contact can never change physical vessel mid-session;
+`track_id` stays the number drawn on the video overlay and in the target's
+`VIS-<camera>-<track_id>` name.
 
 ## Layer 4 — track stabilizer (`TrackStabilizer`)
 

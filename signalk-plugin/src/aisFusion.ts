@@ -48,10 +48,9 @@ const VESSEL_LABELS = new Set([
 /**
  * Extract REAL AIS contacts (excluding self) to correlate against. A contact
  * qualifies only if it carries both an MMSI and an AIS class — i.e. it is an
- * actual transmitting vessel, not a position-only blip. This deliberately
- * excludes our own synthetic camera vessels (published as UUID contexts with no
- * MMSI/class), which would otherwise self-correlate with the visual targets that
- * spawned them.
+ * actual transmitting vessel, not a position-only contact (a buddy boat over
+ * the internet, or another plugin's synthetic vessel), which would otherwise
+ * self-correlate with a visual target and mask a dark one.
  */
 export function collectAisContacts(
   vessels: any,
@@ -64,15 +63,9 @@ export function collectAisContacts(
   if (!vessels || !own.position) return out;
   for (const [id, v] of Object.entries<any>(vessels)) {
     if (id === 'self') continue;
-    // Require a real AIS identity: exactly 9 digits (the MMSI format). A bare
-    // `mmsi:` prefix check would let a malformed token through; UUID-only /
-    // synthetic contexts have no MMSI at all.
-    const mmsi = id.match(/mmsi:(\d{9})(?::|$)/)?.[1] ?? null;
+    const mmsi = aisMmsi(id, v);
     if (!mmsi) continue;
-    // Require an AIS class — confirms this came from an AIS transmitter, not a
-    // bare position injected by some other plugin (ours included).
-    const aisClass = v?.sensors?.ais?.class?.value ?? v?.sensors?.ais?.class;
-    if (typeof aisClass !== 'string' || aisClass.trim().length === 0) continue;
+    const aisClass = v.sensors.ais.class.value ?? v.sensors.ais.class;
     const posNode = v?.navigation?.position;
     const p = posNode?.value ?? posNode;
     // Validate BOTH lat and lon with Number.isFinite (NOT typeof number, which
@@ -259,11 +252,7 @@ export function fuse(
   for (const t of targets) {
     // Reset correlation state every pass — targets persist across cycles, so a
     // target that loses its AIS match must not retain stale identity/kinematics.
-    t.aisCorrelated = false;
-    t.aisMmsi = null;
-    t.aisCog = null;
-    t.aisSog = null;
-    t.aisPosition = null;
+    dropAisMatch(t);
 
     const a = assignedContact.get(t.key);
     if (a) {
@@ -298,4 +287,34 @@ export function fuse(
   }
 
   return { targets, darkTargetKeys, aisCorrelatedCount, assignment };
+}
+
+/** Forget a target's AIS match: its vessel identity and kinematics. */
+export function dropAisMatch(t: EnrichedTarget): void {
+  t.aisCorrelated = false;
+  t.aisMmsi = null;
+  t.aisCog = null;
+  t.aisSog = null;
+  t.aisPosition = null;
+}
+
+/**
+ * A vessel's MMSI when it is an AIS transmitter, else null. It needs a real AIS
+ * identity: exactly 9 digits (the MMSI format), since a bare `mmsi:` prefix
+ * check would let a malformed token through and UUID-only / synthetic contexts
+ * have no MMSI at all. And it needs an AIS class, which confirms the vessel
+ * came from an AIS transmitter, not a bare position some other plugin (ours
+ * included) put in the model.
+ */
+function aisMmsi(id: string, v: any): string | null {
+  const mmsi = id.match(/mmsi:(\d{9})(?::|$)/)?.[1] ?? null;
+  if (!mmsi) return null;
+  const aisClass = v?.sensors?.ais?.class?.value ?? v?.sensors?.ais?.class;
+  return typeof aisClass === 'string' && aisClass.trim().length > 0 ? mmsi : null;
+}
+
+/** Whether a vessel (its id under `vessels.` and its model node) is an AIS
+ * transmitter, by the same test AIS correlation applies to its contacts. */
+export function isAisVessel(id: string, v: unknown): boolean {
+  return aisMmsi(id, v) !== null;
 }

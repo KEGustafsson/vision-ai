@@ -8,7 +8,7 @@ import { EnrichedTarget, OwnShip, RawTarget } from './types';
 export function targetKey(camera: string, raw: RawTarget): string {
   // Prefer the never-recycled per-session serial: the 2-digit track_id is
   // recycled per camera, so keying on it would hand a dead target's history
-  // (CPA trend, MOB persistence, blip identity) to whichever NEW vessel later
+  // (CPA trend, MOB persistence, chart target identity) to whichever NEW vessel later
   // inherits the number. track_id remains the fallback for events from an
   // older container that doesn't emit stable_id.
   const id =

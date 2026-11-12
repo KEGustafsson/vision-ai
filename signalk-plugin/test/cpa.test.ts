@@ -40,6 +40,33 @@ describe('CpaEstimator', () => {
     expect(t.threatLevel).toBe('high');
   });
 
+  it('reports where both boats will be at the closest approach', () => {
+    const est = new CpaEstimator();
+    // Own ship stopped; a target 1000 m north at 5 m/s due south (AIS
+    // velocity), offset 30 m east of our position: it passes 30 m off.
+    const own: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 0, cog: 0, stale: false };
+    const at = destinationPoint(destinationPoint(own.position!, 0, 1000), deg2rad(90), 30);
+    const t = { ...target(at), aisCorrelated: true, aisPosition: at, aisSog: 5, aisCog: Math.PI };
+    est.update([t], own, cfg, 0);
+    expect(t.tcpa!).toBeCloseTo(200, 0);
+    expect(t.cpa!).toBeCloseTo(30, 0);
+    expect(t.approach!.range).toBeCloseTo(Math.hypot(1000, 30), 0);
+    // Own ship does not move; the target arrives abeam, 30 m east.
+    expect(t.approach!.self.latitude).toBeCloseTo(60, 6);
+    expect(t.approach!.self.longitude).toBeCloseTo(25, 6);
+    expect(t.approach!.target.latitude).toBeCloseTo(60, 4);
+    expect(t.approach!.target.longitude).toBeGreaterThan(25);
+  });
+
+  it('clears the approach with the CPA when it cannot be solved', () => {
+    const est = new CpaEstimator();
+    const own: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: null, cog: null, stale: true };
+    const t = { ...target({ latitude: 60.01, longitude: 25 }), approach: {
+      range: 1, self: { latitude: 0, longitude: 0 }, target: { latitude: 0, longitude: 0 } } };
+    est.update([t], own, cfg, 0);
+    expect(t.approach).toBeNull();
+  });
+
   it('uses AIS velocity for a correlated target on the first sample', () => {
     const est = new CpaEstimator();
     const own: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 0, cog: 0, stale: false };
@@ -98,6 +125,44 @@ describe('CpaEstimator', () => {
     expect(lost.tcpa).toBeNull();
     expect(lost.threatLevel).toBe('none');
     expect(lost.sog).toBeNull();   // no velocity invented from the source change
+  });
+
+  it('does not difference two vessels\' AIS fixes when the match moves to another vessel', () => {
+    // Vessels A and B lie 400 m apart; neither reports SOG/COG. Differencing
+    // A's fix against B's would read the gap as B closing at 400 m/s.
+    const est = new CpaEstimator();
+    const own: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 5, cog: 0, stale: false };
+    const seen = destinationPoint(own.position!, 0, 700);
+    const a = { ...target(seen), aisCorrelated: true, aisMmsi: '230000001', aisPosition: destinationPoint(own.position!, 0, 900) };
+    est.update([a], own, cfg, 0);
+
+    const b = { ...target(seen), aisCorrelated: true, aisMmsi: '230000002', aisPosition: destinationPoint(own.position!, 0, 500) };
+    est.update([b], own, cfg, 1000);
+
+    expect(b.tcpa).toBeNull();
+    expect(b.threatLevel).toBe('none');
+    expect(b.sog).toBeNull();   // no velocity invented from the change of vessel
+  });
+
+  it('drops the last velocity when one target object\'s match moves to another vessel', () => {
+    // The same object stays in the track table across cycles when no new
+    // event arrives; vessel A's velocity must not stay on it as vessel B's.
+    const est = new CpaEstimator();
+    const own: OwnShip = { position: { latitude: 60, longitude: 25 }, headingTrue: 0, sog: 5, cog: 0, stale: false };
+    const t = {
+      ...target(destinationPoint(own.position!, 0, 700)),
+      aisCorrelated: true, aisMmsi: '230000001', aisPosition: destinationPoint(own.position!, 0, 900),
+      aisCog: Math.PI, aisSog: 6,
+    };
+    est.update([t], own, cfg, 0);
+    expect(t.sog).toBeCloseTo(6);
+
+    Object.assign(t, { aisMmsi: '230000002', aisPosition: destinationPoint(own.position!, 0, 500), aisCog: null, aisSog: null });
+    est.update([t], own, cfg, 1000);
+
+    expect(t.sog).toBeNull();
+    expect(t.cog).toBeNull();
+    expect(t.threatLevel).toBe('none');
   });
 
   it('leaves CPA unresolved when own velocity is unknown (no SOG/COG)', () => {

@@ -33,7 +33,7 @@ export interface RawTarget {
   track_id: number | null;
   // Per-session serial (per camera): never recycled, unlike track_id's bounded
   // 10-99 display range where a freed number can later name a DIFFERENT
-  // vessel. Preferred for target/blip identity; optional so events from an
+  // vessel. Preferred for target identity; optional so events from an
   // older container (without the field) still work on track_id.
   stable_id?: number | null;
   label: string;
@@ -94,6 +94,12 @@ export interface OwnShip {
   stale: boolean;
 }
 
+export interface CpaApproach {
+  range: number; // m, current distance from own ship
+  self: LatLon; // own ship at the closest point of approach
+  target: LatLon; // the target at the closest point of approach
+}
+
 export interface EnrichedTarget extends RawTarget {
   key: string; // `${camera}.${stable_id ?? track_id}` (see targetKey)
   camera: string;
@@ -106,12 +112,22 @@ export interface EnrichedTarget extends RawTarget {
   // The correlated contact's OWN reported position. Far more accurate than the
   // monocular estimate in `position`, so CPA uses it once correlated (see
   // cpa.ts). `position` stays the visual estimate: it is what the camera saw,
-  // and it is what the synthetic blip publishes.
+  // and it is what the chart target publishes.
   aisPosition: LatLon | null;
   cpa: number | null; // m
   tcpa: number | null; // s
+  // Where the encounter happens, for the collision alarm (Freeboard draws both
+  // boats' course lines on to these points). Set with cpa/tcpa, null without.
+  approach?: CpaApproach | null;
   sog: number | null; // m/s, target ground speed (estimated from track or AIS)
   cog: number | null; // rad [0,2π), target ground course
   threatLevel: ThreatLevel;
   lastSeen: number; // epoch ms
+  // When the container last detected the track, as opposed to coasting it
+  // across a detector dropout (lastSeen advances on coasted frames too).
+  // Unset until its first real detection.
+  observedAt?: number; // epoch ms
+  // The event-stream connection the track was seen on (see index.ts), so a
+  // serial the container reuses after a restart never names an old target.
+  session?: string;
 }

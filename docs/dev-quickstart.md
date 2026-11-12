@@ -49,8 +49,8 @@ In the SignalK admin UI (http://localhost:3000):
 1. *Server → Plugin Config → Marine Vision-AI* → enable, set
    `containerUrl = http://localhost:7000`, save.
 2. *Data Browser* → you should see `vision.system.inferenceFps` and
-   `vision.fusion.darkTargetCount` populate. Turn on **Publish targets as
-   synthetic AIS vessels** to also see `vessels.urn:…:VIS-*` blips.
+   `vision.fusion.darkTargetCount` populate. Turn on **Publish targets to
+   the chart** to also see `targets.camera:visionai-*` camera targets.
 3. The aft camera's person-in-water raises `notifications.mob` (emergency) —
    visible in the notifications panel.
 4. Open the **Vision-AI** webapp from the SignalK menu for the annotated stream

@@ -18,6 +18,17 @@ interface Sample {
   // of source would read the difference between a monocular estimate and a GPS
   // fix — tens of metres in one cycle — as target motion.
   fromAis: boolean;
+  // The AIS vessel an AIS sample is that vessel's fix of. A track whose match
+  // moves to another vessel must not difference two vessels' positions.
+  aisMmsi: string | null;
+}
+
+function fromLocal(ref: LatLon, e: number, n: number): LatLon {
+  return {
+    latitude: ref.latitude + (n / EARTH_RADIUS_M) * (180 / Math.PI),
+    longitude:
+      ref.longitude + (e / (EARTH_RADIUS_M * Math.cos(deg2rad(ref.latitude)))) * (180 / Math.PI),
+  };
 }
 
 function toLocal(ref: LatLon, p: LatLon): { e: number; n: number } {
@@ -51,6 +62,7 @@ export class CpaEstimator {
     const clearCpa = (target: EnrichedTarget): void => {
       target.cpa = null;
       target.tcpa = null;
+      target.approach = null;
       target.threatLevel = 'none';
     };
 
@@ -60,12 +72,19 @@ export class CpaEstimator {
       // own velocity — leaves the target unresolved instead of preserving a stale
       // cpa/tcpa/threatLevel that would keep a collision alarm up on unsupported data.
       clearCpa(tgt);
+      // Likewise its ground velocity: a target can stay in the track table
+      // across cycles with no new event, and a velocity this cycle cannot
+      // support (a change of position source or of AIS vessel, no baseline)
+      // must not be kept from the last one, where the chart would draw it and
+      // AIS matching would score course agreement against it.
+      tgt.sog = null;
+      tgt.cog = null;
       // Once a target is correlated, use the contact's OWN reported position
       // rather than the monocular estimate. Range from a single camera carries
       // tens of percent of error, and pairing that with the precise AIS
       // velocity below put a known vessel's CPA tens of metres out and made the
       // threat level flap across cycles. `tgt.position` stays the visual
-      // estimate — it is what the camera saw and what the blip publishes.
+      // estimate — it is what the camera saw and what the chart target publishes.
       // Truthiness, not `!== null`: a target built before this field existed
       // (or by an older caller) carries `undefined`, which would select the AIS
       // branch and then find no position at all.
@@ -81,6 +100,7 @@ export class CpaEstimator {
         refLat: own.position.latitude,
         refLon: own.position.longitude,
         fromAis: useAis,
+        aisMmsi: useAis ? tgt.aisMmsi : null,
       };
       const prev = this.history.get(tgt.key);
       this.history.set(tgt.key, sample);
@@ -95,25 +115,20 @@ export class CpaEstimator {
       } else {
         if (!prev) continue; // need a previous fix for finite-difference velocity
         // Don't difference across a change of position source (see Sample).
-        if (prev.fromAis !== useAis) continue;
+        if (prev.fromAis !== useAis || prev.aisMmsi !== sample.aisMmsi) continue;
         const dt = t - prev.t;
         if (dt < 0.2) continue; // need a meaningful baseline
         // Re-express the previous target position in the current local frame so
         // the difference is a ground displacement.
-        const prevAbs: LatLon = {
-          latitude: prev.refLat + (prev.n / EARTH_RADIUS_M) * (180 / Math.PI),
-          longitude:
-            prev.refLon +
-            (prev.e / (EARTH_RADIUS_M * Math.cos(deg2rad(prev.refLat)))) *
-              (180 / Math.PI),
-        };
+        const prevAbs = fromLocal(
+          { latitude: prev.refLat, longitude: prev.refLon }, prev.e, prev.n);
         const prevInCur = toLocal(own.position, prevAbs);
         vtE = (cur.e - prevInCur.e) / dt;
         vtN = (cur.n - prevInCur.n) / dt;
       }
 
-      // Target ground kinematics, surfaced onto the target for the synthetic
-      // vessel blip (navigation.speedOverGround / courseOverGroundTrue). These are
+      // Target ground kinematics, surfaced onto the target for the chart
+      // target (navigation.speedOverGround / courseOverGroundTrue). These are
       // the target's own ground velocity, independent of own-ship, so they're
       // still valid (and useful) even when own velocity is unknown.
       tgt.sog = Math.hypot(vtE, vtN);
@@ -145,6 +160,14 @@ export class CpaEstimator {
 
       tgt.cpa = cpa;
       tgt.tcpa = tcpa;
+      // Both boats carried on to the closest point (now, when it has passed),
+      // in the same local frame the solution used.
+      const tc = Math.max(tcpa, 0);
+      tgt.approach = {
+        range: Math.hypot(rE, rN),
+        self: fromLocal(own.position, voE * tc, voN * tc),
+        target: fromLocal(own.position, rE + vtE * tc, rN + vtN * tc),
+      };
       tgt.threatLevel = classify(cpa, tcpa, cfg);
     }
 

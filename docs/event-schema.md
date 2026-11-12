@@ -93,7 +93,7 @@ that schema, so the two sides cannot silently drift.
 - **`stable_id`** is a per-camera, per-session serial: monotonically
   increasing and **never recycled**, so it names one physical target for the
   whole session — this is the field downstream identity should key on (the
-  SignalK plugin derives blip names/contexts from it, falling back to
+  SignalK plugin derives its chart target contexts from it, falling back to
   `track_id` for events from an older container). `null` for untracked
   detections. `track_id` remains the number shown on the video overlay.
 - **`is_person_in_water`** is decided in the container (person whose waterline is

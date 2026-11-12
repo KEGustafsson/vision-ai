@@ -22,16 +22,16 @@ to the vision container (default `http://localhost:7000`).
 
 All options have sensible defaults (`src/config.ts`). The toggles separate
 **computation** (run the analysis + publish its data paths) from **notification**
-(raise/clear the SignalK alarm), so you can e.g. keep CPA on the blips without an
+(raise/clear the SignalK alarm), so you can e.g. keep course and speed on the chart targets without an
 audible alarm. Highlights:
 
 | Option | Default | Meaning |
 |--------|---------|---------|
 | `containerUrl` | `http://localhost:7000` | Vision container base URL |
 | `enableDetection` | on | Master detection on/off (also toggled live from the webapp); off releases the cameras and stops inference |
-| `enableVisualRadar` | **off** | Publish each georeferenced target as a synthetic `vessels.*` AIS blip (`VIS-` name). Data only — never alarms. Off by default to avoid confusion with real AIS |
+| `enableVisualRadar` | **off** | Publish each georeferenced target as a sensor target, `targets.camera:visionai-<camera>-<session>-<stable_id>` (`VIS-` name), which Freeboard-SK draws as a camera target and Target Fusion links to its AIS vessel. Data only — never alarms. Off by default |
 | `enableAisFusion` / `enableCollision` | on | Compute: AIS correlation + dark targets / CPA-TCPA + threat level |
-| `enableMob` / `notifyCollision` / `notifyDarkTarget` | on | Notify: `notifications.mob` / `…vision.collision.*` / `…vision.darkTarget.*` |
+| `enableMob` / `notifyCollision` / `notifyDarkTarget` | on | Notify: `notifications.mob` / `…navigation.closestApproach.visionai*` / `…vision.darkTarget.*`. One collision alarm per boat: none for a boat another plugin (e.g. Collision Alerts) already alarms ([details](../docs/signalk-paths.md#collision-alarms--one-per-boat)) |
 | `enableContextControl` | on | Steer active camera/confidence by SOG + time of day |
 | `detectClasses` | `person, vessel, buoy` | Object types to surface; empty => all |
 | `minConfidence` | 0.4 | Minimum detection confidence |
@@ -67,6 +67,7 @@ See [`docs/signalk-paths.md`](../docs/signalk-paths.md) for everything published
 `containerClient.ts` (REST/control to the container) · `nav.ts` (own-ship) ·
 `enrich.ts` (true bearing + georef) · `aisFusion.ts` (correlation + dark
 targets) · `cpa.ts` (CPA/TCPA) · `notifications.ts` (MOB/dark/collision) ·
-`publisher.ts` (`vision.*` deltas + synthetic vessels) · `geo.ts` (geodesy) ·
+`publisher.ts` (`vision.*` deltas + sensor targets) · `sensorTargets.ts`
+(target identity) · `alarmCoordination.ts` (one alarm per boat) · `geo.ts` (geodesy) ·
 `router.ts` (webapp API + proxy) · `skapp.ts` (webapp registration) ·
 `config.ts` (config schema + defaults) · `types.ts` (contract mirror).

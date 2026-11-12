@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { collectAisContacts, fuse } from '../src/aisFusion';
+import { collectAisContacts, fuse, isAisVessel } from '../src/aisFusion';
 import { withDefaults } from '../src/config';
 import { destinationPoint, deg2rad } from '../src/geo';
 import { EnrichedTarget } from '../src/types';
@@ -243,5 +243,18 @@ describe('aisFusion', () => {
     const res = fuse([visualTarget(brg, 610)], contacts, cfg); // label 'vessel'
     expect(res.targets[0].aisCorrelated).toBe(false);
     expect(res.darkTargetKeys).toContain('forward.1');
+  });
+});
+
+describe('isAisVessel', () => {
+  it('needs a 9-digit MMSI and an AIS class, as AIS correlation does', () => {
+    const ais = { sensors: { ais: { class: { value: 'A' } } } };
+    expect(isAisVessel('urn:mrn:imo:mmsi:230000001', ais)).toBe(true);
+    expect(isAisVessel('urn:mrn:imo:mmsi:230000001', { sensors: { ais: { class: 'B' } } })).toBe(true);
+    // An MMSI but no AIS class: a vessel some other sensor put in the model.
+    expect(isAisVessel('urn:mrn:imo:mmsi:230000001', { navigation: {} })).toBe(false);
+    expect(isAisVessel('urn:mrn:imo:mmsi:230000001', undefined)).toBe(false);
+    expect(isAisVessel('urn:mrn:imo:mmsi:2300', ais)).toBe(false);
+    expect(isAisVessel('urn:mrn:signalk:uuid:c0d79334-4e25-4245-8892-54e8ccc8021d', ais)).toBe(false);
   });
 });

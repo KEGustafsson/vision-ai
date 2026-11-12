@@ -9,10 +9,19 @@ import { ContainerClient, ControlBody, HealthInfo } from './containerClient';
 import { CpaEstimator } from './cpa';
 import { EventStream } from './eventStream';
 import { PluginConfig, schema, uiSchema, withDefaults } from './config';
-import { collectAisContacts, fuse } from './aisFusion';
+import { collectAisContacts, dropAisMatch, fuse, isAisVessel } from './aisFusion';
 import { enrichTarget } from './enrich';
-import { NotificationManager, degradedFaultKey } from './notifications';
+import {
+  AlarmCoordination,
+  NOTIFICATION_SOURCE,
+  NotificationManager,
+  TrackLinks,
+  degradedFaultKey,
+  overriddenAisMatches,
+} from './notifications';
+import { ForeignAlarmWatch, othersAlarmedRefs } from './alarmCoordination';
 import { Publisher } from './publisher';
+import { SessionTokens, readSameAs, sensorTargetContext, sensorTargetId } from './sensorTargets';
 import { readAttitude, readOwnShip } from './nav';
 import { AttitudeSmoother, AttitudeWatch } from './attitude';
 import { registerRoutes, SharedState } from './router';
@@ -29,6 +38,10 @@ export = function (app: ServerApp): Plugin {
   let publisher: Publisher | null = null;
   let notifier: NotificationManager | null = null;
   let cpa: CpaEstimator | null = null;
+  // Other producers' closest-approach alarms, re-checked as they are raised.
+  const foreignAlarms = new ForeignAlarmWatch();
+  let lastCycle: { all: EnrichedTarget[]; darkKeys: Set<string>; links: Map<string, string | null> } | null = null;
+  let recheckQueued = false;
   let processTimer: NodeJS.Timeout | null = null;
   let syncTimer: NodeJS.Timeout | null = null;
   let attitudeTimer: NodeJS.Timeout | null = null;
@@ -46,6 +59,9 @@ export = function (app: ServerApp): Plugin {
   // cycles so fuse() can keep a stable target on the same contact instead of
   // flapping its identity as the noisy monocular range wanders.
   let aisAssignment = new Map<string, string>();
+  // The current event-stream connection's token; see forgetPreviousConnection.
+  const sessionTokens = new SessionTokens();
+  let session: string | null = null;
   const lastEventByCamera = new Map<string, DetectionEvent>();
   const frameCount = new Map<string, number>();
   let activeCamera = 'forward';
@@ -76,14 +92,15 @@ export = function (app: ServerApp): Plugin {
       detectionEnabled = on;
       if (!on) {
         // Detection switched OFF by the operator: the chart must not keep
-        // showing vision contacts nobody is watching anymore. Retract and
-        // delete every synthetic AIS blip immediately (reset() nulls all
-        // leaves and removes the vessel contexts) instead of letting them
-        // age out through blipHoldS, and drop the target list so the REST
-        // API / captain webapp agree. Detection back ON simply repopulates
-        // from fresh events.
+        // showing vision contacts nobody is watching anymore. Withdraw every
+        // sensor target immediately (reset() publishes each one's track as
+        // lost) instead of letting them age out through blipHoldS, and drop
+        // the target list so the REST API / captain webapp agree. Detection
+        // back ON simply repopulates from fresh events.
         targets.clear();
         if (publisher) publisher.reset();
+        // Nor may a re-check between cycles alarm the withdrawn targets.
+        lastCycle = null;
       }
       // Push immediately so the webapp toggle takes effect without waiting for
       // the next periodic sync.
@@ -115,7 +132,7 @@ export = function (app: ServerApp): Plugin {
     // Detection is off: drop events entirely. The container tears its pipeline
     // down when disabled, but frames already in flight (or arriving before the
     // /control push lands) must not repopulate a target — setDetection(false)
-    // just wiped the map and retracted every chart blip.
+    // just wiped the map and withdrew every chart target.
     if (!detectionEnabled) return;
     // eventStream already rejected invalid/over-age timestamps; here we enforce
     // monotonic per-camera ordering so a buffered burst of older-but-not-stale
@@ -172,10 +189,15 @@ export = function (app: ServerApp): Plugin {
         if (!raw.is_person_in_water) continue;
         const t = enrichTarget(raw, ev.camera, own, cfg, seenAt);
         t.key = `${ev.camera}.mob-anon`;
+        t.session = session ?? undefined;
         targets.set(t.key, t);
         continue;
       }
       const t = enrichTarget(raw, ev.camera, own, cfg, seenAt);
+      // A coasted frame is the container's prediction: the last real
+      // detection stays the one the chart ages from.
+      t.observedAt = t.coasting ? targets.get(t.key)?.observedAt : seenAt;
+      t.session = session ?? undefined;
       targets.set(t.key, t);
     }
     pruneLabelSelection();
@@ -194,9 +216,9 @@ export = function (app: ServerApp): Plugin {
     const own = readOwnShip(app, cfg.ownNavMaxAgeS, now);
 
     // Age out stale tracks first so downstream sees only live targets. When
-    // visual radar is on, retain at least the publisher's blip hold window —
+    // visual radar is on, retain at least the publisher's hold window —
     // blipHoldS with the same two-process-cycle floor as publisher activeMs —
-    // so a held chart blip's target survives the detection gap it is masking
+    // so a held chart target survives the detection gap it is masking
     // (MOB/notification logic already guards against retained-but-stale
     // tracks re-counting).
     const timeoutMs = Math.max(
@@ -209,6 +231,10 @@ export = function (app: ServerApp): Plugin {
     pruneLabelSelection();
     const all = [...targets.values()];
 
+    // The fusion links as they stand now, read once: CPA and every alarm
+    // decision until the next cycle, re-checks included, use the same links,
+    // so no alarm names a vessel its assessment was not made for.
+    const links = readLinks(all);
     let darkKeys = new Set<string>();
     let aisCount = 0;
     // Scanning every vessel in the SignalK model (hundreds in a busy harbour)
@@ -219,12 +245,18 @@ export = function (app: ServerApp): Plugin {
         app.getPath('vessels'), own, cfg.ownAisMinRangeM, cfg.aisMaxAgeS * 1000, now);
       const res = fuse(all, contacts, cfg, aisAssignment);
       aisAssignment = res.assignment;
+      const overridden = overriddenAisMatches(all, trackLinks(links));
+      // Where a fusion link names a different vessel than this plugin's own
+      // match, the link wins before CPA, so no collision assessment is made
+      // from one vessel's AIS kinematics and raised under another's name: the
+      // track falls back to its own camera observation.
+      for (const t of all) if (overridden.has(t.key)) dropAisMatch(t);
       // Without an own-ship position there are no AIS contacts to compare
       // against (collectAisContacts returns nothing), so a "no AIS match" result
       // says nothing about the target. Same reasoning as the bearing gate in
       // fuse(): don't raise dark-target alerts a lost fix made unfalsifiable.
       darkKeys = own.position ? new Set(res.darkTargetKeys) : new Set<string>();
-      aisCount = res.aisCorrelatedCount;
+      aisCount = res.aisCorrelatedCount - overridden.size;
     } else if (aisAssignment.size > 0) {
       // Nothing to correlate — fusion off, or no visual target at all. Drop the
       // hysteresis state so a later cycle starts from live associations instead
@@ -234,13 +266,76 @@ export = function (app: ServerApp): Plugin {
     }
 
     if (cfg.enableCollision && cpa) cpa.update(all, own, cfg, now);
-    if (notifier) notifier.evaluate(all, darkKeys, now);
+    // Publish before alarming, so an alarm names a target the chart already has.
     if (publisher) {
-      publisher.publishTargets(all);
+      publisher.publishTargets(all, now);
       if (cfg.enableAisFusion) publisher.publishFusionSummary(darkKeys.size, aisCount);
     }
+    if (notifier) notifier.evaluate(all, darkKeys, now, alarmCoordination(all, links));
+    lastCycle = { all, darkKeys, links };
 
     publishSystemStats(now);
+  }
+
+  /** Re-run the alarm decisions on the last cycle's targets as soon as another
+   * producer raises or clears an alarm, so a boat is never alarmed twice, or
+   * not at all, for the rest of the cycle. Deferred a tick so the server has applied the delta to the model
+   * the coordination reads. */
+  function recheckAlarms(): void {
+    if (recheckQueued) return;
+    recheckQueued = true;
+    setImmediate(() => {
+      recheckQueued = false;
+      if (!notifier || !lastCycle) return;
+      try {
+        const { all, darkKeys, links } = lastCycle;
+        notifier.evaluate(all, darkKeys, Date.now(), alarmCoordination(all, links));
+      } catch (e) {
+        app.error(`vision-ai: alarm re-check failed: ${e}`);
+      }
+    });
+  }
+
+  /** The context a target is published under, or null. */
+  function publishedContext(t: EnrichedTarget): string | null {
+    const id = sensorTargetId(t);
+    const context = id === null ? null : sensorTargetContext(id);
+    return context !== null && publisher?.isPublished(context) ? context : null;
+  }
+
+  /** The fusion link on each published target, read from the model now. A
+   * target published later in the cycle is new and has none yet. */
+  function readLinks(all: EnrichedTarget[]): Map<string, string | null> {
+    const links = new Map<string, string | null>();
+    for (const t of all) {
+      const context = publishedContext(t);
+      if (context !== null) links.set(context, readSameAs(app, context));
+    }
+    return links;
+  }
+
+  /** Which targets are on the chart, and the fusion links read for them. */
+  function trackLinks(links: Map<string, string | null>): TrackLinks {
+    return { publishedContext, sameAs: (context) => links.get(context) ?? null };
+  }
+
+  /** What the notifier needs to alarm each boat once: which targets are on
+   * the chart, their fusion links, and what other plugins already alarm. */
+  function alarmCoordination(all: EnrichedTarget[], links: Map<string, string | null>): AlarmCoordination {
+    return {
+      ...trackLinks(links),
+      isAisVessel: (context) => {
+        if (!context.startsWith('vessels.')) return false;
+        try {
+          return isAisVessel(context.slice('vessels.'.length), app.getPath(context));
+        } catch {
+          return false;
+        }
+      },
+      // Read only when there is a boat that could be alarmed.
+      othersAlarmed:
+        all.length > 0 ? othersAlarmedRefs(app, NOTIFICATION_SOURCE) : new Set<string>(),
+    };
   }
 
   function publishSystemStats(now: number): void {
@@ -396,6 +491,36 @@ export = function (app: ServerApp): Plugin {
   let lastDegradedSig: string | null = null;
   let lastDegradedDetail: string | null = null;
 
+  /**
+   * Drop everything tracked over the previous event-stream connection. Track
+   * serials (`stable_id`) are unique within one container session only, and a
+   * container restart always drops the connection, so every new connection may
+   * be a new session whose serials start over. Its targets are withdrawn from
+   * the chart (track lost) and their CPA and AIS history forgotten before the
+   * first event on the new connection, so a new boat that receives a reused
+   * serial starts as a new target. The new connection also gets a new session
+   * token, which goes into every target id, so its targets never reuse an old
+   * context: a consumer that reads the model on a timer and missed the
+   * withdrawal still cannot mistake a new boat for an old one. A reconnect
+   * within one container session costs only a fresh start for its tracks.
+   */
+  function forgetPreviousConnection(): void {
+    session = sessionTokens.next(Date.now());
+    if (targets.size > 0) {
+      app.debug('vision-ai: event stream (re)connected — dropping the previous connection\'s targets');
+    }
+    targets.clear();
+    // A re-check must not replay the previous connection's targets.
+    lastCycle = null;
+    aisAssignment = new Map<string, string>();
+    lastEventTsByCamera.clear();
+    if (cpa) cpa.reset();
+    if (publisher) publisher.reset();
+    // Per-track MOB counts restart too: a reused key on the new connection is
+    // a different sighting. A raised MOB alarm keeps its hold.
+    if (notifier) notifier.forgetTracks();
+  }
+
   async function checkHealth(): Promise<void> {
     const c = client;
     if (!c || !notifier) return;
@@ -520,6 +645,7 @@ export = function (app: ServerApp): Plugin {
       publisher = new Publisher(app, pluginId, cfg);
       notifier = new NotificationManager(app, pluginId, cfg);
       cpa = new CpaEstimator();
+      foreignAlarms.start(app, NOTIFICATION_SOURCE, recheckAlarms);
 
       stream = new EventStream(
         client.wsUrl(),
@@ -552,7 +678,8 @@ export = function (app: ServerApp): Plugin {
           } else {
             notifier.clearStaleEvents();
           }
-        }
+        },
+        { onConnected: forgetPreviousConnection }
       );
       stream.start();
 
@@ -603,6 +730,8 @@ export = function (app: ServerApp): Plugin {
       attitudeInFlight = false;
       attitudeWatch = null;
       if (stream) stream.stop();
+      foreignAlarms.stop();
+      lastCycle = null;
       if (notifier) notifier.clearAll();
       if (publisher) publisher.reset();
       if (cpa) cpa.reset();

@@ -150,16 +150,18 @@ the plugin's WS consumer is receiving container events.
 **FAIL:** check the plugin's `containerUrl` points at `$NANO`; check reachability
 from the SignalK host to the container.
 
-### 3.2 synthetic vessels, vision.* tree & metadata
+### 3.2 camera targets, vision.* tree & metadata
 ```bash
-# synthetic AIS vessels — needs "Publish targets as synthetic AIS vessels" on:
-curl -s "$SK/signalk/v1/api/vessels" | jq '[keys[]|select(test("vision-"))]'
+# camera sensor targets — needs "Publish targets to the chart" on:
+curl -s "$SK/signalk/v1/api/targets" | jq '[keys[]|select(test("^camera:visionai-"))]'
 curl -s "$SK/signalk/v1/api/vessels/self/vision/fusion" | jq
 # metadata on the fps path (units only — no zones, by design):
 curl -s "$SK/signalk/v1/api/vessels/self/vision/system/inferenceFps/meta" | jq
 ```
-**PASS:** `vessels.urn:…:vision-<camera>-<id>` appear (with `navigation.position`
-+ `VIS-…` name) while targets are in view; `vision.fusion.darkTargetCount`/
+**PASS:** `targets.camera:visionai-<camera>-<id>` appear (with `navigation.position`
++ `VIS-…` name) while targets are in view, Freeboard-SK draws each as a camera
+target (orange ring), and with Target Fusion installed a boat AIS also reports
+gets a `sameAs` link and is drawn once; `vision.fusion.darkTargetCount`/
 `aisCorrelatedCount` present; `inferenceFps` meta carries `units:"Hz"`.
 
 ### 3.3 Live delta stream
@@ -173,8 +175,9 @@ curl -s "$SK/signalk/v1/api/vessels/self/vision/system/inferenceFps/meta" | jq
 ```
 (If `websocat` is unavailable I'll use a short Node/Python WS client instead.)
 **PASS:** live `vision.fusion.*` / `vision.system.*` deltas arrive at roughly the
-processing cadence. Synthetic-vessel position updates arrive on their own
-`vessels.urn:…:vision-*` contexts (subscribe with `"context":"vessels.*"`).
+processing cadence. Camera-target position updates arrive on their own
+`targets.camera:visionai-*` contexts (subscribe with `"context":"targets.*"`), one
+per new sighting, not on every processing cycle.
 
 ### 3.4 Plugin REST proxy (same-origin, behind SignalK auth)
 ```bash
@@ -198,13 +201,14 @@ done
 **PASS:** position + `headingTrue` at minimum. Only `navigation.headingTrue` is
 used — a magnetic heading is **not** converted (compass deviation is unknown; on
 Arabella the fluxgate plus variation read 33° off the GNSS true heading) and COG
-is never substituted. Without a true heading the synthetic vessels'
+is never substituted. Without a true heading the camera targets'
 `navigation.position` will be null (not published) and 4.2–4.4 can't run — fix
 the nav source first.
 
 ### 4.2 True-bearing check **[NEEDS YOU]**
-Pick a target visible in the camera and by eye/compass. Read its synthetic
-vessel's `navigation.position` (`vessels.urn:…:vision-<cam>-<id>`) and compare
+Pick a target visible in the camera and by eye/compass. Read its camera
+target's `navigation.position` (`targets.camera:visionai-<cam>-<id>`, named
+`VIS-<cam>-<overlay number>`) and compare
 the bearing from own-ship to that fix against the hand-compass bearing.
 **PASS:** within a few degrees once calibrated.
 
@@ -246,8 +250,15 @@ VISION_MODE=cpu VISION_MOCK_SOURCE=/path/clip.mp4 VISION_PORT=8001 \
   = `emergency` with a lat/lon in the message; it persists through brief dropouts
   (60 s hold) and clears afterwards.
 - **Collision:** with a closing target crossing the TCPA/CPA thresholds, expect
-  `notifications.vision.collision.*` `warn`→`alarm`; **PASS:** it fires and later
-  clears (`value:null`) when the risk passes.
+  `notifications.navigation.closestApproach.visionai*` `warn`→`alarm`; **PASS:**
+  it fires, Freeboard-SK draws the ring and the course lines to the closest
+  approach, and it later clears (`value:null`) when the risk passes.
+- **One alarm per boat:** with the Collision Alerts plugin enabled and
+  "Publish targets to the chart" on, the same encounter shows one alarm at a
+  time: Collision Alerts' (`…closestApproach.camera:visionai-*` or the AIS
+  vessel's id) once it raises one, vision-ai's (`…closestApproach.visionai*`)
+  only while Collision Alerts has none for that boat. A boat both cameras see, or that AIS also
+  reports, raises one alarm and no dark-target alert alongside it.
 ```bash
 curl -s "$SK/signalk/v1/api/vessels/self/notifications" | jq
 ```

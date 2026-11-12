@@ -27,15 +27,18 @@ bearing/range sensor and, using the boat's own position and heading from
 SignalK, produces:
 
 - 🎯 **Visual radar targets** — every detection becomes a true-bearing + range
-  track, georeferenced to a lat/lon and published as a synthetic AIS vessel
-  (`vessels.*` chart blip) when enabled.
+  track, georeferenced to a lat/lon and published as a Signal K camera sensor
+  target (`targets.camera:*`) when enabled. Freeboard-SK draws it as a camera
+  target, and with Target Fusion a boat AIS also reports is drawn once.
 - 🕶️ **Dark-target alerts** — visual targets are correlated against AIS; a
   vessel that is *seen but not transmitting AIS* is flagged as a collision
   hazard (`notifications.vision.darkTarget.*`).
 - 🆘 **Man-overboard detection** — a person detected in the water raises an
   `notifications.mob` **emergency** with the estimated drop position.
 - ⚠️ **Collision risk** — per-track CPA/TCPA with graded
-  `notifications.vision.collision.*` alarms.
+  `notifications.navigation.closestApproach.*` alarms, drawn on the chart, and
+  **one alarm per boat**: it stands down for boats the Collision Alerts plugin
+  or another producer already alarms.
 - 📺 **Captain webapp** — an annotated live MJPEG stream with a colour-coded
   target list and own-ship readout, embedded in the SignalK UI.
 - 🧭 **Context-aware control** — the plugin steers the container (active camera,
@@ -50,9 +53,11 @@ DeepStream backend.
 
 ![Captain webapp: annotated live camera stream with detection boxes, a colour-coded target list, and own-ship readout.](docs/images/Marine_Vision-AI.png)
 
-**Synthetic AIS vessels on the chart** — each detection georeferenced as a blip:
+**Detections on the chart** — each detection georeferenced (screenshot from the
+earlier synthetic-AIS output; chartplotters that show sensor targets now draw
+them as camera targets):
 
-![Chart view: camera-detected targets published as synthetic AIS vessels and drawn as blips on the map.](docs/images/synthetic_vessels.png)
+![Chart view: camera-detected targets georeferenced and drawn on the map.](docs/images/synthetic_vessels.png)
 
 **Jetson load** (`jtop`):
 
@@ -86,7 +91,7 @@ its **waterline row** into a **range** (monocular geometry — see
 boat's own heading and position to georeference the target, correlates it
 against AIS, and raises any MOB / collision / dark-target alerts.
 
-![The full detection process: the container decodes a camera frame, detects and tracks objects with a YOLO detector and tracker, computes a relative bearing from the pixel column and a range from the horizon depression or known size, then filters and emits a DetectionEvent; the plugin enriches it to a true bearing and lat/lon, fuses it with AIS, estimates CPA/TCPA, raises notifications, and publishes synthetic AIS vessels and vision.* paths to SignalK.](docs/images/detection-process.svg)
+![The full detection process: the container decodes a camera frame, detects and tracks objects with a YOLO detector and tracker, computes a relative bearing from the pixel column and a range from the horizon depression or known size, then filters and emits a DetectionEvent; the plugin enriches it to a true bearing and lat/lon, fuses it with AIS, estimates CPA/TCPA, raises notifications, and publishes camera sensor targets (targets.*) and vision.* paths to SignalK.](docs/images/detection-process.svg)
 
 ### Bearing & range from one camera
 
@@ -290,6 +295,8 @@ cd signalk-plugin && npm test        # geo, enrich, AIS fusion, CPA, publisher
 
 Vision-derived alerts are an *aid*, not a replacement for proper lookout, radar
 or AIS. Range is monocular and coarse, and auto-MOB is a best-effort guess —
-all alerting features are configurable and the synthetic-AIS-blip projection
-("Publish targets as synthetic AIS vessels" / `enableVisualRadar`) is **off by
-default** to avoid being confused with real AIS contacts.
+all alerting features are configurable. Publishing targets to the chart
+("Publish targets to the chart" / `enableVisualRadar`) is **off by default**.
+The alerts themselves — man overboard (`enableMob`), collision
+(`notifyCollision`) and dark target (`notifyDarkTarget`) — are **on by
+default**; turn off any you don't want raised.
