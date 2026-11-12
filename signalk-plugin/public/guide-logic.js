@@ -44,5 +44,50 @@
     return 'show';
   }
 
-  return { shouldAutoOpen, onSetupAnswer };
+  /**
+   * The guide's open(manual), with the /setup fetch it waits on. One fetch at
+   * a time; a manual request (the banner's button) made while an automatic
+   * one is pending is remembered, so the click is never lost: when the answer
+   * arrives the guide opens as for a manual request.
+   *
+   * deps: fetchSetup(outage) -> Promise; status() -> latest container status;
+   *       state() -> { open, hiddenFor, openAfterS }; show(); onError(err).
+   */
+  function createOpener(deps) {
+    let pending = false;
+    let manualWanted = false;
+
+    function open(manual) {
+      if (pending) {
+        if (manual) manualWanted = true;
+        return Promise.resolve('pending');
+      }
+      pending = true;
+      const before = deps.status();
+      const outage = before ? before.downSince : null;
+      return Promise.resolve()
+        .then(() => deps.fetchSetup(outage))
+        .then(
+          () => {
+            pending = false;
+            const asked = !!manual || manualWanted;
+            manualWanted = false;
+            const next = onSetupAnswer(outage, deps.status(), asked, deps.state());
+            if (next === 'refetch') return open(true);
+            if (next === 'show') deps.show();
+            return next;
+          },
+          (err) => {
+            pending = false;
+            manualWanted = false;
+            if (deps.onError) deps.onError(err);
+            return 'error';
+          }
+        );
+    }
+
+    return { open };
+  }
+
+  return { shouldAutoOpen, onSetupAnswer, createOpener };
 });

@@ -26,7 +26,6 @@
   let setupFor; // the outage (downSince) `setup` was fetched for
   let setupPending = null;
   let renderedVersion = null; // plugin version the rendered commands are for
-  let opening = false;
   let current = null; // hardware choice id; null until known or chosen
   let lastStatus = null;
   let hiddenFor = null; // downSince of the outage the user hid the guide for
@@ -313,27 +312,20 @@
 
   // ---- open / close ----------------------------------------------------------
 
-  /** `manual`: the user asked (the banner's button), so no delay applies. */
+  // `manual`: the user asked (the banner's button), so no delay applies. The
+  // fetch and the late-answer rules live in guide-logic.js (createOpener,
+  // onSetupAnswer), so a pending automatic open can't swallow a click and a
+  // late answer is decided on the latest status.
+  const opener = logic.createOpener({
+    fetchSetup,
+    status: () => lastStatus,
+    state: guideState,
+    show: () => show(),
+    // Without /setup the guide can't name the release; leave the banner up.
+    onError: () => {},
+  });
   function open(manual) {
-    if (opening) return;
-    opening = true;
-    const outage = lastStatus ? lastStatus.downSince : null;
-    fetchSetup(outage).then(
-      () => {
-        opening = false;
-        // The poll kept running while /setup loaded; decide again on the
-        // latest status (guide-logic.js onSetupAnswer), so the guide never
-        // opens after a reconnect, never shows a past outage's release, and
-        // a newer outage's automatic open still waits for its delay.
-        const next = logic.onSetupAnswer(outage, lastStatus, !!manual, guideState());
-        if (next === 'refetch') open(true);
-        else if (next === 'show') show();
-      },
-      () => {
-        // Without /setup the guide can't name the release; leave the banner up.
-        opening = false;
-      }
-    );
+    opener.open(!!manual);
   }
 
   function show() {

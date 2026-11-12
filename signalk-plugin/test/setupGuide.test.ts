@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 
 const require = createRequire(import.meta.url);
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { shouldAutoOpen, onSetupAnswer } = require('../public/guide-logic.js');
+const { shouldAutoOpen, onSetupAnswer, createOpener } = require('../public/guide-logic.js');
 
 const OUTAGE_1 = '2026-11-12T15:00:00.000Z';
 const OUTAGE_2 = '2026-11-12T15:05:00.000Z';
@@ -75,5 +75,107 @@ describe('onSetupAnswer: a /setup answer that arrives late', () => {
 
   it('does not open automatically for an outage the user hid while /setup loaded', () => {
     expect(onSetupAnswer(OUTAGE_1, down(OUTAGE_1, 60, true), false, { ...closed, hiddenFor: OUTAGE_1 })).toBe('wait');
+  });
+});
+
+// ---- createOpener: open() and the banner click around a pending /setup ------
+
+/** A /setup fetch the test answers by hand, recording which outage it was for. */
+function harness(initial: any) {
+  let status = initial;
+  const fetches: { outage: string | null; answer: () => void }[] = [];
+  let shown = 0;
+  const opener = createOpener({
+    fetchSetup: (outage: string | null) =>
+      new Promise<void>((resolve) => fetches.push({ outage, answer: () => resolve() })),
+    status: () => status,
+    state: () => ({ open: shown > 0, hiddenFor: null, openAfterS: 30 }),
+    show: () => { shown += 1; },
+  });
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  return {
+    opener, fetches, tick,
+    shown: () => shown,
+    setStatus: (s: any) => { status = s; },
+  };
+}
+
+describe('createOpener', () => {
+  it('opens automatically once the answer arrives for the same outage', async () => {
+    const h = harness(down(OUTAGE_1, 0, false));
+    const done = h.opener.open(false);
+    await h.tick();
+    expect(h.fetches).toHaveLength(1);
+    h.fetches[0].answer();
+    expect(await done).toBe('show');
+    expect(h.shown()).toBe(1);
+  });
+
+  it('fetches one /setup at a time', async () => {
+    const h = harness(down(OUTAGE_1, 0, false));
+    h.opener.open(false);
+    expect(await h.opener.open(false)).toBe('pending');
+    await h.tick();
+    expect(h.fetches).toHaveLength(1);
+  });
+
+  it('shows nothing when the container answers while /setup loads', async () => {
+    const h = harness(down(OUTAGE_1, 0, false));
+    const done = h.opener.open(false);
+    await h.tick();
+    h.setStatus(up);
+    h.fetches[0].answer();
+    expect(await done).toBe('discard');
+    expect(h.shown()).toBe(0);
+  });
+
+  it('keeps a banner click made while an automatic fetch is pending', async () => {
+    // An automatic open is fetching for OUTAGE_1; the container answers and
+    // goes silent again (OUTAGE_2, a container that answered before, inside
+    // its 30 s delay) and the user clicks the banner before the answer comes.
+    const h = harness(down(OUTAGE_1, 0, false));
+    const auto = h.opener.open(false);
+    await h.tick();
+    h.setStatus(down(OUTAGE_2, 3, true));
+    expect(await h.opener.open(true)).toBe('pending'); // the click, during the fetch
+    h.fetches[0].answer();
+    await h.tick();
+    // The click is honoured: OUTAGE_2's metadata is fetched at once...
+    expect(h.fetches.map((f) => f.outage)).toEqual([OUTAGE_1, OUTAGE_2]);
+    h.fetches[1].answer();
+    // ...and shown, without waiting for OUTAGE_2's delay.
+    expect(await auto).toBe('show');
+    expect(h.shown()).toBe(1);
+  });
+
+  it('without a click, a newer outage inside its delay does not open', async () => {
+    const h = harness(down(OUTAGE_1, 0, false));
+    const auto = h.opener.open(false);
+    await h.tick();
+    h.setStatus(down(OUTAGE_2, 3, true));
+    h.fetches[0].answer();
+    expect(await auto).toBe('wait');
+    expect(h.fetches).toHaveLength(1);
+    expect(h.shown()).toBe(0);
+  });
+
+  it('lets the next open fetch again after a failed /setup', async () => {
+    let fail = true;
+    let status = down(OUTAGE_1, 0, false);
+    let shown = 0;
+    const errors: unknown[] = [];
+    const opener = createOpener({
+      fetchSetup: () => (fail ? Promise.reject(new Error('HTTP 502')) : Promise.resolve()),
+      status: () => status,
+      state: () => ({ open: false, hiddenFor: null, openAfterS: 30 }),
+      show: () => { shown += 1; },
+      onError: (e: unknown) => errors.push(e),
+    });
+    expect(await opener.open(false)).toBe('error');
+    expect(errors).toHaveLength(1);
+    fail = false;
+    status = down(OUTAGE_1, 1, false);
+    expect(await opener.open(false)).toBe('show');
+    expect(shown).toBe(1);
   });
 });
