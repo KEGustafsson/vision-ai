@@ -33,7 +33,11 @@ function until(cond: () => boolean, timeoutMs = 6000): Promise<void> {
 const LONG_CYCLE_MS = 3000;
 const firstAlarmWithin = (cycleMs: number) => 3 * cycleMs + 1000;
 
-const fresh = (value: unknown) => ({ value, timestamp: new Date().toISOString() });
+// Stamped a moment in the past, as data a server received before the cycle
+// read it always is. Stamped "now" at read time, a value read even 1 ms after
+// the cycle took its clock would be future-dated, and AIS fusion drops a
+// future-dated fix (fail-closed), so the cycle would miss its AIS match.
+const fresh = (value: unknown) => ({ value, timestamp: new Date(Date.now() - 500).toISOString() });
 
 class FakeApp implements ServerApp {
   deltas: Delta[] = [];
