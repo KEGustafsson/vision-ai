@@ -24,7 +24,9 @@ import { Publisher } from './publisher';
 import { SessionTokens, readSameAs, sensorTargetContext, sensorTargetId } from './sensorTargets';
 import { readAttitude, readOwnShip } from './nav';
 import { AttitudeSmoother, AttitudeWatch } from './attitude';
-import { registerRoutes, SharedState } from './router';
+import { redactUrl, registerRoutes, SharedState } from './router';
+import { ContainerHealth, containerDownMessage, describeError } from './containerStatus';
+import { HostInfo, readHostInfo } from './hostInfo';
 import { Plugin, ServerApp } from './skapp';
 import { DetectionEvent, EnrichedTarget, LatLon } from './types';
 import { isNight } from './geo';
@@ -72,6 +74,11 @@ export = function (app: ServerApp): Plugin {
   // here (not in cfg) so a live toggle isn't reverted by the next sync.
   let detectionEnabled = true;
   let maxTargets = cfg.maxTargets;
+  // Reachability of the container for the webapp's setup guide; replaced on
+  // every start so a new containerUrl starts from "not checked yet".
+  let health = new ContainerHealth(cfg.containerUrl);
+  // Read once: the hardware does not change while the server runs.
+  let hostInfo: HostInfo | null = null;
 
   const shared: SharedState = {
     get targets() {
@@ -87,6 +94,13 @@ export = function (app: ServerApp): Plugin {
         detectionEnabled,
         maxTargets,
       };
+    },
+    get container() {
+      return health.snapshot();
+    },
+    host() {
+      if (!hostInfo) hostInfo = readHostInfo();
+      return hostInfo;
     },
     setDetection(on: boolean) {
       detectionEnabled = on;
@@ -364,7 +378,10 @@ export = function (app: ServerApp): Plugin {
         cfg.enableAttitudeCompensation && sample ? sample.attitude_compensated === true : undefined,
       perCameraCounts,
     });
-    if (app.setPluginStatus) {
+    // While the container is down the admin shows the outage (set as the
+    // plugin's error in checkHealth); a green "0 targets" here would read as
+    // a healthy, empty sea.
+    if (app.setPluginStatus && !containerDownActive) {
       app.setPluginStatus(
         `${targets.size} targets, ${fps.toFixed(1)} fps, active=${activeCamera}`
       );
@@ -525,11 +542,13 @@ export = function (app: ServerApp): Plugin {
     const c = client;
     if (!c || !notifier) return;
     let info: HealthInfo;
+    const h = health;
     try {
       info = await c.health();
     } catch (e) {
       // Stopped mid-poll: don't re-raise a notification clearAll() just retracted.
       if (client !== c || !notifier) return;
+      h.markDown(e);
       // Container unreachable supersedes any status-derived alert: clear a
       // previously-latched degraded/label warning so it can't linger
       // contradicting the containerDown alarm through a sustained outage.
@@ -546,16 +565,20 @@ export = function (app: ServerApp): Plugin {
       // down transition; the poll keeps running and clears it on recovery.
       if (!containerDownActive) {
         containerDownActive = true;
-        const msg = `Vision container unreachable at ${cfg.containerUrl} (${e}). No detections or video.`;
+        const msg = containerDownMessage(redactUrl(cfg.containerUrl));
         notifier.setContainerDown(msg);
-        app.error(`vision-ai: ${msg}`);
+        if (app.setPluginError) app.setPluginError(msg);
+        app.error(`vision-ai: ${msg} (${describeError(e)})`);
       }
       return;
     }
     if (client !== c || !notifier) return;
+    h.markUp();
     if (containerDownActive) {
       containerDownActive = false;
       notifier.clearContainerDown();
+      // The next process cycle puts the normal status back.
+      if (app.setPluginStatus) app.setPluginStatus('Vision container connected');
       app.debug('vision-ai: container reachable again');
     }
 
@@ -642,6 +665,7 @@ export = function (app: ServerApp): Plugin {
       detectionEnabled = cfg.enableDetection;
       maxTargets = cfg.maxTargets;
       client = new ContainerClient(cfg.containerUrl);
+      health = new ContainerHealth(cfg.containerUrl);
       publisher = new Publisher(app, pluginId, cfg);
       notifier = new NotificationManager(app, pluginId, cfg);
       cpa = new CpaEstimator();
@@ -752,6 +776,7 @@ export = function (app: ServerApp): Plugin {
       lastStatsAt = 0;
       lastMismatchSig = null;
       containerDownActive = false;
+      health = new ContainerHealth(cfg.containerUrl);
       lastDegradedSig = null;
       lastDegradedDetail = null;
       stream = null;

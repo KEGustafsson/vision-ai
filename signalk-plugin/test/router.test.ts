@@ -122,6 +122,10 @@ function buildRouter(containerUrl: string): Map<string, Handler> {
     targets: [],
     ownShip: {} as any,
     system: { activeCamera: 'forward', cameras: ['forward'], detectionEnabled: true, maxTargets: 20 },
+    container: {
+      url: containerUrl, reachable: true, everConnected: true, downSince: null, downForS: 0, lastError: null,
+    },
+    host: () => ({ arch: 'arm64', l4t: null, inContainer: false, recommended: 'cpu' }),
     setDetection: () => {},
     setMaxTargets: () => {},
     client: () => ({ streamUrl: () => `${containerUrl}/stream/forward.mjpg` }) as any,
@@ -217,4 +221,34 @@ describe('proxyStream across a container restart', () => {
       await new Promise<void>((r) => plugin.close(() => r()));
     }
   }, 20000);
+});
+
+// ---- /targets and /setup: what the container setup guide reads -------------
+
+function call(routes: Map<string, Handler>, path: string): any {
+  let body: any;
+  const res = { set: () => res, json: (b: any) => { body = b; }, status: () => res };
+  routes.get(path)!({}, res);
+  return body;
+}
+
+describe('setup guide routes', () => {
+  it('/targets carries the container status, without credentials in its URL', () => {
+    const routes = buildRouter('http://user:secret@127.0.0.1:7000');
+    const c = call(routes, '/targets').container;
+    expect(c.reachable).toBe(true);
+    expect(c.url).not.toContain('secret');
+    expect(c.url).toBe('http://127.0.0.1:7000/');
+  });
+
+  it("/setup points at the container release of the plugin's own version", async () => {
+    const pkg = JSON.parse((await import('fs')).readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
+    const s = call(buildRouter('http://127.0.0.1:7000'), '/setup');
+    expect(s.version).toBe(pkg.version);
+    expect(s.releaseTag).toBe(`v${pkg.version}`);
+    expect(s.downloadUrl).toBe(`https://github.com/KEGustafsson/vision-ai/releases/download/v${pkg.version}`);
+    expect(s.image).toBe('ghcr.io/kegustafsson/vision-ai');
+    expect(s.host).toEqual({ arch: 'arm64', l4t: null, inContainer: false, recommended: 'cpu' });
+    expect(s.container.reachable).toBe(true);
+  });
 });
