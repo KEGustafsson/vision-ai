@@ -1,0 +1,128 @@
+name: Release
+
+# Push a tag vX.Y.Z (matching signalk-plugin/package.json) to release:
+#
+#   1. the full CI suite runs on the tagged commit;
+#   2. every vision-service image is built and pushed to GHCR as
+#      ghcr.io/<owner>/vision-ai:X.Y.Z-<variant> (and the bare <variant> tag);
+#   3. a GitHub Release is created with the notes from signalk-plugin/CHANGELOG.md,
+#      the deploy/ compose files pinned to X.Y.Z, and the plugin's npm tarball.
+#
+# The plugin's setup guide downloads its compose file from the release whose
+# version matches the plugin, so the container a user installs always speaks
+# the same DetectionEvent contract as the plugin that told them to install it.
+# Versions below 1.0.0, or with a pre-release suffix, are marked pre-release.
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      prerelease: ${{ steps.v.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          pkg=$(node -p "require('./signalk-plugin/package.json').version")
+          if [ "$version" != "$pkg" ]; then
+            echo "::error::Tag $TAG does not match signalk-plugin/package.json version $pkg."
+            exit 1
+          fi
+          if ! grep -q "^## \[$version\]" signalk-plugin/CHANGELOG.md; then
+            echo "::error::signalk-plugin/CHANGELOG.md has no '## [$version]' section."
+            exit 1
+          fi
+          case "$version" in 0.*|*-*) pre=true ;; *) pre=false ;; esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "prerelease=$pre" >> "$GITHUB_OUTPUT"
+
+  ci:
+    needs: check
+    uses: ./.github/workflows/ci.yml
+
+  images:
+    needs: check
+    uses: ./.github/workflows/docker-images.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      version: ${{ needs.check.outputs.version }}
+      push: true
+      scope: all
+      latest: ${{ needs.check.outputs.prerelease == 'false' }}
+
+  release:
+    needs: [check, ci, images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: signalk-plugin/package-lock.json
+
+      - name: Pack the plugin
+        working-directory: signalk-plugin
+        run: |
+          npm ci
+          npm run build
+          npm pack
+          mkdir -p ../dist && mv signalk-vision-ai-*.tgz ../dist/
+
+      - name: Pin the compose files to this release
+        run: |
+          for f in deploy/docker-compose.*.yml; do
+            sed "s/\${VISION_AI_VERSION:-edge}/\${VISION_AI_VERSION:-$VERSION}/g" "$f" > "dist/$(basename "$f")"
+            if grep -q ':-edge}' "dist/$(basename "$f")"; then
+              echo "::error::$f still points at edge after pinning."
+              exit 1
+            fi
+          done
+          ls -l dist
+
+      - name: Release notes from the changelog
+        run: |
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on && /^\[[^]]+\]: / { next }
+            on { print }
+          ' signalk-plugin/CHANGELOG.md > notes.md
+          {
+            echo
+            echo "## Install"
+            echo
+            echo "Install **Marine Vision-AI** from the Signal K App Store, then open its webapp:"
+            echo "while no vision container answers, it shows step-by-step setup for your hardware."
+            echo
+            echo "Container images: \`ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/vision-ai:$VERSION-<variant>\`"
+            echo "(mock, cpu, jetson, deepstream, deepstream-xavier). The compose files below pull them."
+          } >> notes.md
+          cat notes.md
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PRERELEASE: ${{ needs.check.outputs.prerelease }}
+        run: |
+          flags=""
+          if [ "$PRERELEASE" = true ]; then flags="--prerelease"; fi
+          # shellcheck disable=SC2086
+          gh release create "v$VERSION" dist/* \
+            --title "v$VERSION" --notes-file notes.md --verify-tag $flags

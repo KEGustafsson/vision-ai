@@ -1,0 +1,44 @@
+# Marine Vision-AI: Jetson Orin (JetPack 6) with the TensorRT backend, from the
+# published image. Needs the NVIDIA Container Runtime.
+#
+# Camera addresses come from .env next to this file (see docker-compose.cpu.yml).
+# The TensorRT engine is specific to the board, so it is built once ON the
+# Jetson, into the "models" volume, before the first start:
+#
+#   docker compose -f docker-compose.jetson.yml run --rm vision-service \
+#     python3 scripts/export_engine.py --weights models/yolo11n.pt --imgsz 640
+#   docker compose -f docker-compose.jetson.yml up -d
+#
+# Calibration: see docker-compose.cpu.yml.
+services:
+  vision-service:
+    image: ghcr.io/kegustafsson/vision-ai:${VISION_AI_VERSION:-edge}-jetson
+    container_name: vision-service
+    restart: unless-stopped
+    runtime: nvidia
+    environment:
+      VISION_MODE: jetson
+      VISION_MODEL_ENGINE: yolo11n.engine
+      VISION_CAMERA_FORWARD_URL: ${VISION_CAMERA_FORWARD_URL:?set VISION_CAMERA_FORWARD_URL in .env}
+      VISION_CAMERA_AFT_URL: ${VISION_CAMERA_AFT_URL:?set VISION_CAMERA_AFT_URL in .env}
+    volumes:
+      # Starts as a copy of the image's models/ (the YOLO11n weights); the engine
+      # built above lands here. Named per release, because an engine only runs on
+      # the TensorRT it was built with: after an update, build it again.
+      - models:/opt/vision-service/models
+      # - ./config:/opt/vision-service/config:ro
+    ports:
+      - "127.0.0.1:7000:7000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+volumes:
+  models:
+    name: vision-ai-models-${VISION_AI_VERSION:-edge}

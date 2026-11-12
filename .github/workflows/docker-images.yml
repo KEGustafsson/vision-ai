@@ -1,0 +1,167 @@
+name: Docker images
+
+# Reusable: builds the vision-service images and, when asked, pushes them to
+# ghcr.io/<owner>/vision-ai. Called by docker.yml (pull requests and main) and
+# by release.yml (version tags). Every variant builds on a native runner for its
+# architecture, so no image is built under emulation.
+#
+#   Tag                    Dockerfile                    Platforms       For
+#   <version>-mock         Dockerfile.cpu                amd64, arm64    bench tests of the plugin
+#   <version>-cpu          Dockerfile.cpu (detection)    amd64, arm64    any PC or Pi, no GPU
+#   <version>-jetson       Dockerfile                    arm64           Jetson Orin, TensorRT
+#   <version>-deepstream   Dockerfile.deepstream         arm64           Jetson Orin, DeepStream 7.1
+#   <version>-deepstream-xavier  Dockerfile.deepstream.xavier  arm64     Jetson Xavier, DeepStream 6.3
+#
+# <version> is "edge" for builds of main, or the release version (e.g. 0.1.0),
+# in which case the variant name alone (e.g. "deepstream") is also moved to it.
+# Each arch is first pushed as <tag>-<arch>, then joined into one multi-arch tag.
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Image version: "edge", or a release version such as 0.1.0'
+        type: string
+        required: true
+      push:
+        description: Push the images to GHCR
+        type: boolean
+        default: false
+      scope:
+        description: '"all" builds every variant; "light" only mock and cpu (amd64)'
+        type: string
+        default: all
+      latest:
+        description: Also move the bare variant tags (e.g. "deepstream") to this build
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  # The YOLO11n weights baked into the cpu, jetson and DeepStream images. Pinned
+  # to an Ultralytics assets release so every build starts from the same file.
+  YOLO11N_URL: https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.pt
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+      variants: ${{ steps.plan.outputs.variants }}
+      image: ${{ steps.plan.outputs.image }}
+    steps:
+      - id: plan
+        env:
+          SCOPE: ${{ inputs.scope }}
+          OWNER: ${{ github.repository_owner }}
+        run: |
+          all='[
+            {"variant":"mock","dockerfile":"Dockerfile.cpu","args":"WITH_DETECTION=0","arch":"amd64","runner":"ubuntu-latest","weights":false},
+            {"variant":"mock","dockerfile":"Dockerfile.cpu","args":"WITH_DETECTION=0","arch":"arm64","runner":"ubuntu-24.04-arm","weights":false},
+            {"variant":"cpu","dockerfile":"Dockerfile.cpu","args":"WITH_DETECTION=1","arch":"amd64","runner":"ubuntu-latest","weights":true},
+            {"variant":"cpu","dockerfile":"Dockerfile.cpu","args":"WITH_DETECTION=1","arch":"arm64","runner":"ubuntu-24.04-arm","weights":true},
+            {"variant":"jetson","dockerfile":"Dockerfile","args":"","arch":"arm64","runner":"ubuntu-24.04-arm","weights":true},
+            {"variant":"deepstream","dockerfile":"Dockerfile.deepstream","args":"","arch":"arm64","runner":"ubuntu-24.04-arm","weights":true},
+            {"variant":"deepstream-xavier","dockerfile":"Dockerfile.deepstream.xavier","args":"","arch":"arm64","runner":"ubuntu-24.04-arm","weights":true}
+          ]'
+          if [ "$SCOPE" = light ]; then
+            matrix=$(echo "$all" | jq -c '[.[] | select((.variant=="mock" or .variant=="cpu") and .arch=="amd64")]')
+          else
+            matrix=$(echo "$all" | jq -c '.')
+          fi
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+          echo "variants=$(echo "$matrix" | jq -c '[.[].variant] | unique')" >> "$GITHUB_OUTPUT"
+          # GHCR names must be lowercase.
+          echo "image=ghcr.io/${OWNER,,}/vision-ai" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: plan
+    name: build ${{ matrix.variant }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # The Jetson and DeepStream base images are several GB each, and the
+      # DeepStream builds pull two of them. Clear the runner's preinstalled
+      # toolchains first so the layers fit on its disk.
+      - name: Free disk space
+        if: matrix.variant != 'mock'
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL \
+                      /usr/local/share/boost /usr/local/.ghcup /usr/share/swift || true
+          sudo docker image prune --all --force || true
+          df -h /
+
+      - name: Fetch the YOLO11n weights
+        if: matrix.weights
+        working-directory: vision-service
+        run: |
+          curl -fsSL --retry 4 -o models/yolo11n.pt "$YOLO11N_URL"
+          sha256sum models/yolo11n.pt
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        if: inputs.push
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build${{ inputs.push && ' and push' || '' }}
+        uses: docker/build-push-action@v6
+        with:
+          context: vision-service
+          file: vision-service/${{ matrix.dockerfile }}
+          platforms: linux/${{ matrix.arch }}
+          build-args: ${{ matrix.args }}
+          push: ${{ inputs.push }}
+          tags: ${{ needs.plan.outputs.image }}:${{ inputs.version }}-${{ matrix.variant }}-${{ matrix.arch }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ inputs.version }}
+            org.opencontainers.image.title=vision-ai ${{ matrix.variant }}
+            org.opencontainers.image.description=Marine Vision-AI vision service (${{ matrix.variant }})
+          cache-from: type=registry,ref=${{ needs.plan.outputs.image }}:buildcache-${{ matrix.variant }}-${{ matrix.arch }}
+          cache-to: ${{ inputs.push && format('type=registry,ref={0}:buildcache-{1}-{2},mode=min', needs.plan.outputs.image, matrix.variant, matrix.arch) || '' }}
+
+  manifest:
+    needs: [plan, build]
+    if: inputs.push
+    name: tag ${{ matrix.variant }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        variant: ${{ fromJSON(needs.plan.outputs.variants) }}
+    steps:
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Join the per-arch images into one tag
+        env:
+          IMAGE: ${{ needs.plan.outputs.image }}
+          VERSION: ${{ inputs.version }}
+          VARIANT: ${{ matrix.variant }}
+          LATEST: ${{ inputs.latest }}
+          MATRIX: ${{ needs.plan.outputs.matrix }}
+        run: |
+          sources=$(echo "$MATRIX" | jq -r --arg v "$VARIANT" --arg img "$IMAGE" --arg ver "$VERSION" \
+            '.[] | select(.variant==$v) | "\($img):\($ver)-\($v)-\(.arch)"')
+          tags="-t $IMAGE:$VERSION-$VARIANT"
+          if [ "$LATEST" = true ]; then tags="$tags -t $IMAGE:$VARIANT"; fi
+          # shellcheck disable=SC2086
+          docker buildx imagetools create $tags $sources
+          docker buildx imagetools inspect "$IMAGE:$VERSION-$VARIANT"
