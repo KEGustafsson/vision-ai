@@ -27,9 +27,10 @@ dest=$ds_dir/yolo11n_ds.onnx
 # ONNX, pgie configs and labels, and nvinfer would quietly rebuild an engine
 # from that old ONNX rather than fail. Those compose files therefore set
 # VISION_DS_SYNC_FROM_IMAGE=1: when the image's build identity differs from the
-# one recorded in the volume, the image's own files are copied back in and the
-# old engines removed, so the new image runs what it shipped with. Files the
-# user added (another model's ONNX, its engine) are kept. Source builds, which
+# one recorded in the volume, the image's own files are copied back in and
+# every engine in the volume removed, so the new image runs what it shipped
+# with. Other files the user added (another model's ONNX) are kept, but their
+# engines go too: nvinfer rebuilds them on first use. Source builds, which
 # bind-mount the git checkout's deepstream/, never set it: their files belong
 # to the checkout.
 if [ "${VISION_DS_SYNC_FROM_IMAGE:-0}" = "1" ] && [ -f "$image_dir/.image-id" ]; then
@@ -37,8 +38,18 @@ if [ "${VISION_DS_SYNC_FROM_IMAGE:-0}" = "1" ] && [ -f "$image_dir/.image-id" ];
     have=$(cat "$ds_dir/.image-id" 2>/dev/null || true)
     if [ "$want" != "$have" ]; then
         # Fail fast (set -e) rather than start on a half-refreshed directory.
+        # The volume's identity goes first and the new one is written last,
+        # through a rename, so a refresh that is interrupted or fails part way
+        # leaves no identity behind and simply runs again on the next start.
+        rm -f "$ds_dir/.image-id" "$ds_dir/.image-id.tmp"
         rm -f "$ds_dir"/*.engine
-        cp -R "$image_dir"/. "$ds_dir"/
+        for f in "$image_dir"/* "$image_dir"/.[!.]*; do
+            [ -e "$f" ] || continue                  # an unmatched glob
+            [ "$(basename "$f")" = ".image-id" ] && continue
+            cp -R "$f" "$ds_dir"/
+        done
+        cp "$image_dir/.image-id" "$ds_dir/.image-id.tmp"
+        mv -f "$ds_dir/.image-id.tmp" "$ds_dir/.image-id"
         echo "deepstream-entrypoint: refreshed $ds_dir from the image" \
              "(image ${want}, volume had ${have:-none}); old engines removed"
     fi

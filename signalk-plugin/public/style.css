@@ -216,6 +216,8 @@ tr.mob td { background: rgba(234, 84, 85, 0.28); font-weight: 700; }
 .cs-steps { list-style: none; margin: 0; padding: 0; display: grid; gap: 14px; counter-reset: cs-step; }
 .cs-steps > li { display: grid; grid-template-columns: 26px 1fr; gap: 10px; counter-increment: cs-step; min-width: 0; }
 .cs-steps > li::before { content: counter(cs-step); width: 22px; height: 22px; border-radius: 6px; margin-top: 1px; display: grid; place-items: center; font-size: 12px; font-weight: 700; background: #10172b; border: 1px solid #2a3550; color: var(--muted); }
+.cs-steps > li.cs-choose { display: block; color: var(--muted); font-size: 13px; }
+.cs-steps > li.cs-choose::before { content: none; }
 .cs-st { display: grid; gap: 6px; min-width: 0; }
 .cs-st-t { font-weight: 600; }
 .cs-st-d { color: var(--muted); font-size: 13px; line-height: 1.45; }

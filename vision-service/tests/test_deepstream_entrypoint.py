@@ -117,3 +117,34 @@ def test_still_seeds_a_missing_onnx(tmp_path):
     r = _run(t, sync=False)
     assert r.returncode == 0, r.stderr
     assert (t["vol"] / "yolo11n_ds.onnx").read_text() == "seed onnx\n"
+
+
+def test_an_interrupted_refresh_is_retried(tmp_path):
+    # The identity is committed only after every file is copied: if the copy
+    # fails, the volume must not claim to be up to date, or the next start
+    # would skip the refresh and run half-copied files.
+    t = _tree(tmp_path)
+    _old_volume(t["vol"])
+    # A directory in the image whose name is a plain file in the volume: cp
+    # cannot overwrite a non-directory with a directory, even as root.
+    (t["image"] / "trackers").mkdir()
+    (t["image"] / "trackers" / "nvdcf.yml").write_text("cfg\n")
+    (t["vol"] / "trackers").write_text("in the way\n")
+    r = _run(t, sync=True)
+    assert r.returncode != 0, "the copy was expected to fail"
+    assert not (t["vol"] / ".image-id").exists()
+    (t["vol"] / "trackers").unlink()
+    r = _run(t, sync=True)
+    assert r.returncode == 0, r.stderr
+    assert (t["vol"] / ".image-id").read_text().strip() == "image-2"
+    assert (t["vol"] / "pgie_yolo11n.txt").read_text() == "new pgie\n"
+
+
+def test_writes_the_identity_last(tmp_path):
+    # Only the payload is copied in the loop; the identity file is written by a
+    # rename after it, never by the bulk copy.
+    script = SCRIPT.read_text()
+    loop = script.index('for f in "$image_dir"/*')
+    commit = script.index('mv -f "$ds_dir/.image-id.tmp" "$ds_dir/.image-id"')
+    assert loop < commit
+    assert '[ "$(basename "$f")" = ".image-id" ] && continue' in script

@@ -134,10 +134,12 @@ docker compose -f docker-compose.deepstream.yml up -d
 
 On DeepStream the container notices that the image changed and, on its first
 start, copies the new image's ONNX, pgie configs and labels into its volume
-and deletes the old engine, then builds a new one (several minutes again). It
-keeps any files you added, such as another model's ONNX, but an edit made inside
-the volume to one of the image's own files (say a pgie setting) is replaced:
-keep such tuning in a source build, or re-apply it. The same happens when
+and deletes every engine in it, then builds a new one (several minutes again).
+Files you added, such as another model's ONNX, are kept, but their engines are
+deleted too, so the first start with that model rebuilds its engine as well.
+An edit made inside the volume to one of the image's own files (say a pgie
+setting) is replaced: keep such tuning in a source build, or re-apply it. If a
+refresh is interrupted, the next start runs it again. The same happens when
 you pull a new `edge` image, so it never runs the previous image's model or
 settings.
 

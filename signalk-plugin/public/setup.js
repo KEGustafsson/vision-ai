@@ -22,9 +22,12 @@
   const OPEN_AFTER_S = 30;
   const DIR = '~/vision-ai';
 
-  let setup = null; // GET /setup, fetched when first needed
+  let setup = null; // GET /setup, fetched again for every new outage
+  let setupFor; // the outage (downSince) `setup` was fetched for
   let setupPending = null;
-  let current = null; // hardware choice id
+  let renderedVersion = null; // plugin version the rendered commands are for
+  let opening = false;
+  let current = null; // hardware choice id; null until known or chosen
   let lastStatus = null;
   let hiddenFor = null; // downSince of the outage the user hid the guide for
   let wasOpen = false;
@@ -147,12 +150,15 @@
     cpu: 'a computer without a Jetson GPU',
   };
 
-  function fetchSetup() {
-    if (setup) return Promise.resolve(setup);
+  // The release the commands point at must match the plugin, and the plugin
+  // can be updated while this page stays open, so /setup is fetched again for
+  // every new outage rather than once per page load.
+  function fetchSetup(outage) {
+    if (setup && setupFor === outage) return Promise.resolve(setup);
     if (!setupPending) {
       setupPending = fetch(`${API}/setup`, { cache: 'no-store' })
         .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
-        .then((s) => { setup = s; return s; })
+        .then((s) => { setup = s; setupFor = outage; return s; })
         .finally(() => { setupPending = null; });
     }
     return setupPending;
@@ -208,6 +214,20 @@
 
   function renderSteps() {
     const h = HW.find((x) => x.id === current);
+    if (!h) {
+      // No hint about the computer (Signal K in a container, or an unknown
+      // board): show no commands until the user picks the hardware, rather
+      // than guess and hand them the wrong image.
+      $('csCamSec').hidden = true;
+      $('csStepsNum').textContent = '2';
+      $('csMockWarn').hidden = true;
+      $('csDoc').href = 'https://github.com/KEGustafsson/vision-ai/blob/main/docs/release.md';
+      const li = document.createElement('li');
+      li.className = 'cs-choose';
+      li.textContent = 'Choose the hardware above to see its commands.';
+      $('csSteps').replaceChildren(li);
+      return;
+    }
     $('csCamSec').hidden = !h.cams;
     $('csStepsNum').textContent = h.cams ? '3' : '2';
     $('csMockWarn').hidden = h.id !== 'mock';
@@ -292,14 +312,27 @@
   // ---- open / close ----------------------------------------------------------
 
   function open() {
-    if (!setup) {
-      fetchSetup().then(open, () => {
+    if (opening) return;
+    opening = true;
+    const outage = lastStatus ? lastStatus.downSince : null;
+    fetchSetup(outage).then(
+      () => {
+        opening = false;
+        show();
+      },
+      () => {
         // Without /setup the guide can't name the release; leave the banner up.
-      });
-      return;
-    }
-    if (!current) {
-      current = (setup.host && setup.host.recommended) || 'orin-ds';
+        opening = false;
+      }
+    );
+  }
+
+  function show() {
+    if (renderedVersion !== setup.version) {
+      // First open, or the plugin was updated since: rebuild for its release.
+      // Pre-select only a real hint; the user's own choice is kept.
+      if (renderedVersion === null) current = (setup.host && setup.host.recommended) || null;
+      renderedVersion = setup.version;
       renderHost();
       renderChoices();
       renderSteps();
