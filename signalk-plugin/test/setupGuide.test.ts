@@ -159,6 +159,70 @@ describe('createOpener', () => {
     expect(h.shown()).toBe(0);
   });
 
+  it('retries a pending click once for a newer outage when the old fetch fails', async () => {
+    const answers: Array<'ok' | 'fail'> = ['fail', 'ok'];
+    const outages: (string | null)[] = [];
+    let status = down(OUTAGE_1, 0, false);
+    let shown = 0;
+    const opener = createOpener({
+      fetchSetup: (outage: string | null) => {
+        outages.push(outage);
+        const a = answers.shift();
+        // Each fetch settles only after the test has moved the status on.
+        return new Promise<void>((resolve, reject) => setTimeout(() => (a === 'ok' ? resolve() : reject(new Error('HTTP 502'))), 5));
+      },
+      status: () => status,
+      state: () => ({ open: shown > 0, hiddenFor: null, openAfterS: 30 }),
+      show: () => { shown += 1; },
+    });
+    const auto = opener.open(false);
+    status = down(OUTAGE_2, 3, true);
+    expect(await opener.open(true)).toBe('pending'); // the click, during the failing fetch
+    expect(await auto).toBe('show');
+    expect(outages).toEqual([OUTAGE_1, OUTAGE_2]);
+    expect(shown).toBe(1);
+  });
+
+  it('stops after one retry when the newer outage fetch fails too', async () => {
+    const outages: (string | null)[] = [];
+    let status = down(OUTAGE_1, 0, false);
+    const errors: unknown[] = [];
+    const opener = createOpener({
+      fetchSetup: (outage: string | null) => {
+        outages.push(outage);
+        return new Promise<void>((_, reject) => setTimeout(() => reject(new Error('HTTP 502')), 5));
+      },
+      status: () => status,
+      state: () => ({ open: false, hiddenFor: null, openAfterS: 30 }),
+      show: () => {},
+      onError: (e: unknown) => errors.push(e),
+    });
+    const auto = opener.open(false);
+    status = down(OUTAGE_2, 3, true);
+    await opener.open(true);
+    expect(await auto).toBe('error');
+    expect(outages).toEqual([OUTAGE_1, OUTAGE_2]);
+    expect(errors).toHaveLength(1);
+  });
+
+  it('does not retry a failed fetch without a click', async () => {
+    const outages: (string | null)[] = [];
+    let status = down(OUTAGE_1, 0, false);
+    const opener = createOpener({
+      fetchSetup: (outage: string | null) => {
+        outages.push(outage);
+        return new Promise<void>((_, reject) => setTimeout(() => reject(new Error('HTTP 502')), 5));
+      },
+      status: () => status,
+      state: () => ({ open: false, hiddenFor: null, openAfterS: 30 }),
+      show: () => {},
+    });
+    const auto = opener.open(false);
+    status = down(OUTAGE_2, 3, true);
+    expect(await auto).toBe('error');
+    expect(outages).toEqual([OUTAGE_1]);
+  });
+
   it('lets the next open fetch again after a failed /setup', async () => {
     let fail = true;
     let status = down(OUTAGE_1, 0, false);

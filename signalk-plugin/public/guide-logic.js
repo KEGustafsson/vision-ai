@@ -48,7 +48,8 @@
    * The guide's open(manual), with the /setup fetch it waits on. One fetch at
    * a time; a manual request (the banner's button) made while an automatic
    * one is pending is remembered, so the click is never lost: when the answer
-   * arrives the guide opens as for a manual request.
+   * arrives the guide opens as for a manual request. If that fetch fails and
+   * a newer outage has begun, the click is retried once for the newer one.
    *
    * deps: fetchSetup(outage) -> Promise; status() -> latest container status;
    *       state() -> { open, hiddenFor, openAfterS }; show(); onError(err).
@@ -57,7 +58,9 @@
     let pending = false;
     let manualWanted = false;
 
-    function open(manual) {
+    // `retry`: this fetch replaces one that failed while a click waited; if it
+    // fails too, stop rather than loop.
+    function open(manual, retry) {
       if (pending) {
         if (manual) manualWanted = true;
         return Promise.resolve('pending');
@@ -79,7 +82,14 @@
           },
           (err) => {
             pending = false;
+            const asked = !!manual || manualWanted;
             manualWanted = false;
+            // A click waited on this fetch and a newer outage has begun: that
+            // outage's metadata may well load, so try it once, at once.
+            const now = deps.status();
+            if (asked && !retry && now && now.reachable === false && now.downSince !== outage) {
+              return open(true, true);
+            }
             if (deps.onError) deps.onError(err);
             return 'error';
           }
