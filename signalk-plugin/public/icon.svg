@@ -1,47 +1,22 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
   <title>Vision-AI</title>
   <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#18234a"/>
-      <stop offset="1" stop-color="#0b1020"/>
-    </linearGradient>
-    <radialGradient id="iris" cx="0.5" cy="0.5" r="0.5">
-      <stop offset="0" stop-color="#123a3a"/>
-      <stop offset="1" stop-color="#0a1528"/>
-    </radialGradient>
-    <linearGradient id="sweep" x1="0" y1="1" x2="1" y2="0">
-      <stop offset="0" stop-color="#28c76f" stop-opacity="0"/>
-      <stop offset="1" stop-color="#28c76f" stop-opacity="0.75"/>
-    </linearGradient>
-    <clipPath id="eye">
-      <path d="M10 64 Q64 10 118 64 Q64 118 10 64 Z"/>
-    </clipPath>
-  </defs>
-
-  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
-
-  <!-- the sea below the horizon, seen through the eye -->
-  <g clip-path="url(#eye)">
-    <rect x="0" y="64" width="128" height="64" fill="#0f2c4a"/>
-    <path d="M8 80 q8 -5 16 0 t16 0 t16 0 t16 0 t16 0 t16 0 t16 0" fill="none" stroke="#2f6f9f" stroke-width="2.5" stroke-linecap="round"/>
-  </g>
-
-  <!-- iris = radar scope -->
-  <circle cx="64" cy="64" r="29" fill="url(#iris)"/>
-  <path d="M64 64 L64 35 A29 29 0 0 1 89.1 49.5 Z" fill="url(#sweep)"/>
-  <circle cx="64" cy="64" r="19" fill="none" stroke="#28c76f" stroke-width="2" opacity="0.55"/>
-  <circle cx="64" cy="64" r="29" fill="none" stroke="#28c76f" stroke-width="3"/>
-  <line x1="64" y1="64" x2="89.1" y2="49.5" stroke="#28c76f" stroke-width="3" stroke-linecap="round"/>
-
-  <!-- horizon line across the eye -->
-  <line x1="12" y1="64" x2="35" y2="64" stroke="#8fd3ff" stroke-width="2.5" stroke-linecap="round" opacity="0.8"/>
-  <line x1="93" y1="64" x2="116" y2="64" stroke="#8fd3ff" stroke-width="2.5" stroke-linecap="round" opacity="0.8"/>
-
-  <!-- eye outline -->
-  <path d="M10 64 Q64 10 118 64 Q64 118 10 64 Z" fill="none" stroke="#e6ecff" stroke-width="6" stroke-linejoin="round"/>
-
-  <!-- detected target -->
-  <circle cx="78" cy="47" r="8" fill="#ea5455" opacity="0.28"/>
-  <circle cx="78" cy="47" r="4.5" fill="#ea5455"/>
-  <circle cx="64" cy="64" r="4" fill="#e6ecff"/>
+  <linearGradient id="jbg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#18234a"/><stop offset="1" stop-color="#0b1020"/></linearGradient>
+  <radialGradient id="jiris" cx="0.5" cy="0.5" r="0.5"><stop offset="0" stop-color="#123a3a"/><stop offset="1" stop-color="#0a1528"/></radialGradient>
+  <linearGradient id="jsw" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#28c76f" stop-opacity="0"/><stop offset="1" stop-color="#28c76f" stop-opacity="0.8"/></linearGradient>
+  <linearGradient id="jbody" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2e4074"/><stop offset="1" stop-color="#24335f"/></linearGradient>
+</defs>
+  <rect width="128" height="128" rx="28" fill="url(#jbg)"/>
+  <path d="M40 32 L46 22 H70 L76 32 Z" fill="url(#jbody)" stroke="#e6ecff" stroke-width="5" stroke-linejoin="round"/>
+  <rect x="12" y="32" width="104" height="74" rx="14" fill="url(#jbody)" stroke="#e6ecff" stroke-width="5"/>
+  <circle cx="100" cy="44" r="4.5" fill="#ea5455"/>
+  <circle cx="64" cy="70" r="31" fill="#0a1528" stroke="#e6ecff" stroke-width="5"/>
+  <circle cx="64" cy="70" r="25" fill="url(#jiris)"/><path d="M39 70 A25 25 0 0 0 89 70 Z" fill="#0f2c4a"/><path d="M46.5 80.5 q4.375 -4 8.75 0 t8.75 0 t8.75 0 t8.75 0" fill="none" stroke="#2f6f9f" stroke-width="2.5" stroke-linecap="round"/><line x1="39" y1="70" x2="89" y2="70" stroke="#8fd3ff" stroke-width="2" opacity="0.8"/>
+  <path d="M64 70 L64 45 A25 25 0 0 1 85.7 57.5 Z" fill="url(#jsw)"/>
+  <circle cx="64" cy="70" r="15.5" fill="none" stroke="#28c76f" stroke-width="1.6" opacity="0.55"/>
+  <circle cx="64" cy="70" r="25" fill="none" stroke="#28c76f" stroke-width="2.5"/>
+  <line x1="64" y1="70" x2="85.7" y2="57.5" stroke="#28c76f" stroke-width="2.5" stroke-linecap="round"/>
+  <circle cx="74.0" cy="58.1" r="6.8" fill="#ea5455" opacity="0.28"/>
+  <circle cx="74.0" cy="58.1" r="3.8" fill="#ea5455"/>
+  <circle cx="64" cy="70" r="3.0" fill="#e6ecff"/>
 </svg>
