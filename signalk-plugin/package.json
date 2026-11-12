@@ -26,8 +26,7 @@
     "displayName": "Marine Vision-AI",
     "appIcon": "./icon.svg",
     "screenshots": [
-      "./screenshots/webapp-mob.png",
-      "./screenshots/webapp-forward.png",
+      "./screenshots/webapp.jpg",
       "./screenshots/plugin-config.png"
     ]
   },

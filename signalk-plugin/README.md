@@ -5,6 +5,10 @@ detection events from the YOLO-based vision container, enriches them with own-sh
 navigation, fuses with AIS, computes CPA/TCPA, raises notifications, publishes
 the `vision.*` tree, and serves a captain webapp.
 
+![The Vision-AI captain webapp: the aft camera's annotated live view on the
+DeepStream backend, with each detected boat's true bearing and range in the
+target list and the PTZ pad for the camera](public/screenshots/webapp.jpg)
+
 ## Install (development)
 
 ```bash
