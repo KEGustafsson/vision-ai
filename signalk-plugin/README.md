@@ -9,6 +9,16 @@ the `vision.*` tree, and serves a captain webapp.
 DeepStream backend, with each detected boat's true bearing and range in the
 target list and the PTZ pad for the camera](public/screenshots/webapp.jpg)
 
+## Works with
+
+The App Store recommends these companions; none is required.
+
+| Plugin | What it adds |
+|--------|--------------|
+| [Freeboard-SK](https://www.npmjs.com/package/@signalk/freeboard-sk) | Draws the camera targets (`enableVisualRadar`, needs 3.5 or later) on the chart, and the collision alarms on the boat they concern |
+| [Target Fusion](https://www.npmjs.com/package/signalk-target-fusion) | Merges a boat the cameras and AIS both see into one target, drawn as its AIS vessel |
+| [Collision Alerts](https://www.npmjs.com/package/@signalk/collision-alerts) | Alarms on the camera targets itself; this plugin then raises no second alarm for a boat it already alarms |
+
 ## Install (development)
 
 ```bash

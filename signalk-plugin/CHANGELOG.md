@@ -26,7 +26,8 @@ First pre-release, the first version published to npm and the Signal K App Store
 - Context control of the active camera and confidence by speed and time of day.
 - Captain webapp: annotated live video, camera switch, PTZ pad, target list,
   live detection on/off.
-- Signal K App Store metadata: display name, app icon and screenshots.
+- Signal K App Store metadata: display name, app icon, screenshots, and
+  recommended companions (Freeboard-SK, Target Fusion, Collision Alerts).
 - Signal K plugin CI (`.github/workflows/signalk-ci.yml`).
 
 [0.1.0]: https://github.com/KEGustafsson/vision-ai/releases/tag/v0.1.0

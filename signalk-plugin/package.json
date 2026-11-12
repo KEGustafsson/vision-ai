@@ -28,6 +28,11 @@
     "screenshots": [
       "./screenshots/webapp.jpg",
       "./screenshots/plugin-config.png"
+    ],
+    "recommends": [
+      "@signalk/freeboard-sk",
+      "signalk-target-fusion",
+      "@signalk/collision-alerts"
     ]
   },
   "engines": {
