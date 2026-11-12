@@ -29,5 +29,15 @@ First pre-release, the first version published to npm and the Signal K App Store
 - Signal K App Store metadata: display name, app icon, screenshots, and
   recommended companions (Freeboard-SK, Target Fusion, Collision Alerts).
 - Signal K plugin CI (`.github/workflows/signalk-ci.yml`).
+- Vision container setup guide in the webapp: while the container does not
+  answer, a banner and step-by-step setup for Jetson Orin or Xavier
+  (DeepStream), Jetson Orin (TensorRT), CPU or mock, using the container
+  release that matches the plugin's version. It opens at once if the
+  container never answered, otherwise after 30 s, and closes when it answers.
+- `GET /setup`, and a `container` status in `GET /targets`, for the guide.
+- The admin shows a missing container as the plugin's error instead of a
+  green "0 targets" status.
+- Prebuilt vision-service images on GHCR and compose files that pull them,
+  published with each GitHub Release (`docs/release.md`).
 
 [0.1.0]: https://github.com/KEGustafsson/vision-ai/releases/tag/v0.1.0

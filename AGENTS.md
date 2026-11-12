@@ -64,6 +64,7 @@ Essential docs to consult before changing the relevant area:
   prerequisites/calibration/autostart shared with `deepstream`
 - `docs/jetson-deepstream.md` — `deepstream` GPU backend: build, tuning, model
   selection
+- `docs/release.md` — prebuilt images, `deploy/` compose files, cutting a release
 - `docs/dev-quickstart.md` — end-to-end mock run
 - `docs/onboard-verification.md` — on-water verification runbook
 
