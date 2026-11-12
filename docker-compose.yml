@@ -12,13 +12,10 @@
 #     that file instead — same pipeline, DeepStream 6.3 instead of 7.1:
 #                            docker compose -f docker-compose.deepstream.xavier.yml up -d --build
 #
-# The one exception is the dev full-stack demo, which LAYERS a signalk-server onto
-# this base (so it does need both files):
+#   Mock, for your Signal K:  docker compose -f docker-compose.mock.yml up -d --build
 #
-#   Dev full stack:          docker compose -f docker-compose.yml -f docker-compose.mock.yml up
-#
-# The SignalK plugin is installed into a SignalK server separately
-# (see docs/dev-quickstart.md); a dev signalk-server is provided in the mock override.
+# No compose file here starts a Signal K server: the plugin is installed into
+# the one you already run (see docs/dev-quickstart.md).
 services:
   vision-service:
     build:

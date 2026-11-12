@@ -164,7 +164,7 @@ aren't portable), then run.
 
 | Mode | Where | Command |
 |------|-------|---------|
-| **`mock`** | any laptop, no GPU/cameras | `docker compose up` |
+| **`mock`** | any laptop, no GPU/cameras | `docker compose -f docker-compose.mock.yml up -d --build` |
 | **`deepstream`** | Jetson Orin Nano Super (JetPack 6), full-GPU pipeline (production) | `docker compose -f docker-compose.deepstream.yml up -d --build` |
 | **`deepstream`** | Jetson Xavier NX (JetPack 5), same pipeline | `docker compose -f docker-compose.deepstream.xavier.yml up -d --build` |
 | **`jetson`** | Jetson, TensorRT (alternative) | build the engine once (below), then `docker compose -f docker-compose.jetson.yml up -d` |
@@ -178,14 +178,17 @@ export VISION_CAMERA_AFT_URL="rtsp://user:pass@192.168.1.11:554/stream"
 
 ### `mock` — laptop / dev (no GPU, no cameras)
 
-`docker compose up` runs the vision service alone on synthetic frames. For the
-full stack (vision service **+** a SignalK server with demo data + the plugin),
-layer the dev override — this is the only mode that needs two `-f` files:
+Runs the vision service on synthetic frames, for the Signal K server you
+already run: install the plugin there and leave its **Vision container base
+URL** at `http://localhost:7000`.
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.mock.yml up
-# SignalK:  http://localhost:3000     Captain view: http://localhost:3000/signalk-vision-ai/
+docker compose -f docker-compose.mock.yml up -d --build
+# Captain view: http://<your-signalk>:3000/signalk-vision-ai/
 ```
+
+The aft camera's made-up person in the water raises a real man-overboard
+alarm, so use a test server.
 
 ### `deepstream` — fully GPU-resident NVIDIA DeepStream (production backend)
 

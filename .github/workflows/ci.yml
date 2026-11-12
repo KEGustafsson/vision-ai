@@ -80,11 +80,12 @@ jobs:
             docker compose -f "$stack" config -q
             echo "::endgroup::"
           done
-          # The dev full-stack demo LAYERS signalk-server onto the base, so it
-          # genuinely needs both files.
-          echo "::group::docker-compose.yml + docker-compose.mock.yml"
-          docker compose -f docker-compose.yml -f docker-compose.mock.yml config -q
-          echo "::endgroup::"
+          # The mock stack and the base are self-contained too.
+          for stack in docker-compose.mock.yml docker-compose.yml; do
+            echo "::group::$stack (standalone)"
+            docker compose -f "$stack" config -q
+            echo "::endgroup::"
+          done
           # The release compose files in deploy/ pull the published images.
           # They refuse to start without both camera addresses, so give them
           # placeholders for validation.
