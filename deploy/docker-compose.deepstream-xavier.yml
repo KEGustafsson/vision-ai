@@ -8,14 +8,11 @@
 #   docker compose -f docker-compose.deepstream-xavier.yml up -d
 #
 # The first start builds the TensorRT engine from the image's ONNX (several
-# minutes, RAM-hungry). It is written into the "deepstream" volume, which is
-# named per release so an update never reuses an engine or config from an
-# older image; remove old ones with: docker volume ls / docker volume rm.
-#
-# On "edge" (no VISION_AI_VERSION, a git checkout) every build of main shares
-# one volume, which would keep the previous image's ONNX, configs and engine.
-# Drop it whenever you pull a new edge image:
-#   docker compose -f <this file> pull && docker compose -f <this file> down -v && docker compose -f <this file> up -d
+# minutes, RAM-hungry). It is kept in the "deepstream" volume, so later starts
+# take seconds. When the image changes (a new release, or a new edge build),
+# the container refreshes the volume from the image and builds a new engine on
+# its first start (VISION_DS_SYNC_FROM_IMAGE below), so it never runs the
+# previous image's ONNX, configs or engine.
 #
 # Calibration: see docker-compose.cpu.yml.
 services:
@@ -26,6 +23,8 @@ services:
     runtime: nvidia
     environment:
       VISION_MODE: deepstream
+      # Refresh the deepstream volume from the image whenever the image changes.
+      VISION_DS_SYNC_FROM_IMAGE: "1"
       VISION_CAMERA_FORWARD_URL: ${VISION_CAMERA_FORWARD_URL:?set VISION_CAMERA_FORWARD_URL in .env}
       VISION_CAMERA_AFT_URL: ${VISION_CAMERA_AFT_URL:?set VISION_CAMERA_AFT_URL in .env}
     volumes:
@@ -47,4 +46,4 @@ services:
             - capabilities: [gpu]
 volumes:
   deepstream:
-    name: vision-ai-deepstream-xavier-${VISION_AI_VERSION:-edge}
+    name: vision-ai-deepstream-xavier

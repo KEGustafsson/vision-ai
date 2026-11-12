@@ -81,8 +81,8 @@ Notes per variant:
   first, as in [Jetson setup](jetson-setup.md#1-prerequisites-on-the-jetson).
 - **DeepStream:** the first start builds the TensorRT engine from the ONNX,
   which takes several minutes and a lot of RAM (on a Xavier, stop other heavy
-  containers until `/health` answers). The engine is kept in a Docker volume
-  named after the release, so later starts take seconds.
+  containers until `/health` answers). The engine is kept in a Docker volume,
+  so later starts take seconds.
 - **TensorRT (`jetson`):** build the engine once before the first start, into
   the `models` volume:
 
@@ -132,20 +132,22 @@ curl -fsSLO https://github.com/KEGustafsson/vision-ai/releases/download/v0.2.0/d
 docker compose -f docker-compose.deepstream.yml up -d
 ```
 
-The engine volume is named per release (`vision-ai-deepstream-0.2.0`, …), so a
-new release builds a fresh engine and never runs one built for an older
-TensorRT. On the TensorRT variant, run the `export_engine.py` step again.
-List and remove old volumes with `docker volume ls` and `docker volume rm`.
+On DeepStream the container notices that the image changed and, on its first
+start, copies the new image's ONNX, pgie configs and labels into its volume
+and deletes the old engine, then builds a new one (several minutes again). It
+keeps any files you added, such as another model's ONNX, but an edit made inside
+the volume to one of the image's own files (say a pgie setting) is replaced:
+keep such tuning in a source build, or re-apply it. The same happens when
+you pull a new `edge` image, so it never runs the previous image's model or
+settings.
 
-The `edge` images from a git checkout don't get that protection: every build
-of `main` shares one volume, which would keep the previous image's ONNX,
-configs and engine. Drop it each time you pull a new `edge` image:
-
-```bash
-docker compose -f deploy/docker-compose.deepstream.yml pull
-docker compose -f deploy/docker-compose.deepstream.yml down -v
-docker compose -f deploy/docker-compose.deepstream.yml up -d
-```
+On the TensorRT variant, build the engine again with the `export_engine.py`
+step: its `models` volume is named per release (`vision-ai-models-0.2.0`, …),
+so a new release starts without one rather than with one built for an older
+TensorRT. On `edge` that volume is shared between builds; after pulling a new
+`edge` image, run `docker compose -f deploy/docker-compose.jetson.yml down -v`
+before building the engine again. List and remove old volumes with
+`docker volume ls` and `docker volume rm`.
 
 Update the Signal K plugin to the same version.
 

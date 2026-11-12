@@ -368,6 +368,15 @@ COPY --from=parser /parser/nvdsinfer_custom_impl_Yolo/libnvdsinfer_custom_impl_Y
 COPY --from=export /export/yolo11n_ds.onnx ./deepstream/yolo11n_ds.onnx
 COPY --from=export /export/yolo11n_ds.onnx ./deepstream-default/yolo11n_ds.onnx
 
+# A clean copy of deepstream/ (outside any mount) plus an identity for this
+# build. The release compose files (deploy/) keep deepstream/ in a named volume
+# and set VISION_DS_SYNC_FROM_IMAGE=1, so the entrypoint copies these files back
+# in, and drops the old engines, whenever the image changes. The identity is a
+# random value fixed at build time: a cache hit reuses it, which is right,
+# because then nothing above (base image, TensorRT, configs, ONNX) changed.
+RUN cp -R deepstream deepstream-image \
+    && cat /proc/sys/kernel/random/uuid > deepstream-image/.image-id
+
 # Entrypoint: seeds the default COCO ONNX into the (bind-mounted, possibly
 # empty) deepstream/ dir when it's absent, then execs the CMD — so
 # `docker compose ... up -d --build` works from a clean clone in ONE command,

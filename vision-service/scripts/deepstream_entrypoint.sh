@@ -15,8 +15,35 @@
 # need the BuildKit dockerfile 1.4+ frontend, which the JetPack 5 boxes' older
 # Docker does not have.
 set -eu
-seed=/opt/vision-service/deepstream-default/yolo11n_ds.onnx
-dest=/opt/vision-service/deepstream/yolo11n_ds.onnx
+# Paths are overridable only so tests can run this script on a scratch tree.
+ds_dir=${VISION_DS_DIR:-/opt/vision-service/deepstream}
+image_dir=${VISION_DS_IMAGE_DIR:-/opt/vision-service/deepstream-image}
+seed=${VISION_DS_SEED:-/opt/vision-service/deepstream-default/yolo11n_ds.onnx}
+dest=$ds_dir/yolo11n_ds.onnx
+
+# Release deployments (deploy/docker-compose.deepstream*.yml) keep deepstream/
+# in a named Docker volume, which Docker fills from the image only while it is
+# empty. After an image update the volume would still hold the previous image's
+# ONNX, pgie configs and labels, and nvinfer would quietly rebuild an engine
+# from that old ONNX rather than fail. Those compose files therefore set
+# VISION_DS_SYNC_FROM_IMAGE=1: when the image's build identity differs from the
+# one recorded in the volume, the image's own files are copied back in and the
+# old engines removed, so the new image runs what it shipped with. Files the
+# user added (another model's ONNX, its engine) are kept. Source builds, which
+# bind-mount the git checkout's deepstream/, never set it: their files belong
+# to the checkout.
+if [ "${VISION_DS_SYNC_FROM_IMAGE:-0}" = "1" ] && [ -f "$image_dir/.image-id" ]; then
+    want=$(cat "$image_dir/.image-id")
+    have=$(cat "$ds_dir/.image-id" 2>/dev/null || true)
+    if [ "$want" != "$have" ]; then
+        # Fail fast (set -e) rather than start on a half-refreshed directory.
+        rm -f "$ds_dir"/*.engine
+        cp -R "$image_dir"/. "$ds_dir"/
+        echo "deepstream-entrypoint: refreshed $ds_dir from the image" \
+             "(image ${want}, volume had ${have:-none}); old engines removed"
+    fi
+fi
+
 if [ ! -f "$dest" ] && [ -f "$seed" ]; then
     if cp "$seed" "$dest" 2>/dev/null; then
         echo "deepstream-entrypoint: seeded default ONNX -> $dest"
