@@ -141,6 +141,9 @@ tr.mob td { background: rgba(234, 84, 85, 0.28); font-weight: 700; }
 }
 .cs-btn:hover { border-color: #3c4a6e; }
 .cs-banner .cs-btn { background: var(--green); color: #00150a; border-color: var(--green); }
+.cs-banner-error { flex: 1 0 100%; color: #ffb3c0; }
+.cs-banner-error[hidden] { display: none; }
+.cs-banner-error a { color: inherit; }
 
 .cs-scrim {
   position: fixed; inset: 0; z-index: 50; background: rgba(4, 7, 16, 0.72);

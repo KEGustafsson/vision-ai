@@ -321,14 +321,24 @@
     status: () => lastStatus,
     state: guideState,
     show: () => show(),
-    // Without /setup the guide can't name the release; leave the banner up.
-    onError: () => {},
+    // Without /setup the guide can't name the release, so it stays closed;
+    // the banner says why, links the install guide, and its button retries.
+    onError: (err) => setupError(err),
   });
+  function setupError(err) {
+    const reason = err && err.message ? ` (${err.message})` : '';
+    $('csBannerErrorText').textContent = `Couldn't load the setup guide${reason}.`;
+    $('csBannerError').hidden = false;
+  }
+  function clearSetupError() {
+    $('csBannerError').hidden = true;
+  }
   function open(manual) {
     opener.open(!!manual);
   }
 
   function show() {
+    clearSetupError();
     if (renderedVersion !== setup.version) {
       // First open, or the plugin was updated since: rebuild for its release.
       // Pre-select only a real hint; the user's own choice is kept.
@@ -383,6 +393,7 @@
 
   function connected() {
     $('csBanner').hidden = true;
+    clearSetupError();
     if (!wasOpen) return;
     $('csSetupView').hidden = true;
     $('csOkView').hidden = false;
