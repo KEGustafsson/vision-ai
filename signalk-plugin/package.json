@@ -22,15 +22,29 @@
     "mob"
   ],
   "signalk-plugin-enabled-by-default": false,
-  "signalk-webapp": {
-    "appIcon": "icon.svg",
-    "displayName": "Vision-AI"
+  "signalk": {
+    "displayName": "Marine Vision-AI",
+    "appIcon": "./icon.svg",
+    "screenshots": [
+      "./screenshots/webapp-mob.png",
+      "./screenshots/webapp-forward.png",
+      "./screenshots/plugin-config.png"
+    ]
   },
   "engines": {
     "node": ">=18"
   },
-  "author": "",
+  "author": "KEGustafsson",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/KEGustafsson/vision-ai.git",
+    "directory": "signalk-plugin"
+  },
+  "homepage": "https://github.com/KEGustafsson/vision-ai/tree/main/signalk-plugin#readme",
+  "bugs": {
+    "url": "https://github.com/KEGustafsson/vision-ai/issues"
+  },
   "dependencies": {
     "ajv": "^8.12.0",
     "ajv-formats": "^2.1.1",
@@ -49,6 +63,7 @@
   "files": [
     "dist",
     "public",
-    "schema"
+    "schema",
+    "CHANGELOG.md"
   ]
 }

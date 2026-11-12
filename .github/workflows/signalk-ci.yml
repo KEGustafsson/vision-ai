@@ -1,0 +1,30 @@
+name: SignalK Plugin CI
+
+# The Signal K project's reusable plugin CI, run against signalk-plugin/
+# (signalk-vision-ai). It validates package.json, the entry point,
+# plugin.schema(), the start/stop/start lifecycle and the plugin's API usage,
+# packs the package the way the App Store installs it, and runs the tests on
+# Linux x64 and arm64, macOS and Windows. The plugin registry gives full marks
+# only to plugins that call this workflow, and the App Store's Indicators tab
+# shows its results, which is why the canonical `@master` reference is used
+# rather than a pinned commit: that is the reference the registry looks for.
+#
+# This runs alongside ci.yml, which stays the gate for the vision service, the
+# schema contract and the compose files.
+
+on:
+  push:
+    branches: [main]
+    paths: ["signalk-plugin/**", ".github/workflows/signalk-ci.yml"]
+  pull_request:
+    paths: ["signalk-plugin/**", ".github/workflows/signalk-ci.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  plugin:
+    uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@master
+    with:
+      working-directory: signalk-plugin
