@@ -34,6 +34,8 @@
   let focusBefore = null; // where keyboard focus was before the guide opened
 
   const $ = (id) => document.getElementById(id);
+  const logic = window.visionGuideLogic; // guide-logic.js
+  const guideState = () => ({ open: wasOpen, hiddenFor, openAfterS: OPEN_AFTER_S });
 
   const step = {
     runtime: () => ({
@@ -311,23 +313,21 @@
 
   // ---- open / close ----------------------------------------------------------
 
-  function open() {
+  /** `manual`: the user asked (the banner's button), so no delay applies. */
+  function open(manual) {
     if (opening) return;
     opening = true;
     const outage = lastStatus ? lastStatus.downSince : null;
     fetchSetup(outage).then(
       () => {
         opening = false;
-        // The poll kept running while /setup loaded. Show nothing if the
-        // container answered meanwhile, and fetch again if a newer outage
-        // began, so the guide never shows a past outage's release.
-        const c = lastStatus;
-        if (!c || c.reachable !== false) return;
-        if (c.downSince !== outage) {
-          open();
-          return;
-        }
-        show();
+        // The poll kept running while /setup loaded; decide again on the
+        // latest status (guide-logic.js onSetupAnswer), so the guide never
+        // opens after a reconnect, never shows a past outage's release, and
+        // a newer outage's automatic open still waits for its delay.
+        const next = logic.onSetupAnswer(outage, lastStatus, !!manual, guideState());
+        if (next === 'refetch') open(true);
+        else if (next === 'show') show();
       },
       () => {
         // Without /setup the guide can't name the release; leave the banner up.
@@ -414,8 +414,7 @@
       ? `Vision container not answering for ${fmtDuration(c.downForS)}.`
       : 'Vision container is not running.';
     renderStatus(c);
-    const due = !c.everConnected || c.downForS >= OPEN_AFTER_S;
-    if (due && !wasOpen && hiddenFor !== c.downSince) open();
+    if (logic.shouldAutoOpen(c, guideState())) open(false);
   }
 
   // ---- events ----------------------------------------------------------------
@@ -454,7 +453,7 @@
     $('csAft').addEventListener('input', fillCommands);
     $('csClose').addEventListener('click', hide);
     $('csHide').addEventListener('click', hide);
-    $('csBannerOpen').addEventListener('click', () => { hiddenFor = null; open(); });
+    $('csBannerOpen').addEventListener('click', () => { hiddenFor = null; open(true); });
     $('csSteps').addEventListener('click', (e) => {
       const b = e.target.closest('.cs-copy');
       if (b) copy(b);
