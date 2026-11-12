@@ -51,15 +51,16 @@ curl -fsSLO https://github.com/KEGustafsson/vision-ai/releases/download/v0.1.0/d
 ```
 
 ```bash
-touch .env && chmod 600 .env
-cat > .env <<'EOF'
+(umask 077
+touch .env && chmod 600 .env && cat > .env <<'EOF'
 VISION_CAMERA_FORWARD_URL='rtsp://user:password@192.168.1.10:554/stream'
 VISION_CAMERA_AFT_URL='rtsp://user:password@192.168.1.11:554/stream'
 EOF
+)
 ```
 
 The addresses usually hold camera passwords, so `.env` is made readable by
-you only before they are written. Keep the single quotes: Compose reads an
+you only before they are written, and nothing is written if that fails. Keep the single quotes: Compose reads an
 unquoted value with a `$` in it as a variable, which would change a password
 such as `pa$word`. A password containing `'` needs double quotes instead,
 with `$` written as `$$`, `"` as `\"` and `\` as `\\`. The plugin's setup

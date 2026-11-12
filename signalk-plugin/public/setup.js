@@ -50,7 +50,7 @@
     }),
     env: () => ({
       t: 'Save the camera addresses',
-      cmd: "touch .env && chmod 600 .env\ncat > .env <<'EOF'\nVISION_CAMERA_FORWARD_URL={{FWD}}\nVISION_CAMERA_AFT_URL={{AFT}}\nEOF",
+      cmd: "(umask 077\ntouch .env && chmod 600 .env && cat > .env <<'EOF'\nVISION_CAMERA_FORWARD_URL={{FWD}}\nVISION_CAMERA_AFT_URL={{AFT}}\nEOF\n)",
       d: 'Docker reads <code>.env</code> every time the container starts, so the addresses survive a reboot. Both cameras are required. The file is made readable by you only first, because the addresses hold camera passwords.',
     }),
     up: (file, slow) => ({
@@ -262,8 +262,11 @@
     const fwd = envQuote($('csFwd').value.trim() || 'rtsp://user:password@192.168.1.10:554/stream');
     const aft = envQuote($('csAft').value.trim() || 'rtsp://user:password@192.168.1.11:554/stream');
     document.querySelectorAll('#csSteps pre[data-tpl]').forEach((pre) => {
-      // textContent: whatever is typed into the address fields never becomes markup.
-      pre.textContent = pre.dataset.tpl.replace('{{FWD}}', fwd).replace('{{AFT}}', aft);
+      // textContent: whatever is typed into the address fields never becomes
+      // markup. A replacement callback, not a string: in a replacement string
+      // "$$", "$&" and friends are patterns, which would undo envQuote's
+      // escaping and paste the placeholder into a password containing "$&".
+      pre.textContent = pre.dataset.tpl.replace(/\{\{(FWD|AFT)\}\}/g, (_, cam) => (cam === 'FWD' ? fwd : aft));
     });
   }
 
@@ -326,12 +329,16 @@
     if ($('csScrim').hidden) return;
     $('csScrim').hidden = true;
     setBackgroundInert(false);
-    // Back where it was; after an automatic open (nothing focused) to the
-    // banner's button, which reopens the guide.
-    const was = focusBefore && focusBefore !== document.body && document.contains(focusBefore);
-    const back = was ? focusBefore : $('csBannerOpen');
+    // Back where it was. Otherwise (an automatic open with nothing focused, or
+    // the opener has since been hidden, as the banner is once the container
+    // answers) to the first visible control: the banner's button while the
+    // container is still down, else the page's own controls.
+    const candidates = [focusBefore, $('csBannerOpen'), $('detToggle'), document.querySelector('.cameras button')];
     focusBefore = null;
-    if (back && typeof back.focus === 'function' && !back.closest('[hidden]')) back.focus();
+    const back = candidates.find((el) =>
+      el && el !== document.body && document.contains(el) && typeof el.focus === 'function' &&
+      !el.closest('[hidden]') && el.getClientRects().length > 0);
+    if (back) back.focus();
   }
 
   function hide() {
