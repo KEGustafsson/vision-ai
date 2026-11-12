@@ -1,0 +1,35 @@
+# Marine Vision-AI: CPU detection (no GPU) from the published image.
+#
+# Real YOLO11n detection on the CPU of an x86_64 or arm64 computer (about 5
+# frames per second). Camera addresses come from .env next to this file:
+#
+#   VISION_CAMERA_FORWARD_URL=rtsp://user:pass@192.168.1.10:554/stream
+#   VISION_CAMERA_AFT_URL=rtsp://user:pass@192.168.1.11:554/stream
+#
+#   docker compose -f docker-compose.cpu.yml up -d
+#
+# Both addresses are required, and compose refuses to start without them: in
+# cpu mode a camera with no address would fall back to a synthetic test picture,
+# whose made-up person in the water raises a real man-overboard alarm.
+#
+# Calibration (horizon, camera height, field of view) uses the defaults baked
+# into the image. To calibrate, copy them out, edit, and uncomment the mount:
+#   docker compose -f docker-compose.cpu.yml cp vision-service:/opt/vision-service/config ./config
+services:
+  vision-service:
+    image: ghcr.io/kegustafsson/vision-ai:${VISION_AI_VERSION:-edge}-cpu
+    container_name: vision-service
+    restart: unless-stopped
+    environment:
+      VISION_MODE: cpu
+      VISION_CAMERA_FORWARD_URL: ${VISION_CAMERA_FORWARD_URL:?set VISION_CAMERA_FORWARD_URL in .env}
+      VISION_CAMERA_AFT_URL: ${VISION_CAMERA_AFT_URL:?set VISION_CAMERA_AFT_URL in .env}
+    # volumes:
+    #   - ./config:/opt/vision-service/config:ro
+    ports:
+      - "127.0.0.1:7000:7000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"

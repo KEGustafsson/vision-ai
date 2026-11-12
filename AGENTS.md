@@ -64,6 +64,7 @@ Essential docs to consult before changing the relevant area:
   prerequisites/calibration/autostart shared with `deepstream`
 - `docs/jetson-deepstream.md` — `deepstream` GPU backend: build, tuning, model
   selection
+- `docs/release.md` — prebuilt images, `deploy/` compose files, cutting a release
 - `docs/dev-quickstart.md` — end-to-end mock run
 - `docs/onboard-verification.md` — on-water verification runbook
 
@@ -258,7 +259,8 @@ Beyond unit tests:
   cd vision-service && VISION_MODE=mock python -m uvicorn app.main:app --port 7000
   # forward.mjpg / aft.mjpg (aft includes a person-in-water for MOB)
   ```
-  or the full stack via `docker compose -f docker-compose.yml -f docker-compose.mock.yml up`.
+  or in Docker via `docker compose -f docker-compose.mock.yml up -d --build`, with the
+  plugin linked into a local Signal K server.
 - **Add/extend tests** so the new behaviour is locked in. Pure logic
   (geometry, fusion, CPA, enrich, publisher, notifications) has no excuse to be
   untested.
@@ -363,8 +365,8 @@ state it, and proceed. Don't over-ask.
 # Mock dev (no GPU/cameras)
 cd vision-service && VISION_MODE=mock python -m uvicorn app.main:app --port 7000
 
-# Full mock stack
-docker compose -f docker-compose.yml -f docker-compose.mock.yml up
+# Mock container in Docker (for a local Signal K server running the plugin)
+docker compose -f docker-compose.mock.yml up -d --build
 
 # Tests
 cd vision-service && pytest

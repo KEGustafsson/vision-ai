@@ -25,6 +25,20 @@
       <div id="ownship" class="ownship">—</div>
     </header>
 
+    <!-- Vision container setup guide (setup.js): banner while the container is
+         down, and the guide itself. Hidden until the plugin reports an outage. -->
+    <div class="cs-banner" id="csBanner" role="status" hidden>
+      <span class="cs-banner-dot" aria-hidden="true"></span>
+      <span id="csBannerText">Vision container can't be reached.</span>
+      <span class="cs-banner-impact">No camera video, targets or camera-based alarms.</span>
+      <button type="button" class="cs-btn" id="csBannerOpen">Setup guide</button>
+      <span class="cs-banner-error" id="csBannerError" hidden>
+        <span id="csBannerErrorText">Couldn't load the setup guide.</span>
+        Press Setup guide to try again, or read the
+        <a href="https://github.com/KEGustafsson/vision-ai/blob/main/docs/release.md" target="_blank" rel="noopener">install guide</a>.
+      </span>
+    </div>
+
     <main>
       <section class="video">
         <div class="cameras" id="cameraButtons"></div>
@@ -56,6 +70,7 @@
             </select>
           </label>
         </div>
+        <p id="targetsStale" class="targets-stale" hidden>Last seen before the vision container stopped answering. Not live.</p>
         <table>
           <thead>
             <tr>
@@ -67,6 +82,97 @@
       </section>
     </main>
 
+    <div class="cs-scrim" id="csScrim" hidden>
+      <div class="cs-dialog" id="csDialog" role="dialog" aria-modal="true" aria-labelledby="csTitle" tabindex="-1">
+        <div id="csSetupView" class="cs-view">
+          <div class="cs-head">
+            <div class="cs-title">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#ff9f43" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+              <div>
+                <h2 id="csTitle">Vision container can't be reached</h2>
+                <p>The plugin can't reach the detection container at <code id="csUrl">—</code>. Set it up once on the computer that has the cameras' network and the GPU, and it starts by itself after every reboot.</p>
+              </div>
+              <button type="button" class="cs-x" id="csClose" aria-label="Hide for now" title="Hide for now">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+              </button>
+            </div>
+            <div class="cs-conn"><span class="cs-pulse" aria-hidden="true"></span><span id="csConnText">—</span></div>
+            <div class="cs-impact">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#ea5455" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+              <div>Until the container runs there is <b>no camera video, no camera targets, and no camera-based collision, dark-target or man-overboard alarms.</b></div>
+            </div>
+          </div>
+
+          <div class="cs-body">
+            <section class="cs-sec" aria-labelledby="csH1">
+              <div class="cs-sec-h"><span class="cs-n">1</span><h3 id="csH1">Choose your hardware</h3>
+                <span class="cs-detected" id="csDetected" hidden></span>
+              </div>
+              <div class="cs-hw" id="csHw" role="radiogroup" aria-labelledby="csH1"></div>
+              <div class="cs-note" id="csInContainer" hidden>
+                Signal K runs in a container here, so this page can't tell what the board is. The vision
+                container answers on <code>127.0.0.1:7000</code> of the computer it runs on: give the Signal K
+                container host networking, or set <b>Vision container base URL</b> in the plugin settings to an
+                address it can reach.
+              </div>
+              <details class="cs-which" id="csWhich">
+                <summary>Not sure which one you have?</summary>
+                <div class="cs-hint">Run this on the computer that will run the container:</div>
+                <div class="cs-code"><pre>uname -m; head -1 /etc/nv_tegra_release 2&gt;/dev/null || echo "not a Jetson"</pre><button type="button" class="cs-copy">Copy</button></div>
+                <table class="cs-map">
+                  <tr><td>aarch64 + # R36 …</td><td>Jetson Orin, JetPack 6 → <b>Jetson Orin · DeepStream</b></td></tr>
+                  <tr><td>aarch64 + # R35 …</td><td>Jetson Xavier, JetPack 5 → <b>Jetson Xavier · DeepStream</b></td></tr>
+                  <tr><td>not a Jetson</td><td>A PC, mini-PC or Raspberry Pi → <b>CPU only</b></td></tr>
+                </table>
+              </details>
+              <details class="cs-which" id="csRemote">
+                <summary>Signal K runs on a different computer?</summary>
+                <div class="cs-hint">The container answers only on <code>127.0.0.1:7000</code> of the computer it runs on.
+                  Don't open port 7000 to the boat's network: anyone on it could watch the cameras. Run this on the
+                  Signal K computer instead, and leave <b>Vision container base URL</b> at <code>http://localhost:7000</code>.
+                  Keep the tunnel running with <code>autossh</code> or a systemd service.</div>
+                <div class="cs-code"><pre>ssh -N -L 7000:127.0.0.1:7000 user@vision-computer</pre><button type="button" class="cs-copy">Copy</button></div>
+              </details>
+            </section>
+
+            <section class="cs-sec" id="csCamSec" aria-labelledby="csH2">
+              <div class="cs-sec-h"><span class="cs-n">2</span><h3 id="csH2">Enter your camera addresses</h3></div>
+              <div class="cs-hint">The commands below fill in as you type. Nothing you type leaves this page.</div>
+              <div class="cs-cams">
+                <div class="cs-field"><label for="csFwd">Forward camera (RTSP)</label><input id="csFwd" spellcheck="false" autocomplete="off" placeholder="rtsp://user:password@192.168.1.10:554/stream"></div>
+                <div class="cs-field"><label for="csAft">Aft camera (RTSP)</label><input id="csAft" spellcheck="false" autocomplete="off" placeholder="rtsp://user:password@192.168.1.11:554/stream"></div>
+              </div>
+            </section>
+
+            <section class="cs-sec" aria-labelledby="csH3">
+              <div class="cs-sec-h"><span class="cs-n" id="csStepsNum">3</span><h3 id="csH3">Run these commands on that computer</h3></div>
+              <div class="cs-warn" id="csMockWarn" hidden>
+                <b>Mock makes up its targets</b>, including a person in the water on the aft camera that raises a
+                real <code>notifications.mob</code> alarm. Use it on a test server only, never on a boat under way.
+              </div>
+              <ol class="cs-steps" id="csSteps"></ol>
+            </section>
+          </div>
+
+          <div class="cs-foot">
+            <div class="cs-grow">
+              <a class="cs-link" href="/admin/#/serverConfiguration/plugins/signalk-vision-ai">Plugin settings</a>
+              <a class="cs-link" id="csDoc" href="https://github.com/KEGustafsson/vision-ai" target="_blank" rel="noopener">Full setup guide</a>
+            </div>
+            <button type="button" class="cs-btn" id="csHide">Hide for now</button>
+          </div>
+        </div>
+
+        <div class="cs-ok" id="csOkView" hidden>
+          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="#28c76f" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="m8 12 3 3 5-6"/></svg>
+          <h2>Vision container connected</h2>
+          <p>Check that detection is on and both cameras show video before you rely on the camera alarms. This window closes by itself.</p>
+        </div>
+      </div>
+    </div>
+
+    <script src="guide-logic.js"></script>
+    <script src="setup.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

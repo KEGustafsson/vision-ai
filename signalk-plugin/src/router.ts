@@ -2,11 +2,30 @@
 // reverse-proxy to the container's MJPEG/snapshot endpoints (so the browser
 // uses SignalK's authenticated origin and never touches the container directly).
 
+import fs from 'fs';
 import http from 'http';
 import https from 'https';
+import { join } from 'path';
 import { ContainerClient, ControlBody } from './containerClient';
+import { ContainerStatus, redactCredentials } from './containerStatus';
 import { PluginConfig } from './config';
+import { HostInfo } from './hostInfo';
 import { EnrichedTarget, OwnShip } from './types';
+
+// The plugin's own version. The setup guide downloads the container release of
+// the same version, so the container it installs speaks this plugin's contract.
+const PLUGIN_VERSION: string = (() => {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(join(__dirname, '..', 'package.json'), 'utf8'));
+    return typeof pkg.version === 'string' ? pkg.version : '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+})();
+
+/** Where the container releases (compose files, images) are published. */
+export const RELEASE_REPOSITORY = 'KEGustafsson/vision-ai';
+export const IMAGE_REPOSITORY = 'ghcr.io/kegustafsson/vision-ai';
 
 // Only forward known control fields to the container — never relay an arbitrary
 // client body verbatim. The container validates types/ranges too, but the plugin
@@ -32,7 +51,7 @@ function pickControl(body: unknown): ControlBody {
 // credentials; the webapp reaches the container only through this plugin's
 // same-origin proxy routes and never needs them. Mirrors the vision service,
 // which redacts camera RTSP URLs from its own /config.
-function redactUrl(url: string): string {
+export function redactUrl(url: string): string {
   try {
     const u = new URL(url);
     u.username = '';
@@ -54,9 +73,24 @@ export interface SharedState {
     detectionEnabled: boolean;
     maxTargets: number;
   };
+  /** Reachability of the vision container (see containerStatus.ts). */
+  readonly container: ContainerStatus;
+  /** What the setup guide may say about this computer (see hostInfo.ts). */
+  host: () => HostInfo;
   setDetection: (on: boolean) => void;
   setMaxTargets: (value: number) => void;
   client: () => ContainerClient | null;
+}
+
+/** The container status as the webapp may see it: no credentials in the URL. */
+function publicContainerStatus(status: ContainerStatus): ContainerStatus {
+  return {
+    ...status,
+    url: redactUrl(status.url),
+    // describeError already redacts; this keeps the served status clean even
+    // if a future caller stores an unredacted message.
+    lastError: status.lastError === null ? null : redactCredentials(status.lastError),
+  };
 }
 
 function proxy(targetUrl: string, res: any): void {
@@ -339,7 +373,25 @@ export function registerRoutes(
     res.json({
       ownShip: shared.ownShip,
       system: shared.system,
+      container: publicContainerStatus(shared.container),
       targets: shared.targets,
+    });
+  });
+
+  // Everything the webapp's container setup guide needs, fetched when it opens:
+  // the release to install (the plugin's own version), where it is published,
+  // and a hint about this computer's hardware.
+  router.get('/setup', (_req: any, res: any) => {
+    res.set('Cache-Control', 'no-store');
+    res.json({
+      version: PLUGIN_VERSION,
+      releaseTag: `v${PLUGIN_VERSION}`,
+      releaseUrl: `https://github.com/${RELEASE_REPOSITORY}/releases/tag/v${PLUGIN_VERSION}`,
+      downloadUrl: `https://github.com/${RELEASE_REPOSITORY}/releases/download/v${PLUGIN_VERSION}`,
+      docsUrl: `https://github.com/${RELEASE_REPOSITORY}/blob/main/docs/release.md`,
+      image: IMAGE_REPOSITORY,
+      host: shared.host(),
+      container: publicContainerStatus(shared.container),
     });
   });
 

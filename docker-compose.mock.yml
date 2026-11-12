@@ -1,33 +1,35 @@
-# Dev override: vision service in mock mode + a SignalK server with sample data
-# so the whole stack (container + plugin + webapp) runs on a laptop.
+# Mock vision service, built from this checkout, for the Signal K server you
+# already run. Synthetic forward and aft cameras, no GPU and no cameras needed:
 #
-#   docker compose -f docker-compose.yml -f docker-compose.mock.yml up
+#   docker compose -f docker-compose.mock.yml up -d --build
+#
+# Self-contained, like the other compose files: a single -f, no base needed.
+# Install the plugin into your Signal K server (App Store, or link
+# ./signalk-plugin into ~/.signalk/node_modules for development) and leave its
+# "Vision container base URL" at http://localhost:7000. See
+# docs/dev-quickstart.md.
+#
+# The aft camera's made-up person in the water raises a REAL notifications.mob
+# alarm in that Signal K server. Use a test server, never one on a boat under way.
+#
+# To run the published mock image instead of building, use
+# deploy/docker-compose.mock.yml.
 services:
   vision-service:
+    build:
+      context: ./vision-service
+      dockerfile: Dockerfile.cpu
+    image: vision-ai:cpu
+    container_name: vision-service-mock
     environment:
       VISION_MODE: mock
+      VISION_PORT: "7000"
       VISION_MOCK_SOURCE: synthetic
     volumes:
       # Drop a clip here and set VISION_MOCK_SOURCE=/samples/clip.mp4 to use video.
       - ./vision-service/samples:/samples:ro
-
-  signalk-server:
-    # Pinned (not :latest) so the dev stack is reproducible and a server update
-    # can't silently change demo behaviour under the plugin. Bump deliberately.
-    image: signalk/signalk-server:2.28.0
+    # Unauthenticated service: localhost only. The plugin proxies it behind
+    # Signal K's login.
     ports:
-      - "3000:3000"
-    environment:
-      # Enables the bundled demo data (own-ship position + AIS targets).
-      IS_IN_DOCKER: "true"
-    volumes:
-      - signalk-data:/home/node/.signalk
-      # Mount the plugin so SignalK discovers it. PREREQUISITE: run
-      # `npm ci && npm run build` in ./signalk-plugin first — the mount is
-      # read-only, so both dist/ and node_modules/ (ajv, ws) must already exist
-      # on the host. In the SignalK UI set containerUrl to http://vision-service:7000.
-      - ./signalk-plugin:/home/node/.signalk/node_modules/signalk-vision-ai:ro
+      - "127.0.0.1:7000:7000"
     restart: unless-stopped
-
-volumes:
-  signalk-data:

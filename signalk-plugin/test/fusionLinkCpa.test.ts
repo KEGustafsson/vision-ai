@@ -26,7 +26,18 @@ function until(cond: () => boolean, timeoutMs = 6000): Promise<void> {
   });
 }
 
-const fresh = (value: unknown) => ({ value, timestamp: new Date().toISOString() });
+// Alarms are raised on process-cycle boundaries, and the first one can take
+// two cycles (the first may run before the first event has been fused). A test
+// with a long cycle must wait for several of them, not the default 6 s, or one
+// missed cycle on a slow runner lands exactly on the deadline.
+const LONG_CYCLE_MS = 3000;
+const firstAlarmWithin = (cycleMs: number) => 3 * cycleMs + 1000;
+
+// Stamped a moment in the past, as data a server received before the cycle
+// read it always is. Stamped "now" at read time, a value read even 1 ms after
+// the cycle took its clock would be future-dated, and AIS fusion drops a
+// future-dated fix (fail-closed), so the cycle would miss its AIS match.
+const fresh = (value: unknown) => ({ value, timestamp: new Date(Date.now() - 500).toISOString() });
 
 class FakeApp implements ServerApp {
   deltas: Delta[] = [];
@@ -166,8 +177,8 @@ describe('plugin — fusion link against its own AIS match', () => {
   it('keeps the cycle\'s links when another producer\'s alarm re-checks between cycles', async () => {
     const app = new FakeApp();
     // A long cycle, so the re-check below lands well before the next one.
-    await run(app, { notifyHoldS: 0, processIntervalMs: 3000 });
-    await until(() => app.collisionAlarms().size > 0);
+    await run(app, { notifyHoldS: 0, processIntervalMs: LONG_CYCLE_MS });
+    await until(() => app.collisionAlarms().size > 0, firstAlarmWithin(LONG_CYCLE_MS));
     // Target Fusion links the boat to vessel B after this cycle's CPA was made
     // from vessel A's AIS, and another producer's alarm changes at once.
     app.linkTo = VESSEL_B;
@@ -184,8 +195,8 @@ describe('plugin — fusion link against its own AIS match', () => {
 
   it('alarms no withdrawn target when detection is switched off before a re-check', async () => {
     const app = new FakeApp();
-    await run(app, { processIntervalMs: 3000 });
-    await until(() => app.collisionAlarms().size > 0);
+    await run(app, { processIntervalMs: LONG_CYCLE_MS });
+    await until(() => app.collisionAlarms().size > 0, firstAlarmWithin(LONG_CYCLE_MS));
     const routes = new Map<string, (req: any, res: any) => void>();
     const reply = { json: () => reply, status: () => reply, set: () => reply };
     plugin!.registerWithRouter!({

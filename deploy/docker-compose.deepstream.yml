@@ -1,0 +1,49 @@
+# Marine Vision-AI: Jetson Orin (JetPack 6, DeepStream 7.1), from the published image.
+# Needs the NVIDIA Container Runtime. Use the file that matches the board:
+# docker-compose.deepstream.yml on JetPack 6, docker-compose.deepstream-xavier.yml
+# on JetPack 5.
+#
+# Camera addresses come from .env next to this file (see docker-compose.cpu.yml).
+#
+#   docker compose -f docker-compose.deepstream.yml up -d
+#
+# The first start builds the TensorRT engine from the image's ONNX (several
+# minutes, RAM-hungry). It is kept in the "deepstream" volume, so later starts
+# take seconds. When the image changes (a new release, or a new edge build),
+# the container refreshes the volume from the image and builds a new engine on
+# its first start (VISION_DS_SYNC_FROM_IMAGE below), so it never runs the
+# previous image's ONNX, configs or engine.
+#
+# Calibration: see docker-compose.cpu.yml.
+services:
+  vision-service:
+    image: ghcr.io/kegustafsson/vision-ai:${VISION_AI_VERSION:-edge}-deepstream
+    container_name: vision-service
+    restart: unless-stopped
+    runtime: nvidia
+    environment:
+      VISION_MODE: deepstream
+      # Refresh the deepstream volume from the image whenever the image changes.
+      VISION_DS_SYNC_FROM_IMAGE: "1"
+      VISION_CAMERA_FORWARD_URL: ${VISION_CAMERA_FORWARD_URL:?set VISION_CAMERA_FORWARD_URL in .env}
+      VISION_CAMERA_AFT_URL: ${VISION_CAMERA_AFT_URL:?set VISION_CAMERA_AFT_URL in .env}
+    volumes:
+      # Starts as a copy of the image's deepstream/ (pgie configs, labels, ONNX);
+      # nvinfer writes the built engine beside them.
+      - deepstream:/opt/vision-service/deepstream
+      # - ./config:/opt/vision-service/config:ro
+    ports:
+      - "127.0.0.1:7000:7000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - capabilities: [gpu]
+volumes:
+  deepstream:
+    name: vision-ai-deepstream

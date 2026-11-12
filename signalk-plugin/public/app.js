@@ -316,9 +316,22 @@ async function poll() {
     renderTargets(data.targets || []);
     // The trailing clock ticks every poll, so it's obvious the feed is live
     // even when a stationary boat's nav values don't change.
-    document.getElementById('status').textContent = detectionEnabled === false
-      ? `detection off · updated ${new Date().toLocaleTimeString()}`
-      : `${(data.targets || []).length} targets · ${activeCamera || '—'} · updated ${new Date().toLocaleTimeString()}`;
+    // The container setup guide (setup.js) follows the container's status.
+    if (window.visionSetup) window.visionSetup.update(data.container);
+    const containerDown = data.container && data.container.reachable === false;
+    // The plugin keeps a track for a few seconds after its last detection, so
+    // the list can still hold targets once the container is gone: say they are
+    // the last seen, not live.
+    const staleTargets = !!containerDown && (data.targets || []).length > 0;
+    document.querySelector('section.targets').classList.toggle('stale', staleTargets);
+    document.getElementById('targetsStale').hidden = !staleTargets;
+    // No container, no video: show a plain message, not a broken-image icon.
+    document.querySelector('.video').classList.toggle('offline', !!containerDown);
+    document.getElementById('status').textContent = containerDown
+      ? `vision container unreachable · no detections · checked ${new Date().toLocaleTimeString()}`
+      : detectionEnabled === false
+        ? `detection off · updated ${new Date().toLocaleTimeString()}`
+        : `${(data.targets || []).length} targets · ${activeCamera || '—'} · updated ${new Date().toLocaleTimeString()}`;
     // Back after an outage: when the SIGNALK server restarts (rather than the
     // container), the stream simply ends — the <img> fires no `error`, so
     // onStreamError never runs and the last frame stays frozen on screen even

@@ -142,9 +142,19 @@ see [`docs/dev-quickstart.md`](docs/dev-quickstart.md). Or skip the manual setup
 and bring the whole stack up with Docker — see the `mock` mode under
 [Deployment modes](#deployment-modes) below.
 
+## Install from a release (no build)
+
+Every release publishes ready-made images for all of the modes below
+(`ghcr.io/kegustafsson/vision-ai`, for Jetson Orin, Jetson Xavier, any
+computer's CPU, and mock), with compose files that pull them. Install the
+Signal K plugin, open its webapp, and while no container answers it shows the
+steps for your hardware. The same steps, plus updating and calibration, are in
+[Prebuilt images and releases](docs/release.md).
+
 ## Deployment modes
 
-Three run modes, selected by `VISION_MODE`; all emit the same `DetectionEvent`.
+To build the images on the board from a git checkout instead, use the compose
+files at the repository root. Three run modes, selected by `VISION_MODE`; all emit the same `DetectionEvent`.
 Each has a **self-contained compose file** (a single `-f`, no base needed).
 `deepstream` is the **production backend** (see [Demo](#demo)) and builds and
 runs from a clean clone in one command — no prior image build, no manual model
@@ -154,7 +164,7 @@ aren't portable), then run.
 
 | Mode | Where | Command |
 |------|-------|---------|
-| **`mock`** | any laptop, no GPU/cameras | `docker compose up` |
+| **`mock`** | any laptop, no GPU/cameras | `docker compose -f docker-compose.mock.yml up -d --build` |
 | **`deepstream`** | Jetson Orin Nano Super (JetPack 6), full-GPU pipeline (production) | `docker compose -f docker-compose.deepstream.yml up -d --build` |
 | **`deepstream`** | Jetson Xavier NX (JetPack 5), same pipeline | `docker compose -f docker-compose.deepstream.xavier.yml up -d --build` |
 | **`jetson`** | Jetson, TensorRT (alternative) | build the engine once (below), then `docker compose -f docker-compose.jetson.yml up -d` |
@@ -168,14 +178,20 @@ export VISION_CAMERA_AFT_URL="rtsp://user:pass@192.168.1.11:554/stream"
 
 ### `mock` — laptop / dev (no GPU, no cameras)
 
-`docker compose up` runs the vision service alone on synthetic frames. For the
-full stack (vision service **+** a SignalK server with demo data + the plugin),
-layer the dev override — this is the only mode that needs two `-f` files:
+Runs the vision service on synthetic frames, for the Signal K server you
+already run. Start it on the same computer as Signal K, install the plugin
+there and leave its **Vision container base URL** at `http://localhost:7000`.
+The service listens on that computer only; to reach it from Signal K on
+another computer, see
+[Signal K on another computer](docs/release.md#signal-k-on-another-computer).
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.mock.yml up
-# SignalK:  http://localhost:3000     Captain view: http://localhost:3000/signalk-vision-ai/
+docker compose -f docker-compose.mock.yml up -d --build
+# Captain view: http://<your-signalk>:3000/signalk-vision-ai/
 ```
+
+The aft camera's made-up person in the water raises a real man-overboard
+alarm, so use a test server.
 
 ### `deepstream` — fully GPU-resident NVIDIA DeepStream (production backend)
 
@@ -281,6 +297,7 @@ for the build, model selection, and tuning.
 - [Tracking stability (id lock & anti-flicker)](docs/tracking-stability.md)
 - [DeepStream GPU pipeline](docs/jetson-deepstream.md) (`deepstream` backend, production)
 - [Jetson setup & deployment](docs/jetson-setup.md) (`jetson` backend, alternative)
+- [Prebuilt images and releases](docs/release.md) (install, update, calibrate, cut a release)
 - [Dev quickstart (end-to-end)](docs/dev-quickstart.md)
 - [Onboard verification runbook](docs/onboard-verification.md)
 

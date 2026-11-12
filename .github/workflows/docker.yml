@@ -1,0 +1,43 @@
+name: Docker
+
+# Pull requests build the light images (mock and cpu, amd64) to prove the
+# Dockerfiles still build; nothing is pushed. Every push to main builds all
+# variants and publishes them as ghcr.io/<owner>/vision-ai:edge-<variant>,
+# which is what the compose files in deploy/ pull from a git checkout.
+# Releases are built by release.yml.
+
+on:
+  pull_request:
+    paths:
+      - "vision-service/**"
+      - "deploy/**"
+      - ".github/workflows/docker.yml"
+      - ".github/workflows/docker-images.yml"
+  push:
+    branches: [main]
+    paths:
+      - "vision-service/**"
+      - "deploy/**"
+      - ".github/workflows/docker.yml"
+      - ".github/workflows/docker-images.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  images:
+    uses: ./.github/workflows/docker-images.yml
+    permissions:
+      contents: read
+      packages: write
+    with:
+      version: edge
+      # edge-* is "the latest build of main": only main may publish it. A
+      # manual run from another branch builds everything and pushes nothing.
+      push: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' }}
+      scope: ${{ github.event_name == 'pull_request' && 'light' || 'all' }}

@@ -4,6 +4,8 @@ on:
   push:
     branches: ["**"]
   pull_request:
+  # release.yml runs the whole suite on the tagged commit before publishing.
+  workflow_call:
 
 permissions:
   contents: read
@@ -48,7 +50,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: signalk-plugin/package-lock.json
       - name: Install dependencies
@@ -78,11 +80,22 @@ jobs:
             docker compose -f "$stack" config -q
             echo "::endgroup::"
           done
-          # The dev full-stack demo LAYERS signalk-server onto the base, so it
-          # genuinely needs both files.
-          echo "::group::docker-compose.yml + docker-compose.mock.yml"
-          docker compose -f docker-compose.yml -f docker-compose.mock.yml config -q
-          echo "::endgroup::"
+          # The mock stack and the base are self-contained too.
+          for stack in docker-compose.mock.yml docker-compose.yml; do
+            echo "::group::$stack (standalone)"
+            docker compose -f "$stack" config -q
+            echo "::endgroup::"
+          done
+          # The release compose files in deploy/ pull the published images.
+          # They refuse to start without both camera addresses, so give them
+          # placeholders for validation.
+          for stack in deploy/docker-compose.*.yml; do
+            echo "::group::$stack"
+            VISION_CAMERA_FORWARD_URL=rtsp://ci.invalid/forward \
+            VISION_CAMERA_AFT_URL=rtsp://ci.invalid/aft \
+              docker compose -f "$stack" config -q
+            echo "::endgroup::"
+          done
       # NB: a Dockerfile linter (hadolint) was intentionally NOT added here — its
       # parser rejects the valid BuildKit heredoc (`python3 - <<'PY'`) used in
       # vision-service/Dockerfile, which would fail the build on syntax it doesn't

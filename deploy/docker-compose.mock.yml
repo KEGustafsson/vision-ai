@@ -1,0 +1,26 @@
+# Marine Vision-AI: MOCK vision service from the published image.
+#
+# Synthetic cameras and made-up targets, including a person in the water on the
+# aft camera that raises a REAL notifications.mob alarm in Signal K. For testing
+# the plugin on a bench only; never on a boat under way.
+#
+#   docker compose -f docker-compose.mock.yml up -d
+#
+# Release assets pin VISION_AI_VERSION to the release; from a git checkout the
+# default is "edge" (the latest build of main).
+services:
+  vision-service:
+    image: ghcr.io/kegustafsson/vision-ai:${VISION_AI_VERSION:-edge}-mock
+    container_name: vision-service
+    restart: unless-stopped
+    environment:
+      VISION_MODE: mock
+      VISION_MOCK_SOURCE: synthetic
+    # Unauthenticated service: localhost only. The Signal K plugin proxies it.
+    ports:
+      - "127.0.0.1:7000:7000"
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
