@@ -4,9 +4,9 @@ All notable changes to `signalk-vision-ai` are documented here. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 project uses [Semantic Versioning](https://semver.org/).
 
-## [1.0.0]
+## [0.1.0]
 
-First release on the Signal K App Store.
+First pre-release, the first version published to npm and the Signal K App Store.
 
 ### Added
 
@@ -29,4 +29,4 @@ First release on the Signal K App Store.
 - Signal K App Store metadata: display name, app icon and screenshots.
 - Signal K plugin CI (`.github/workflows/signalk-ci.yml`).
 
-[1.0.0]: https://github.com/KEGustafsson/vision-ai/releases/tag/v1.0.0
+[0.1.0]: https://github.com/KEGustafsson/vision-ai/releases/tag/v0.1.0
