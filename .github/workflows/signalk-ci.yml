@@ -28,3 +28,5 @@ jobs:
     uses: SignalK/signalk-server/.github/workflows/plugin-ci.yml@master
     with:
       working-directory: signalk-plugin
+      # Node 24 and 26 only: 22 is not tested.
+      node-versions: '["24", "26"]'
